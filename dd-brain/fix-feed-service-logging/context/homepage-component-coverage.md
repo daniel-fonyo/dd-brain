@@ -3,12 +3,12 @@
 
 ## Excluded sections (EXCLUDED_SECTION_IDS — same exclusions apply to our approach)
 
-| Section ID | Internal model field | Reason |
-|---|---|---|
-| `BANNER_FACET_SECTION_ID` | `bannerCarousel` | Pure UI |
-| `NAVIGATION_TILES_FACET_SECTION_ID` | `rankedVerticalEntryPoints` | Already logged via `generateVerticalEntryPointLoadEvents()` |
-| `STORE_LIST_HEADER_FACET_SECTION_ID` | (UI header, no field) | Pure UI header |
-| `CAROUSEL_OFFERS_CUISINE_FILTER_FACET_SECTION_ID` | `cuisineFiltersV2` | Filter chips, no stores |
+| Section ID                                        | Internal model field        | Reason                                                      |
+| ------------------------------------------------- | --------------------------- | ----------------------------------------------------------- |
+| `BANNER_FACET_SECTION_ID`                         | `bannerCarousel`            | Pure UI                                                     |
+| `NAVIGATION_TILES_FACET_SECTION_ID`               | `rankedVerticalEntryPoints` | Already logged via `generateVerticalEntryPointLoadEvents()` |
+| `STORE_LIST_HEADER_FACET_SECTION_ID`              | (UI header, no field)       | Pure UI header                                              |
+| `CAROUSEL_OFFERS_CUISINE_FILTER_FACET_SECTION_ID` | `cuisineFiltersV2`          | Filter chips, no stores                                     |
 
 ---
 
@@ -30,16 +30,78 @@
 
 ---
 
-### EMIT item-level events (NOT pure per-store) ⚠️
+### EMIT item-level events (per item, storeId as context) ⚠️
 
-| Internal model | Facet ID prefix | Generator | Event grain | Notes |
+All three generators below use a `itemId.isNotEmpty()` guard and set `horizontal_position_in_facet` to the **item index**, not the store index. `store_id` is logged as context but the event grain is the item. We follow the same per-item model using `ItemCarousel.itemStoreEntities`.
+
+| Internal model | Facet ID prefix | Generator | Event grain | Guard |
 |---|---|---|---|---|
-| `itemCarousels` | `carousel.standard:item_carousel*` | `ItemCarouselGenerator` | **per item** (storeId is context) | `itemId.isNotEmpty()` guard; `horizontalPositionInFacet` = item position, not store position |
-| `itemCarousels` (UC format) | `cx.common.universal_carousel:item_carousel*` | `UniversalItemCarouselGenerator` | **per item** | `itemId.isNotEmpty()` guard |
-| `dealCarousel` (multi-MX variant) | `carousel.standard:deals_v2_carousel` | `CarouselStandardGenerator` | **per item** | `itemId.isNotEmpty()` guard; deal carousel via item-like structure |
+| `itemCarousels` (legacy format) | `carousel.standard:item_carousel*` | `ItemCarouselGenerator` | per item | `itemId.isNotEmpty()` |
+| `itemCarousels` (UC format) | `cx.common.universal_carousel:item_carousel*` | `UniversalItemCarouselGenerator` | per item | `itemId.isNotEmpty()` |
+| `itemCarousels` (multi-MX deals / grouped) | `carousel.standard:deals_v2_carousel` | `CarouselStandardGenerator` | per item | `itemId.isNotEmpty()` |
 
-**Implication for our approach:**
-`ItemCarousel.stores` contains the deduplicated store list. In the internal model, emit ONE event per STORE (not per item) using `itemCarousel.stores[idx]`. This differs from the existing FacetSection path (which is per-item) but is correct for a store-load table. `horizontalPositionInFacet` should be the store's index in `itemCarousel.stores`.
+#### Internal model field mapping for item-level events
+
+`ItemCarousel.itemStoreEntities: List<ItemStoreEntity>` is the direct equivalent of iterating `facet.childrenList` in `ItemCarouselGenerator`. Each `ItemStoreEntity` has both item-level and store-level data — no lookup needed.
+
+| `CrossVerticalHomePageFeedEvent` field | `ItemStoreEntity` source |
+|---|---|
+| `item_id` | `itemStoreEntity.itemId` |
+| `item_name` | `itemStoreEntity.itemName` |
+| `item_price` | `itemStoreEntity.itemPrice` (cents) |
+| `item_image_url` | `itemStoreEntity.itemImageUrl` |
+| `horizontal_element_score` | `itemStoreEntity.predictionScore` (composite: organic + inventory) |
+| `raw_horizontal_element_score` | `itemStoreEntity.organicPredictionScore` (raw ML score from item ranker) |
+| `horizontal_position_in_facet` | index in `itemStoreEntities` list (rendered order after ranking) |
+| `horizontal_manual_sort_order` | `itemStoreEntity.sortOrder ?: DEFAULT_MANUAL_SORT_ORDER_TO_TRACK` |
+| `store_id` | `itemStoreEntity.storeId` |
+| `store_name` | `itemStoreEntity.storeName` |
+| `business_id` | `itemStoreEntity.businessId?.toLongOrNull()` |
+| `store_primary_vertical_id` | `itemStoreEntity.primaryVerticalIds.firstOrNull()` |
+| `store_business_vertical_id` | `itemStoreEntity.businessVerticalId?.toLongOrNull()` |
+| `store_price_range` | (not on ItemStoreEntity — omit or set 0) |
+| `store_star_rating` | `itemStoreEntity.averageRating` |
+| `store_num_ratings` | `itemStoreEntity.numberOfRatings` |
+| `store_is_dashpass_partner` | `itemStoreEntity.isDashpassPartner` |
+| `store_header_image_url` | `itemStoreEntity.coverSquareImgUrl` |
+| `store_delivery_fee_amount` | `itemStoreEntity.deliveryFeeAmount` |
+| `store_asap_available` | `itemStoreEntity.status?.asapAvailable` |
+| `store_asap_minutes` | `itemStoreEntity.status?.asapMinutes` |
+| `store_distance_in_miles` | `itemStoreEntity.distanceFromConsumerInMiles` |
+| `predictor_names` | `itemStoreEntity.predictorNames?.toList()` |
+| `model_ids` | `itemStoreEntity.predictorModelIds?.toList()` |
+| `cs_st_cuisine_affinity_similarity` | (not on ItemStoreEntity — omit or 0.0) |
+| `percentage_match` | (not on ItemStoreEntity — omit or 0.0) |
+| `is_sponsored` | set `true` for items from `adItemStoreEntities` (see below) |
+
+#### Sponsored items (`adItemStoreEntities`)
+
+`ItemCarousel.adItemStoreEntities: List<ItemStoreEntity>?` are sponsored/ad items mixed into the carousel. In the FacetSection path they appear in `facet.childrenList` alongside organic items; the renderer interleaves them. In the internal model path:
+- Emit events for `itemStoreEntities` (organic) with `is_sponsored = false`
+- Emit events for `adItemStoreEntities` (sponsored) with `is_sponsored = true`
+- `horizontal_position_in_facet` for sponsored items: use the item's actual rendered position if available (`itemStoreEntity.itemIndex`), otherwise append after organic items
+
+#### Grouped item carousels (`groupedItemCarousels`)
+
+`ItemCarousel.groupedItemCarousels: List<ItemCarousel>` is used for multi-MX deals / category-grouped structures (maps to `CarouselStandardGenerator`). The parent `itemStoreEntities` is typically empty in this case; items live in each group's `itemStoreEntities`.
+
+Handling:
+```
+if (carousel.groupedItemCarousels.isNotEmpty()) {
+    // iterate groups, emit from each group's itemStoreEntities
+    // horizontal_position_in_facet counts globally across groups (same as CarouselStandardGenerator.globalChildIdx)
+    var globalIdx = 0
+    carousel.groupedItemCarousels.forEach { group ->
+        group.itemStoreEntities.forEach { item ->
+            emitItemEvent(item, globalIdx++, ...)
+        }
+    }
+} else {
+    carousel.itemStoreEntities.forEachIndexed { idx, item ->
+        emitItemEvent(item, idx, ...)
+    }
+}
+```
 
 ---
 
