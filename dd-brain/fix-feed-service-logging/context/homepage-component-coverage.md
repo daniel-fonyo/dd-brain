@@ -107,11 +107,11 @@ if (carousel.groupedItemCarousels.isNotEmpty()) {
 
 ### EMIT tile/collection events — NO storeId (effectively noise for store-load table) ⚠️
 
-| Internal model | Facet ID prefix | Generator | Logged fields | storeId |
-|---|---|---|---|---|
-| `collectionsV2` children that are tile-based store collections | `card.tile:store_carousel` (children of `carousel.standard:store_carousel*`) | `StoreCollectionGenerator` | `TILE_ID`, `TILE_NAME`, `TILE_STORE_IDS` (no `STORE_ID`) | 0 → **filtered out by** `storeId > 0` guard |
-| Tile carousels (collections rendered as tiles) | `custom_tile_collection*` or `carousel.standard:tile_collection*` | `TileCollectionGenerator` | `TILE_ID`, `TILE_NAME`, `TILE_STORE_IDS` | 0 → **NOT guarded** — events DO emit but `storeId = 0` |
-| UC tile carousels | `cx.common.universal_carousel:tile_carousel*` | `UniversalTileCarouselGenerator` | `TILE_ID`, `TILE_NAME`, `TILE_STORE_IDS` | 0 → **NOT guarded** — events DO emit but `storeId = 0` |
+| Internal model                                                 | Facet ID prefix                                                              | Generator                        | Logged fields                                            | storeId                                                |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------- | -------------------------------------------------------- | ------------------------------------------------------ |
+| `collectionsV2` children that are tile-based store collections | `card.tile:store_carousel` (children of `carousel.standard:store_carousel*`) | `StoreCollectionGenerator`       | `TILE_ID`, `TILE_NAME`, `TILE_STORE_IDS` (no `STORE_ID`) | 0 → **filtered out by** `storeId > 0` guard            |
+| Tile carousels (collections rendered as tiles)                 | `custom_tile_collection*` or `carousel.standard:tile_collection*`            | `TileCollectionGenerator`        | `TILE_ID`, `TILE_NAME`, `TILE_STORE_IDS`                 | 0 → **NOT guarded** — events DO emit but `storeId = 0` |
+| UC tile carousels                                              | `cx.common.universal_carousel:tile_carousel*`                                | `UniversalTileCarouselGenerator` | `TILE_ID`, `TILE_NAME`, `TILE_STORE_IDS`                 | 0 → **NOT guarded** — events DO emit but `storeId = 0` |
 
 **Implication for our approach:**
 `TileCollectionGenerator` and `UniversalTileCarouselGenerator` emit events with `storeId = 0`. These represent category navigation tiles (e.g., "Pizza", "Grocery"), not individual stores. **SKIP these in our new approach** — they produce noise in a store-load table. This matches the practical intent of `StoreCollectionGenerator` (filtered out by storeId > 0 guard), just explicitly applied to tile carousels too.
