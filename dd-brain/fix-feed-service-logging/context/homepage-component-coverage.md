@@ -1,92 +1,189 @@
 # Homepage Component Coverage Analysis
+# (Cross-referenced against processFilteredSections() filtering logic)
 
-## All Components in HomePageStoreLayoutOutputElements
+## Excluded sections (EXCLUDED_SECTION_IDS — same exclusions apply to our approach)
 
-### Store-Containing (can emit CrossVerticalHomePageFeedEvent per store)
+| Section ID | Internal model field | Reason |
+|---|---|---|
+| `BANNER_FACET_SECTION_ID` | `bannerCarousel` | Pure UI |
+| `NAVIGATION_TILES_FACET_SECTION_ID` | `rankedVerticalEntryPoints` | Already logged via `generateVerticalEntryPointLoadEvents()` |
+| `STORE_LIST_HEADER_FACET_SECTION_ID` | (UI header, no field) | Pure UI header |
+| `CAROUSEL_OFFERS_CUISINE_FILTER_FACET_SECTION_ID` | `cuisineFiltersV2` | Filter chips, no stores |
 
-| Component | Field | Has stores | sortOrder source | Notes |
+---
+
+## Components and how processFilteredSections() handles them
+
+### EMIT per-store events ✅
+
+| Internal model | Facet ID prefix | Generator | Event grain | Guard |
 |---|---|---|---|---|
-| StoreCarousel | `storeCarousels` | `stores: List<StoreEntity>` | `carousel.sortOrder` | `adStoreCarousels` are merged in by post-processor via `maybeAddSponsoredCarousel` |
-| StoreList | `storeList` | `stores: List<StoreEntity>` | `storeList.sortOrder` (always last, set by post-processor) | V2: `sortedPlacements.size`; V1: `max(all other sortOrders) + 1` |
-| ItemCarousel | `itemCarousels` | `stores: List<StoreEntity>` | `carousel.sortOrder` | Stores are the merchants backing items; emit one event per store |
-| CollectionV2 | `collectionsV2` | children: `List<BaseCarousel>` (may contain StoreCarousel, ItemCarousel) | `collection.sortOrder` for the wrapper, child `sortOrder` for child carousels | Recurse into children |
-| Collection | `collections` | children (similar) | `collection.sortOrder` | |
-| ItemCollection | `itemCollections` | `stores: List<StoreEntity>` | `collection.sortOrder` | |
-| FeedPlacement | `feedPlacements` | `store: StoreEntity?` or `collection: BaseCarousel?` | `placement.sortOrder` | Check `placement.store != null`; also check `placement.collection` for store-containing carousels |
-| CategorySection children | `categorySections` | each section contains `storeCarousels`, `collections`, etc. | child carousel's `sortOrder` | `CategorySection.verticalId` = the category section ID for `facet_section_category_id` |
-| intermixedStores | `intermixedStores` | `List<StoreEntity>` directly | `store.sortOrder` | Individual stores injected between carousels |
-| AnnouncementCollection | `reelsCarousel` | `decoratedStoreEntities: List<StoreEntity>?` (optional) | `reelsCarousel.sortOrder` | Only emit if `decoratedStoreEntities` is non-empty |
-
-### Non-Store Components (skip for per-store events)
-
-| Component | Reason |
-|---|---|
-| `bannerCarousel: BannerCarousel?` | Pure UI, no stores |
-| `dealCarousel: DealCarousel?` | `deals: List<Deal>` - deal entities, not StoreEntity; logged separately if needed |
-| `giftCardCarousels: List<GiftCardCarousel>?` | Gift card items, not stores |
-| `rankedVerticalEntryPoints: List<VerticalWithConfig>` | Navigation tiles; already covered by `generateVerticalEntryPointLoadEvents` |
-| `mapCarousels: List<MapCarousel>` | UI map component |
-| `dineOutCarousel: DineOutCarousel?` | Dine-out reservations, not delivery stores |
-| `dashPartyCarousel: DashPartyCarousel?` | Social feature, likely no StoreEntity |
-| `spotlightBanner: SpotlightBanner?` | Pure UI |
-| `serviceFeeBanner: ServiceFeeBanner?` | Pure UI |
-| `doubleDashReminder: DoubleDashReminder?` | Pure UI |
-| `avProductCarousel: AvProductCarousel?` | Autonomous vehicle, check if stores |
-| `smartSuggestionCollection` | Smart suggestions, likely not StoreEntity |
-| `cuisines / cuisineFiltersV2` | Filter chips |
-| `discoveryPageComponentConfigs` | Config only |
+| `storeCarousels` | `carousel.standard:store_carousel*` | `StoreCarouselGenerator` | per store in carousel | `storeId > 0` |
+| `storeCarousels` (UC format) | `carousel.universal:store_carousel*` | `UniversalStoreCarouselGenerator` | per store in carousel | `storeId > 0` |
+| `storeList.stores` | `row.store*` or `card.store:store*` (CC format) | `RowStoreGenerator` | per store row | no explicit guard, storeId from logging |
+| `storeList.stores` (retail variant) | `carousel.retail_store_list*` | `RetailStoreListCarouselGenerator` | per store card | no explicit guard |
+| `collectionsV2` children that are store carousels | `collection.standard:store_collection*` or `carousel.standard:store_collection*` → child `carousel.standard:store_carousel*` | `StoreCarouselGenerator` (on child facet) | per store in child carousel | `storeId > 0` |
+| `feedPlacements` (regular) | `FeedPlacement.MERCHANDISINGUNIT_COMPONENT_PREFIX` | `FeedPlacementGenerator` (base impl) | per child in facet | `storeId > 0` |
+| `feedPlacements` (UC store type) | `FeedPlacement.UC_MERCHANDISINGUNIT_COMPONENT_STORE_PREFIX` | `UniversalStoreFeedPlacementGenerator` | per store in UC | `storeId > 0` |
+| `feedPlacements` (standalone unit = single store spotlight) | `FeedPlacement.STANDALONE_UNIT_CONTAINER` | `FeedPlacementStandaloneUnitGenerator` | single store (position 0) | `storeId > 0` |
+| `reelsCarousel` | `carousel.standard:reels:reels_carousel*` | `ReelsCarouselGenerator` | per announcement, only if store decorated | `storeId > 0` |
 
 ---
 
-## Correct Vertical Position: sortedPlacements vs sortOrder
+### EMIT item-level events (NOT pure per-store) ⚠️
 
-The V2 post-processor (`reOrderGlobalEntitiesV2`) populates `HomePageStoreLayoutOutputElements.sortedPlacements`
-which is a `List<SortablePlacement>` — the final, authoritatively ordered list of ALL content.
+| Internal model | Facet ID prefix | Generator | Event grain | Notes |
+|---|---|---|---|---|
+| `itemCarousels` | `carousel.standard:item_carousel*` | `ItemCarouselGenerator` | **per item** (storeId is context) | `itemId.isNotEmpty()` guard; `horizontalPositionInFacet` = item position, not store position |
+| `itemCarousels` (UC format) | `cx.common.universal_carousel:item_carousel*` | `UniversalItemCarouselGenerator` | **per item** | `itemId.isNotEmpty()` guard |
+| `dealCarousel` (multi-MX variant) | `carousel.standard:deals_v2_carousel` | `CarouselStandardGenerator` | **per item** | `itemId.isNotEmpty()` guard; deal carousel via item-like structure |
 
-**V2 path (sortedPlacements is non-empty):**
-```
-sortedPlacements[0] → facet_vertical_position = 0
-sortedPlacements[1] → facet_vertical_position = 1
-...
-```
-Each entry is a `StoreCarousel`, `ItemCarousel`, `FeedPlacement`, `BannerCarousel`, etc.
-Walk this list and emit events for store-bearing types.
-
-**V1 path (sortedPlacements is empty — deprecated but still active):**
-Fall back to each component's `.sortOrder` field.
-`storeList.sortOrder` = `max(all other sortOrders) + 1` (always last).
-
-**Recommendation:** Check `sortedPlacements.isNotEmpty()` first, use it if available, else fall back to sortOrder.
+**Implication for our approach:**
+`ItemCarousel.stores` contains the deduplicated store list. In the internal model, emit ONE event per STORE (not per item) using `itemCarousel.stores[idx]`. This differs from the existing FacetSection path (which is per-item) but is correct for a store-load table. `horizontalPositionInFacet` should be the store's index in `itemCarousel.stores`.
 
 ---
 
-## CategorySection handling
+### EMIT tile/collection events — NO storeId (effectively noise for store-load table) ⚠️
 
-CategorySections appear on the cross-vertical homepage where verticals (Food, Grocery, etc.)
-each have their own nested carousels. The `categorySections` field is independent of `sortedPlacements`
-(sections are a presentation-layer grouping).
+| Internal model | Facet ID prefix | Generator | Logged fields | storeId |
+|---|---|---|---|---|
+| `collectionsV2` children that are tile-based store collections | `card.tile:store_carousel` (children of `carousel.standard:store_carousel*`) | `StoreCollectionGenerator` | `TILE_ID`, `TILE_NAME`, `TILE_STORE_IDS` (no `STORE_ID`) | 0 → **filtered out by** `storeId > 0` guard |
+| Tile carousels (collections rendered as tiles) | `custom_tile_collection*` or `carousel.standard:tile_collection*` | `TileCollectionGenerator` | `TILE_ID`, `TILE_NAME`, `TILE_STORE_IDS` | 0 → **NOT guarded** — events DO emit but `storeId = 0` |
+| UC tile carousels | `cx.common.universal_carousel:tile_carousel*` | `UniversalTileCarouselGenerator` | `TILE_ID`, `TILE_NAME`, `TILE_STORE_IDS` | 0 → **NOT guarded** — events DO emit but `storeId = 0` |
 
-For logging: each carousel inside a CategorySection has its own `sortOrder`. The `CategorySection.verticalId`
-maps directly to `facet_section_category_id` in CrossVerticalHomePageFeedEvent.
+**Implication for our approach:**
+`TileCollectionGenerator` and `UniversalTileCarouselGenerator` emit events with `storeId = 0`. These represent category navigation tiles (e.g., "Pizza", "Grocery"), not individual stores. **SKIP these in our new approach** — they produce noise in a store-load table. This matches the practical intent of `StoreCollectionGenerator` (filtered out by storeId > 0 guard), just explicitly applied to tile carousels too.
+
+In the internal model: `collectionsV2` children that are tile collections don't have `StoreEntity` — they're category or cuisine tiles with a `tileId` + set of storeIds. Skip them.
 
 ---
 
-## Total store-bearing component types to handle
+### DEAL CAROUSEL — conditional ⚠️
 
+| Internal model | Facet ID prefix | Generator | Notes |
+|---|---|---|---|
+| `dealCarousel` | `carousel.standard:deal_carousel*` (in `DEAL_CAROUSEL_FACET_SECTION_ID`) | `DealCarouselGenerator` (base impl) | Uses base `generateEvents()` → `storeId > 0` guard. `Deal` objects in FacetV2 children MAY contain `storeId` in their logging. If they do, events are emitted; otherwise filtered. |
+
+**Key finding:** `DealCarousel.deals: List<Deal>` in the internal model contains `Deal` objects with `storeName`, `storeId`, `businessId` etc. So individual deals DO have a storeId reference. The `DealCarouselGenerator` tries to read `storeId` from `childLogging` and emits if `> 0`.
+
+**Implication for our approach:**
+We CAN emit per-deal events from `dealCarousel.deals` using `deal.storeId`. However, the event grain here is per-DEAL not per-STORE (a store may appear in multiple deals). For a store-load table, deals should either be:
+- Emitted as separate deal events (not in the store-load table), OR
+- Included in the store-load table as `facet_type = "deal_carousel"` with one row per deal
+
+**Recommendation: SKIP dealCarousel for the store-load table.** Deal logging is better served by a separate event/table. This matches the practical outcome of `DealCarouselGenerator` (often storeId = 0 if deal logging doesn't include it).
+
+---
+
+### SILENTLY SKIPPED by processFilteredSections() — no matching case
+
+| Internal model | Reason skipped | Has StoreEntity? |
+|---|---|---|
+| `dineOutCarousel` | No matching facet ID prefix | NO — `RewardItem` objects with `storeName` string only |
+| `dashPartyCarousel` | No matching facet ID prefix | Likely NO — social feature |
+| `mapCarousels` | No matching facet ID prefix | NO — UI map component |
+| `giftCardCarousels` | No matching facet ID prefix | NO — gift card items |
+| `avProductCarousel` | No matching facet ID prefix | TBD — AV product, likely no StoreEntity |
+| `smartSuggestionCollection` | No matching facet ID prefix | TBD |
+| `serviceFeeBanner` | No matching facet ID prefix | NO — pure UI |
+| `spotlightBanner` | No matching facet ID prefix | NO — pure UI |
+| `doubleDashReminder` | No matching facet ID prefix | NO — pure UI |
+
+**These are silently skipped today and should be silently skipped in our approach too.**
+
+---
+
+## Definitive component list for HomepageStoreLoadEventUtil
+
+### EMIT per-store events (one CrossVerticalHomePageFeedEvent per store):
 ```
-HomepageStoreLoadEventUtil.generateEvents() needs to iterate:
+1. storeCarousels[*].stores[idx]
+   - facet_type = "store_carousel"
+   - horizontal_position_in_facet = idx
+   - vertical position from sortOrder / sortedPlacements index
 
-1. sortedPlacements (V2) OR (storeCarousels + itemCarousels + collectionsV2 + ... sorted by sortOrder) (V1)
-   - StoreCarousel → stores[idx] → horizontal_position_in_facet = idx
-   - ItemCarousel → stores[idx] → horizontal_position_in_facet = idx
-   - CollectionV2 → recurse into children
-   - FeedPlacement → store (single, horizontal_position = 0) or collection.stores
-   - StoreList → stores[idx] → horizontal_position_in_facet = idx
+2. storeList.stores[idx]
+   - facet_type = "store_list_element" (STORE_LIST_ELEMENT_DM_TYPE)
+   - horizontal_position_in_facet = 0 (each row is its own vertical position)
+   - vertical position = storeList.sortOrder + idx (each row is separate facet in FacetSection)
 
-2. categorySections (if present) — for each section's child storeCarousels, etc.
-   - facet_section_category_id = section.verticalId
+   NOTE: RowStoreGenerator treats EACH STORE ROW as a separate facet with its own
+   vertical position. So storeList is NOT one facet with N children — it's N separate
+   facets each at a different vertical position. We must replicate this.
 
-3. intermixedStores (if present) — each store has its own sortOrder
+3. itemCarousels[*].stores[idx]
+   - facet_type = DATA_MODEL__ITEM_CAROUSEL
+   - horizontal_position_in_facet = idx (store index, not item index — diverging from existing per-item behavior)
+   - vertical position from carousel.sortOrder / sortedPlacements index
+   - Include item-level fields where available (first item from that store, or omit)
 
-4. reelsCarousel.decoratedStoreEntities (if non-null and non-empty)
+4. collectionsV2[*] children that are StoreCarousel → recurse to case 1
+   - facet_section_category_id = collection's primary vertical (if category section)
+
+5. feedPlacements[*] where store != null
+   - facet_type = FeedPlacement.MERCHANDISINGUNIT_COMPONENT_PREFIX
+   - horizontal_position_in_facet = 0 (single store)
+   - vertical position from placement.sortOrder / sortedPlacements index
+
+6. intermixedStores[idx] (each store treated as its own row, like RowStoreGenerator)
+   - facet_type = "store_list_element"
+   - horizontal_position_in_facet = 0
+   - vertical position = store.sortOrder
+
+7. reelsCarousel.decoratedStoreEntities[idx] (only if non-empty)
+   - facet_type = "reels_carousel"
+   - horizontal_position_in_facet = idx
+   - vertical position from reelsCarousel.sortOrder
 ```
+
+### SKIP (align with processFilteredSections exclusions + silently-skipped components):
+```
+- bannerCarousel (excluded section)
+- rankedVerticalEntryPoints (excluded section, logged separately)
+- cuisineFiltersV2 (excluded section)
+- TileCollections / collectionsV2 children that are tile-based (storeId = 0)
+- dealCarousel (items are deal-grain, not store-grain; separate event if needed)
+- dineOutCarousel (no StoreEntity, silently skipped)
+- dashPartyCarousel (silently skipped)
+- mapCarousels (silently skipped)
+- giftCardCarousels (silently skipped)
+- avProductCarousel (silently skipped)
+- smartSuggestionCollection (silently skipped)
+- serviceFeeBanner, spotlightBanner, doubleDashReminder (silently skipped)
+```
+
+---
+
+## StoreList vertical position handling (important detail)
+
+In the serialized FacetSection path, `RowStoreGenerator` treats **each store as a separate FacetV2 at a unique vertical position**. Each store row in the store_feed section is a top-level facet, not a child. So for N stores in storeList, `processFilteredSections` emits N events, each with a different `facet_vertical_position` (counting upward from where the store_feed section starts).
+
+In the internal model approach:
+- `storeList.sortOrder` = the vertical slot for the store list as a whole
+- Individual store rows within it are sub-positions: `storeList.sortOrder + storeIdx`
+- `facet_type = "store_list_element"` (matching `RowStoreGenerator`)
+- `facet_id = "row.store:store:{storeId}"` (matching the serialized facet ID pattern)
+
+---
+
+## horizontal_manual_sort_order source
+
+`StoreCarouselGenerator` reads manual sort order from `retrievalData.storeCarouselMapping`:
+```kotlin
+retrievalData.storeCarouselMapping
+    .find { StoreCarouselDataAdapter.generateFacetIdFromCarouselId(it.carouselId) == facetId }
+    ?.storeWithSortOrder?.find { it.storeId == ... }
+    ?.sortOrder ?: -1
+```
+This is available in `HomePageStoreDiscoveryResponse.storeCarouselMapping`. Must be passed through.
+Similarly for item carousels: `retrievalData.itemCarouselMapping` for `horizontal_manual_sort_order`.
+
+---
+
+## vertical_manual_sort_order and vertical_overridden_sort_order
+
+`additionalContainerLogging` sets these for `CrossVerticalHomePageFeedEvent`:
+- `vertical_manual_sort_order`: from `retrievalData.carouselMetadata` → carousels where `enforceManualSortOrder = true`
+- `vertical_overridden_sort_order`: from `layoutData.storeCarousels / itemCarousels / collections / collectionsV2 / reelsCarousel` → carousels where `enforceManualSortOrder = true`
+
+These can be populated in our new approach from the internal model directly.
