@@ -2,10 +2,37 @@
 
 ## Status
 - [ ] Step 1: Finalize Snowflake DDL
-- [ ] Step 2: Document proto field additions
-- [ ] Step 3: Document LegacyHomePageIguazuEventUtil changes
-- [ ] Step 4: Verify StoreEntity field availability at emit time
-- [ ] Step 5: Document topic gating / config changes needed
+- [ ] Step 2: New HomepageStoreLoadEventUtil (replaces LegacyHomePageIguazuEventUtil for homepage)
+- [ ] Step 3: Fork in DefaultHomePagePipeline — new iguazuEventEmissionJob parallel to outputSerializerJob
+- [ ] Step 4: Verify StoreEntity field availability (primaryVerticalIds, predictorNames, etc.)
+- [ ] Step 5: Topic gating / config
+
+## Key Decisions Made
+
+### Emit CrossVerticalHomePageFeedEvent (not HomePageFeedEvent)
+Use the newer structured proto. It has `request_id`, `facet_vertical_position`, `horizontal_position_in_facet`,
+`store_primary_vertical_id`, `predictor_names`, `model_ids`, `is_sponsored` — all the fields we need.
+
+### Build from internal models (not FacetSection)
+Do NOT use the FacetSection approach (`IguazuEventUtil.generateXVerticalHomePageFeedSegmentEvents`).
+That approach re-derives positions by counting serialized proto structure — known to produce
+discrepancies (TODO comment in code). Instead, build directly from `HomePageStoreLayoutOutputElements`.
+
+### Fork at postProcessingJob, not at serializer
+Add a new workflow job `iguazuEventEmissionJob` (failOnError=false) that depends on `postProcessingJob`,
+running in parallel with `outputSerializerJob`. Serialization is never blocked by logging.
+See: context/pipeline-fork-approach.md
+
+### All component types covered
+storeCarousels, storeList, itemCarousels, collectionsV2/collections, feedPlacements, categorySections,
+intermixedStores, reelsCarousel.decoratedStoreEntities.
+Banners, dealCarousel, giftCards, verticalEntryPoints, mapCarousels skipped (no StoreEntity data).
+See: context/homepage-component-coverage.md
+
+### sortedPlacements as vertical position source (V2 path)
+When `sortedPlacements.isNotEmpty()`, use the list index as `facet_vertical_position` — this is
+the authoritative final order set by the post-processor.
+Fall back to `component.sortOrder` for the deprecated V1 path.
 
 ---
 
