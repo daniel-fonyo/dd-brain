@@ -1,258 +1,222 @@
-# Horizontal Blending Deep Dive: Ads Insertion Into Organic Carousels
+# Horizontal Blending Analysis
 
-> Source: `HomepageAdsBlender.kt`, `BaseHorizontalBlender.kt`, `GenericHorizontalBlenderV2.kt`,
-> `DedupeLastHorizontalBlender.kt`, `HorizontalBlenderConfig.kt`, `BlenderFactory.kt`
-
----
-
-## The Short Answer
-
-Yes, horizontal blending exists — but it is a **completely different concept** from organic
-horizontal ranking and must not be confused with it.
-
-```
-ORGANIC HORIZONTAL RANKING     HORIZONTAL ADS BLENDING
-(restaurantStoreRankingJob)     (HomepageAdsBlender, separate job)
-────────────────────────────    ─────────────────────────────────
-Ranks stores by ML score        Takes the already-ranked organic list
-within a carousel.              and INSERTS ad store cards into it
-                                at specific slot positions.
-
-Input: pool of organic stores   Input: ranked organic list + ad candidates
-Output: ordered organic list    Output: interleaved organic + ad list
-```
-
-They run sequentially in the pipeline — ranking happens first, then ads are blended in.
-The organic ranker has no knowledge of ads. The ads blender has no knowledge of organic scores.
+> Ads insertion into organic store lists — the ICP (Inventory Control Plane) horizontal blending system.
 
 ---
 
-## Where It Lives in the Pipeline
+## Two Meanings of "Horizontal Blending"
 
-```
-restaurantStoreRankingJob           ← organic horizontal ranking (ranked organic list)
-         │
-         ▼
-restaurantStoreDecorationForUserExperienceJob   ← S1/S2/S3 decoration
-         │
-         ▼
-restaurantStoreLayoutProcessingJob  ← constructs HomePageStoreLayoutOutputElements
-         │
-         ├──────────────────────────────────────────────────────────┐
-         │                                                          │
-         ▼                                                          ▼
-  postProcessingJob                              restaurantStoreAdsBlendingJob
-  (vertical ranking)                             (HomepageAdsBlender.blend())
-         │                                                          │
-         └─────────────────────────────┬────────────────────────────┘
-                                       │
-                                       ▼
-                              outputSerializerJob
-```
+When someone says "horizontal blending," they might mean either:
 
-`HomepageAdsBlender` runs in parallel with `postProcessingJob` (both depend on layout processing).
-The final output merges the vertically-ranked carousel list with the ads-blended store lists.
+| Meaning | What it is | Where in pipeline | UBP phase |
+|---|---|---|---|
+| **Organic horizontal ranking** | Ranking stores within a carousel by ML score | Layer 3 (before post-processing) | Phase 1-2 |
+| **Ads horizontal blending** | Inserting ad store cards into ranked organic lists | Parallel to post-processing | Phase 3 |
+
+This document covers **meaning 2**: the ICP ads blending system.
 
 ---
 
-## What Gets Blended
-
-`HomepageAdsBlender.blend()` has four separate blending targets, all run in parallel:
+## Where It Fits in the Pipeline
 
 ```
-storeCarouselAdsBlenderJob      ← ads blended INTO each individual store carousel
-                                   Surface: SL_CAROUSEL
-                                   Method: twoDimensionalSLBlend() (2D: which carousel + which slot)
-
-storeListAdsBlenderJob          ← ads blended into the infinite scroll home feed
-  (depends on storeCarouselAdsBlenderJob — dedup against headline carousel ads first)
-                                   Surface: SL_HOME_FEED
-                                   Method: storeListAdsBlender.blend()
-
-padAdsBlenderJob                ← PAD (Personalized Ad Display) ads blended into collections
-                                   Surface: PAD_COLLECTION
-
-immersiveContainerAdsBlenderJob ← ads blended into immersive collection containers
-  (depends on padAdsBlenderJob)    Surface: IMMERSIVE_CONTAINER
-
-smartSuggestionsAdsBlenderJob   ← ads blended into smart suggestion collection
-                                   Surface: SL_SMART_SUGGESTIONS
-                                   Method: oneDimensionalSLBlend()
+retrieval → grouping → horizontal ranking → decoration → layout
+                                                              │
+                                                    ┌─────────┴──────────┐
+                                                    │                    │
+                                             postProcessing        HomepageAdsBlender
+                                           (vertical ranking)      (ads horizontal blend)
+                                                    │                    │
+                                                    └─────────┬──────────┘
+                                                              │
+                                                        SERIALIZE → CLIENT
 ```
+
+`HomepageAdsBlender.blend()` runs **in parallel** with post-processing in the pipeline DAG. Both receive the organically-ranked content as input; their outputs are merged before serialization.
 
 ---
 
-## The Blending Algorithms (ICP — Inventory Control Plane)
+## The Four Blending Targets
 
-The algorithm used for any given surface is specified in `HorizontalBlenderConfig.blendingAlgorithm`
-and resolved by `BlenderFactory`.
-
-### Three horizontal blender implementations:
-
-**1. GenericHorizontalBlenderV2** (`"generic_1D_blending"`) — the standard blender
-
-Interleaves ads into organic using a cluster sequence pattern.
-Config defines the exact slot structure:
+`HomepageAdsBlender.blend()` spawns a Workflow with 5 jobs (some sequential via `dependsOn`):
 
 ```
-configuredClusters = [ AdOrganicCluster(adClusterSize=1, organicClusterSize=4) ]
-repeatCluster      = AdOrganicCluster(adClusterSize=1, organicClusterSize=4)
-startIndex         = 0    ← number of organic items to place before any ads
+┌─────────────────────────────────────────────────────────┐
+│ smartSuggestionsAdsBlendingJob                          │
+│   surface: IcpSurface.SL_SMART_SUGGESTIONS              │
+│   blend ads into SmartSuggestionCollection              │
+└─────────────────────────────────────────────────────────┘
 
-Result: [AD, O, O, O, O, AD, O, O, O, O, ...]
-         slot0 1  2  3  4   5  6  7  8  9
+┌─────────────────────────────────────────────────────────┐
+│ storeCarouselAdsBlenderJob                              │
+│   surface: IcpSurface.SL_CAROUSEL                       │
+│   adsBlendingDataPlane.twoDimensionalSLBlend()          │
+│   = carousel-level placement + slot-level placement     │
+└──────────────────────────────┬──────────────────────────┘
+                               │ (dependsOn)
+┌──────────────────────────────▼──────────────────────────┐
+│ storeListAdsBlenderJob                                  │
+│   surface: IcpSurface.SL_HOME_FEED                      │
+│   blend ads into main home feed store list              │
+│   dedupes with ads already placed in carousels above    │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│ padAdsBlenderJob                                        │
+│   PAD (Personalized Ad Display) collections             │
+└──────────────────────────────┬──────────────────────────┘
+                               │ (dependsOn)
+┌──────────────────────────────▼──────────────────────────┐
+│ immersiveContainerAdsBlenderJob                         │
+│   Immersive container (spotlight banner) blending       │
+└─────────────────────────────────────────────────────────┘
 ```
 
-More complex example (different slot structure for early vs later positions):
-```
-configuredClusters = [ (3 ads, 6 organic), (2 ads, 6 organic) ]
-repeatCluster      = (1 ad, 6 organic)
-
-Result: [A,A,A, O,O,O,O,O,O, A,A, O,O,O,O,O,O, A, O,O,O,O,O,O, A, ...]
-```
-
-Constraints respected per slot:
-- **Quality floor**: per-slot minimum and universal minimum (`universalQualityFloor`)
-- **Dedupe radius**: ad cannot be adjacent to organic with same `dedupeId` (businessId) within radius N
-- **Max ads cap**: `maxNumAds` — total ads placed across all slots
-- **Min organic**: won't blend any ads if fewer than `minNumOrganic` organic items
-
-**2. DedupeLastHorizontalBlender** (`"dedupe_last_1D_blending"`) — aggressive dedup
-
-Same cluster-based slotting as above, but with stricter deduplication:
-- First occurrence of a `dedupeId` (businessId) wins, ALL subsequent occurrences are dropped
-- If an ad store appears organically, the ad is dropped (organic takes precedence)
-- No radius — global dedup across the entire output
-- Supports pagination cursors (`blendWithPagination`) for infinite scroll surfaces
-
-**3. SPLegacyHorizontalBlender** (`"legacy_sp_1D_blending"`) — legacy sponsored product blender
-Legacy path, being migrated toward GenericHorizontalBlenderV2.
+All 5 jobs run concurrently where possible; failures are non-critical (falls back to organic-only).
 
 ---
 
-## Ghost Ads (Lift Experiment Infrastructure)
+## Two-Dimensional Blend (Carousels)
 
-Every ad in the blended output may carry `ghostAdCandidates`. A ghost ad is an ad that:
-- Meets all quality floors
-- Is in a lift experiment (campaign has treatment + control split)
-- Would have been blended at this slot in the treatment group
-- But this user is in the control group, so it is NOT displayed
+For store carousels, `twoDimensionalSLBlend()` does blending in two dimensions:
 
-Ghost ads are attached to the nearest displayed candidate (organic or real ad) and tracked
-in Iguazu for iROAS (incremental Return on Ad Spend) measurement. They make it possible to
-measure "what revenue was lost by NOT showing this ad" in the control group.
+1. **Vertical (carousel-level)**: Which carousels receive ad slots at all? (Not all carousels are ad-eligible)
+2. **Horizontal (slot-level)**: Within an ad-eligible carousel, which slots get ads vs. organic stores?
 
-This is a completely separate experiment dimension from organic ranking experiments.
+The horizontal slot blending is what this document primarily covers.
 
 ---
 
-## 2D Blending (Carousel-Level + Slot-Level)
+## Three Blending Algorithms
 
-`twoDimensionalSLBlend()` is called for store carousels and does blending in two dimensions:
+Selected via `HorizontalBlenderConfig.blendingAlgorithm`:
+
+### 1. GenericHorizontalBlenderV2 (primary)
+
+**Strategy**: Cluster-based interleaving. For each ad-organic cluster in sequence, generate all possible ad sequences that satisfy constraints, pick the first one without ghost ads.
 
 ```
-DIMENSION 1 (Vertical / carousel-level):
-  Which ad carousels get blended into which organic carousels?
-  The AdsBlendingDataPlane resolves this based on carousel targeting.
-  Each ad store carousel targets specific organic carousel IDs.
+Config: configuredClusters=[(A1,O6),(A2,O6)], repeatCluster=(A1,O4)
 
-DIMENSION 2 (Horizontal / slot-level):
-  Within a matched carousel pair, which ad goes in which slot?
-  Uses HorizontalBlenderConfig to determine slot positions.
+Position pattern:
+  [A] [O] [O] [O] [O] [O] [O]   ← first configured cluster: 1 ad, 6 organic
+  [A] [A] [O] [O] [O] [O] [O] [O]   ← second: 2 ads, 6 organic
+  [A] [O] [O] [O] [O]   ← repeat forever: 1 ad, 4 organic
+  [A] [O] [O] [O] [O]
+  ...
 ```
 
-The `VerticalBlender` handles dimension 1 (which carousel to blend into).
-The `HorizontalBlender` handles dimension 2 (which slot within that carousel).
+**Constraints per ad slot**:
+1. Universal quality floor (ad score ≥ threshold)
+2. Position quality floor (per-slot override, e.g., stricter floor for slot 0)
+3. Dedupe radius (ad cannot be within `dedupeRadius` positions of same-business organic)
+4. Lift experiment fairness (only 1 ad per lift campaign per blend)
+5. Must not be a ghost ad (ghost ads tracked but not shown)
+
+**Ghost ads**: If the best eligible sequence includes a ghost ad (control group of a lift experiment), that ghost ad is recorded on the adjacent candidate for iROAS measurement, and blending continues looking for real ad sequences.
+
+### 2. DedupeLastHorizontalBlender
+
+**Strategy**: Aggressive deduplication. First occurrence of a store ID wins (whether ad or organic). All subsequent duplicates are silently dropped.
+
+Key difference from GenericV2:
+- No dedupeRadius constraint — deduplication is global across the entire list
+- Supports **pagination** via `AdsBlendingCursor` — cursor carries `clusterOffset`, `dedupeIds`, `globalItemCount` across page requests
+
+Used for surfaces where carousel-level dedup radius doesn't apply.
+
+### 3. SPLegacyHorizontalBlender
+
+Legacy algorithm kept for backward compatibility. Not used for new surfaces.
 
 ---
 
-## Key Config Fields
+## HorizontalBlenderConfig Contract
 
 ```json
 {
   "blending_algorithm": "generic_1D_blending",
-  "start_index": 2,                        ← first 2 slots always organic
-  "num_ads_limit": 3,                       ← at most 3 ads total
-  "min_organic_limit": 5,                   ← don't blend if fewer than 5 organics
-  "universal_quality_floor": 0.002,         ← minimum ad quality score
-  "dedupe_radius": 1,                       ← no ad adjacent to organic with same businessId
+  "start_index": 0,
   "configured_slot_sizes": [
-    { "ad_cluster_size": 1, "organic_cluster_size": 4 }   ← first cluster
+    { "ad_cluster_size": 1, "organic_cluster_size": 6 },
+    { "ad_cluster_size": 2, "organic_cluster_size": 6 }
   ],
   "repeated_slot_size": { "ad_cluster_size": 1, "organic_cluster_size": 4 },
+  "num_ads_limit": 5,
+  "min_organic_limit": 3,
+  "universal_quality_floor": 0.002,
+  "universal_quality_percentile_floor": null,
+  "dedupe_radius": 2,
   "position_quality_floors": [
-    { "start_index": 0, "end_index": 3, "quality_floor": 0.01 }  ← stricter floor in first 3 slots
-  ]
+    { "start_index": 0, "end_index": 3, "quality_floor": 0.05, "relevance_floor": 1.5 }
+  ],
+  "prevent_ad_from_blocking_all_organics": true
 }
 ```
 
-Config is per-surface, stored in runtime JSON, resolved by `BlenderFactory.resolve()`.
-This is separate from the organic ranking experiment config (no overlap with DV system for ranking).
+| Field | Meaning |
+|---|---|
+| `start_index` | Number of organic slots before any ad cluster begins |
+| `configured_slot_sizes` | Non-repeating prefix of ad/organic clusters |
+| `repeated_slot_size` | Repeating pattern after prefix |
+| `num_ads_limit` | Hard cap on total ads per blend |
+| `min_organic_limit` | Minimum organics needed to enable blending at all |
+| `universal_quality_floor` | Minimum ad quality score (absolute) |
+| `universal_quality_percentile_floor` | Percentile-based quality override (experiment-gated) |
+| `dedupe_radius` | Min positions between an ad and same-business organic |
+| `position_quality_floors` | Per-position stricter quality floors |
+| `prevent_ad_from_blocking_all_organics` | True = never let an ad be the only thing blocking all remaining organics |
+
+Default config: `OneDimBlending`, `maxNumAds=10`, `universalQualityFloor=0.002`, `dedupeRadius=1`, `repeatCluster=(A1, O4)`.
 
 ---
 
-## The Fundamental Problem for UBP
+## Ghost Ads and iROAS Measurement
 
-Organic stores and ad stores are ranked by completely incomparable scoring systems:
+Lift experiments split ads into:
+- **Treatment group**: sees real ads
+- **Control group**: sees ghost ads (ads that meet all quality floors but are not shown)
 
-```
-Organic store score:     Sibyl pCTR/pCVR prediction → finalScore (arbitrary scale, e.g. 0.0-1.0)
-Ad store (bid) score:    eCPM / ad quality score (separate Ads ML model, separate scale)
-
-No calibration between these two scores exists today.
-```
-
-Because scores are incomparable, organic and ads cannot compete for the same slots. Instead,
-the ads system uses a **fixed slotting pattern** (e.g., "slot 0 is always an ad if one is
-available") that is independent of the organic ML scores entirely.
-
-Result: a store with `organicScore = 0.95` gets pushed to slot 1 because slot 0 was
-reserved for ads, even if the ads system's best ad has `adScore = 0.002` (just above floor).
-The user gets a worse organic result so an ad they're unlikely to click can appear first.
-
-**UBP Phase 3 (value function and calibration)** is the solution:
-```
-calibrate(organicScore) → pAct on a common scale
-calibrate(adScore)      → pAct on a common scale
-
-sortedByDescending {
-  it.pAct × it.vAct
-  where vAct = organic_value_weight (GOV) for organic
-              + ad_revenue for sponsored
-}
-```
-
-When organic and ads compete on the same `pAct × vAct` scale, slot patterns become
-obsolete — the best store wins regardless of whether it's organic or sponsored.
+Ghost ads are attached to adjacent candidates via `ghostAdCandidates` on the `Candidate` interface. The serializer records ghost ad metadata for iROAS (incremental Return on Ad Spend) measurement. The blending constraint is: at most 1 ghost ad per cluster (otherwise fairness between treatment and control breaks).
 
 ---
 
-## What This Means for the Full Pipeline Picture
-
-The complete pipeline, including both organic ranking AND ads blending, looks like this:
+## The Root Problem: Incomparable Scores
 
 ```
-RETRIEVAL
-    │
-GROUPING (stores into carousels)
-    │
-ORGANIC HORIZONTAL RANKING  (Sibyl + business rules, per carousel)
-    │
-DECORATION + S1/S2/S3 RERANKING  (unobservable post-ranking step)
-    │
-LAYOUT PROCESSING
-    ├────────────────────────────────────────┐
-    │                                        │
-VERTICAL RANKING (post-processing)      ADS BLENDING (HomepageAdsBlender)
-  Organic carousel order                  Insert ad stores into carousels
-  Pinned + UR scoring                     and home feed at fixed slot positions
-    │                                        │
-    └─────────────────────────┬──────────────┘
-                              │
-                       SERIALIZATION
-                       (final response)
+Organic ranking score  = Sibyl ML predicted CTR/CVR (calibrated to order probability)
+Ad quality score       = Output of ad auction (bid × predicted CTR from ads model)
 ```
 
-Two completely separate ranking systems merge at serialization time.
-They share no scores, no models, no config.
-UBP's end state is to merge them into one unified pipeline with a shared value function.
+These are on **completely different scales**. The blending system cannot answer "is this ad more valuable than the organic store it's displacing?" — it can only enforce fixed slot patterns.
+
+Result: ads are inserted at fixed positions (slot 0 = ad, slots 1-4 = organic, ...) regardless of whether the displaced organic store had higher expected value.
+
+**UBP Phase 3 fix**: calibration service normalizes both to `pAct × vAct` on a common scale → ads and organics compete for the same slots → highest-EV content wins regardless of type.
+
+---
+
+## UBP Phase Roadmap
+
+| Phase | What | Ads Blending Impact |
+|---|---|---|
+| Phase 1 | Vertical ranking engine | None — ads blending unaffected |
+| Phase 2 | Horizontal ranking engine | None — ads blending unaffected |
+| Phase 3 | Value function + calibration | Organic ML scores and ad scores on same scale → true competition → no fixed slots |
+
+Phase 3 is when `ADS_BLEND` becomes a first-class `HorizontalProcessor` step in the pipeline config, rather than a separate parallel job.
+
+---
+
+## Key Files
+
+| File | What |
+|---|---|
+| `pipelines/homepage/.../HomepageAdsBlender.kt` | 5-job blending workflow; orchestrates all 4 surfaces |
+| `libraries/domain-util/.../AdsBlendingDataPlane.kt` | `twoDimensionalSLBlend()`: carousel-level + slot-level dispatch |
+| `libraries/domain-util/.../GenericHorizontalBlenderV2.kt` | Primary blending algorithm; `AdClusterGenerator` recursive DFS |
+| `libraries/domain-util/.../DedupeLastHorizontalBlender.kt` | Aggressive dedup strategy; pagination support |
+| `libraries/domain-util/.../BaseHorizontalBlender.kt` | Shared utilities: `getSortedAdsAboveQualityFloor()`, `getClusterSequence()` |
+| `libraries/domain-util/.../BlenderFactory.kt` | `resolve()`: maps `blendingAlgorithm` string → blender instance |
+| `libraries/domain-util/.../models/configs/HorizontalBlenderConfig.kt` | Full config contract with all fields |
+| `libraries/domain-util/.../models/quality/HorizontalQualityFloorFilter.kt` | Quality floor evaluation logic |

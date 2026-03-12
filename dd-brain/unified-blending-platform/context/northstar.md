@@ -6,23 +6,14 @@
 
 ## 0. Two Different Meanings of "Horizontal Blending"
 
-Before anything else: there are **two different things** in the codebase both operating "horizontally":
+Before anything else: "horizontal" in this codebase is overloaded.
 
-```
-ORGANIC HORIZONTAL RANKING          ADS HORIZONTAL BLENDING
-(restaurantStoreRankingJob)         (HomepageAdsBlender, separate parallel job)
-────────────────────────────────    ────────────────────────────────────────────
-Ranks organic stores by ML          Inserts ad store cards into the already-ranked
-score within a carousel.            organic list at fixed slot positions.
-                                    e.g., slot 0 = ad, slots 1-4 = organic, repeat.
+| Term | Meaning | Pipeline stage | UBP phase |
+|---|---|---|---|
+| **Horizontal ranking** | Ordering stores within a carousel by ML score | Layer 3 — before post-processing | Phase 1-2 |
+| **Horizontal blending** | Inserting ad store cards into ranked organic lists | Parallel to Layer 4 — ICP ads system | Phase 3 |
 
-Lives in Layer 3.                   Runs in parallel with post-processing (Layer 4).
-UBP Phase 1-2 scope.                UBP Phase 3 scope (needs calibrated value function).
-```
-
-These two systems are completely disconnected today — no shared scores, no shared models,
-no shared config. Organic stores and ad stores cannot compete for slots because their scores
-are on incomparable scales. UBP Phase 3 unifies them through calibration + the value function.
+These are implemented by entirely separate systems. The ICP ads blender (`HomepageAdsBlender`) runs in a parallel branch to post-processing and merges its output just before serialization. UBP Phase 1-2 does not touch it.
 
 ---
 
@@ -44,7 +35,7 @@ row 3   │ [store I]  [store J]                       │  ← NV carousel
 vertical
 ```
 
-Two independent ranking problems, executed sequentially:
+Two independent ranking problems, sequentially executed:
 
 - **Vertical ranking**: which row (carousel) goes at which position?
 - **Horizontal ranking**: within a row, which stores/items go in which slots?
@@ -53,7 +44,7 @@ That's the whole model. Everything else is implementation detail.
 
 ---
 
-## 2. The Four-Layer Pipeline
+## 2. The Full Pipeline (What Actually Runs)
 
 ```
 REQUEST
@@ -62,51 +53,66 @@ REQUEST
 ┌──────────────────────────────────────────────────────────┐
 │  LAYER 1: RETRIEVAL                                      │
 │  Fetch candidate stores, items, carousels from upstream  │
+│  Classes: restaurantStoreContentRetrievalJob             │
+│  Output: raw pool of ~200-1000 candidates                │
 └──────────────────────┬───────────────────────────────────┘
                        │
                        ▼
 ┌──────────────────────────────────────────────────────────┐
 │  LAYER 2: GROUPING                                       │
 │  Bucket candidates into named carousels                  │
+│  Classes: restaurantStoreGroupingJob                     │
 │  (Favorites, Taste, Reorder, NV, etc.)                   │
+│  Output: ~20 carousels, each with ~10-50 candidates      │
 └──────────────────────┬───────────────────────────────────┘
                        │
                        ▼
 ┌──────────────────────────────────────────────────────────┐
-│  LAYER 3: HORIZONTAL RANKING          ← UBP scope        │
-│  Within each carousel: rank stores/items by score        │
+│  LAYER 3: HORIZONTAL RANKING                             │
+│  Within each carousel: rank stores/items by ML score     │
+│  Classes: DefaultHomePageStoreRanker                     │
+│           DefaultHomePageCampaignRanker                  │
+│  Output: same carousels, stores now in ranked order      │
+│                                                          │
+│  ⚠ S1/S2/S3 decoration reranking runs AFTER Iguazu      │
+│    fires → logged positions ≠ positions users see        │
 └──────────────────────┬───────────────────────────────────┘
                        │
                        ▼
 ┌──────────────────────────────────────────────────────────┐
-│  LAYER 4: VERTICAL RANKING            ← UBP scope        │
-│  Across all carousels: rank carousels by score           │
-│  Assign final sortOrder to each carousel                 │
+│  LAYOUT PROCESSING                                       │
+│  Assemble StoreCarousel objects for post-processing      │
 └──────────────────────┬───────────────────────────────────┘
                        │
-                       ▼
-                  SERIALIZE → CLIENT
+              ┌────────┴────────┐
+              │                 │
+              ▼                 ▼
+┌─────────────────────┐  ┌───────────────────────────────┐
+│  LAYER 4: VERTICAL  │  │  ICP ADS HORIZONTAL BLENDING  │
+│  RANKING            │  │  HomepageAdsBlender.blend()   │
+│  reOrderGlobalEntities  │  4 parallel targets:         │
+│  V2()               │  │  - store carousels (2D blend) │
+│  UR scoring, multi- │  │  - home feed store list       │
+│  pliers, dedup,     │  │  - PAD collections            │
+│  fixups             │  │  - smart suggestions          │
+│  Classes:           │  │                               │
+│  DefaultHomePage    │  │  Algorithms:                  │
+│  PostProcessor      │  │  GenericHorizontalBlenderV2   │
+└──────────┬──────────┘  │  DedupeLastHorizontalBlender  │
+           │             └──────────────┬────────────────┘
+           └────────┬────────────────────┘
+                    │
+                    ▼
+               SERIALIZE → CLIENT
 ```
 
-UBP governs layers 3 and 4. Retrieval and grouping are upstream inputs.
+**UBP governs layers 3 and 4.** Retrieval and grouping are upstream inputs. The ICP ads blending system is a separate parallel pipeline — UBP Phase 3 will eventually make organic and ad scores comparable so they can compete for the same slots.
 
 ---
 
-## 3. The ML Scoring Layer: Sibyl and Predictors
+## 3. One Value Function for Both Layers
 
-Every ranking score comes from **Sibyl** — DoorDash's internal ML prediction service. Feed-service sends it a batch of feature vectors (one per carousel or store) and receives a score per item.
-
-A single Sibyl request can carry **multiple predictors at once**. For vertical ranking today, up to 7 predictors are called in one shot: a primary conversion predictor, a score multiplier, a programmatic boost predictor, UCB exploration, MAB, a vertical intent model, and VP profit predictors. Their outputs are assembled into one composite score.
-
-An experiment typically changes **one thing** in this setup: a new primary model, a different intent model, enabling UCB, or adjusting a boost weight. It does not need to replace the entire scoring stack.
-
-> See `current-system-deep-dive.md` for the full predictor roster and today's score assembly formula.
-
----
-
-## 4. The Value Function
-
-Every ranking decision answers the same question:
+Every ranking decision — whether ranking a store within a carousel or a carousel on the page — answers the same question:
 
 > **What is the expected value of showing this component to this user at this position?**
 
@@ -117,52 +123,83 @@ Expected Value = pImp × pAct × vAct
          Decays with position. Row 0 > Row 3. Slot 0 > Slot 5.
 
   pAct = P(user takes action | they see it)
-         Calibrated ML model output. Must be comparable across all content types.
+         The ML model output. Predicted CTR, CVR, order probability.
+         Must be calibrated to a comparable scale across all content types.
 
-  vAct = Value of that action
-         GOV, FIV, ads revenue, NV trial value.
+  vAct = Value of that action (in business terms)
+         GOV (gross order value), FIV (first-impression value),
+         ads revenue, strategic value (NV trial, retention).
          Weights are configurable per experiment.
 ```
 
-Today's scoring approximates this with a collection of multipliers and heuristics that encode business intent but aren't jointly optimizable or measurable. UBP makes the value function explicit and calibrated.
-
-**Calibration is the critical path.** Without it, scores from different model families (organic UR, NV ranker, ads CTR) are on incomparable scales and cannot be ranked together. Everything else depends on calibration being right.
+**Why this matters:** Today organic, ads, merch, and NV each use different scoring functions on incomparable scales. You cannot rank them together. UBP's entire value proposition is making these comparable through calibration and an explicit value function.
 
 ---
 
-## 5. The Three Core Interfaces
+## 4. The Two Ranking Engines
 
-Everything in UBP is built on three interfaces.
+Both engines share the same shape: a config-driven pipeline of steps executed in sequence.
+
+```
+INPUT: list of Components (carousels OR stores, depending on layer)
+           │
+           ▼
+    ┌─────────────────────────────┐
+    │  for each step in config:   │
+    │    processor = registry     │
+    │                 [step.type] │
+    │    processor.process(       │
+    │      components,            │
+    │      context,               │
+    │      step.params            │   ← params come from config JSON, not from code
+    │    )                        │
+    │    if emitTrace:            │
+    │      record score snapshot  │   ← automatic, no manual instrumentation
+    └──────────────┬──────────────┘
+                   │
+                   ▼
+OUTPUT: same Components, reordered by final score
+```
+
+**Vertical engine** (Layer 4): components are carousels. Steps include: MODEL_SCORING, MULTIPLIER_BOOST, DIVERSITY_RERANK, FIXED_PINNING.
+
+**Horizontal engine** (Layer 3): components are stores/items. Steps include: MODEL_SCORING, MULTIPLIER_BOOST, BUSINESS_RULES_SORT, ORDER_HISTORY_RERANK, ADS_BLEND.
+
+---
+
+## 5. Three Core Interfaces
+
+Everything in UBP is built on three interfaces. If you understand these, you understand the platform.
 
 ### Component — the unit being ranked
 
 ```kotlin
 interface VerticalComponent {
     val id: String
-    val type: ComponentType       // STORE_CAROUSEL, ITEM_CAROUSEL, NV_CAROUSEL, etc.
-    var score: Double             // mutable — processors update this in place
+    val type: ComponentType          // STORE_CAROUSEL, ITEM_CAROUSEL, NV_CAROUSEL, etc.
+    var score: Double                // mutable — processors update this
     val metadata: MutableMap<String, Any>
     fun recordTrace(stepId: String, value: Any)
 }
 ```
 
-Today there are 9+ typed carousel classes with no shared interface. UBP collapses them to one.
+Today there are 9+ separate typed carousel classes with no shared interface. UBP collapses them to one.
 
 ### Processor — one step in the pipeline
 
 ```kotlin
 interface VerticalProcessor {
-    val type: String              // "MODEL_SCORING", "MULTIPLIER_BOOST", etc.
+    val type: String                 // "MODEL_SCORING", "MULTIPLIER_BOOST", etc.
 
     suspend fun process(
         components: MutableList<VerticalComponent>,
         context: RankingContext,
-        params: Map<String, Any>, // injected from config — not read internally
+        params: Map<String, Any>,   // injected from config, not read internally
     )
 }
 ```
 
-`params` are injected at call time from the experiment config. Processors have no internal DV reads. This is what makes them reusable across experiments.
+The critical property: `params` are **injected at call time**, not pulled from DV keys inside the processor. This is what makes processors reusable across experiments.
 
 ### Engine — the orchestrator
 
@@ -178,130 +215,123 @@ class VerticalRankingEngine(
 }
 ```
 
-The engine has zero business logic. It reads the step list from config and dispatches to registered processors. A new processor type = one new class registered. A changed pipeline = changed JSON config. The engine itself never changes.
+The engine has no business logic. It reads the step list from config and dispatches to processors. New processor = new entry in the registry. Changed pipeline = changed JSON config. No code changes to the engine.
 
 ---
 
 ## 6. The Experiment Model: N × M
 
 ```
-N experiments on horizontal ranking (Layer 3)
-M experiments on vertical ranking   (Layer 4)
+N experiments on horizontal ranking
+M experiments on vertical ranking
+─────────────────────────────────────
+Each user is assigned to exactly ONE horizontal experiment variant
+Each user is assigned to exactly ONE vertical experiment variant
+A user can be in ANY (horizontal, vertical) combination simultaneously
 
-Each user is in exactly one horizontal variant
-Each user is in exactly one vertical variant
-A user can be in any (horizontal, vertical) combination
-
-→ N × M valid experiment cells
-→ Mutually exclusive within a layer, independent across layers
+This gives N × M experiment cells.
+Experiments are mutually exclusive WITHIN a layer, not ACROSS layers.
 ```
 
-Implemented as independent DV keys — one per layer. This is already how DV works today. UBP formalizes it as a first-class platform property.
+In practice, implemented as independent DV keys:
+```
+DV "ubp_hp_horizontal_v2" → "treatment_fw"    (horizontal assignment)
+DV "ubp_hp_vertical_v3"   → "intent_model__v3" (vertical assignment)
+```
+
+Each DV is read independently. The two assignments don't interfere. The engine for each layer resolves its own config independently from its own DV value.
+
+**This is already how DV works today.** UBP just formalizes it as a first-class property of the platform.
 
 ---
 
 ## 7. The Config Contract
 
-There is one **platform-owned baseline** (`control`) that defines current production behavior. HP owns it. Every experiment inherits from it and declares only what it changes.
+One JSON file per experiment. One DV controls which variant runs. No code changes to run a new experiment variant.
 
+```json
+// ubp/experiments/{experiment_id}.json
+{
+  "control": {
+    "vertical_pipeline": {
+      "steps": [
+        { "id": "score",     "type": "MODEL_SCORING",    "params": { "model": "store_ranking_v1_1" } },
+        { "id": "blend",     "type": "MULTIPLIER_BOOST", "params": { ... } },
+        { "id": "diversity", "type": "DIVERSITY_RERANK", "params": { "enabled": false } },
+        { "id": "pin",       "type": "FIXED_PINNING",    "params": { ... } }
+      ]
+    }
+  },
+  "treatment_intent_v3": {
+    "vertical_pipeline": {
+      "steps": [
+        { "id": "score",     "type": "MODEL_SCORING",    "params": { "model": "vertical_intent_v3" } },
+        { "id": "blend",     "type": "MULTIPLIER_BOOST", "params": { ... } },
+        { "id": "diversity", "type": "DIVERSITY_RERANK", "params": { "enabled": true, "weight": 0.4 } },
+        { "id": "pin",       "type": "FIXED_PINNING",    "params": { ... } }
+      ]
+    }
+  }
+}
 ```
-ubp/experiments/
-  control.json              ← platform baseline, HP-owned, one per layer
-  hp_vertical_fw_v4.json    ← "new model"
-  hp_vertical_intent_v3.json
-  nv_vertical_boost.json    ← NV team experiment
-  ads_vertical_blend.json   ← Ads team experiment
-```
 
-An experiment file contains one or more **treatments**. A treatment either:
-- **Overrides specific step params** (common) — declares only the delta from control
-- **Declares a full pipeline** (rare) — when it needs a different step sequence
+**MLE surface:** drop a JSON file, add one DV key. No PR for parameter changes.
 
-One DV key per experiment. One DV value selects which treatment runs. No code changes to run a new variant.
-
-> See `experiment-config-contract.md` for the full contract schema and worked examples.
+**BE surface:** register a new Processor class when a new step type is needed. Everything else is config.
 
 ---
 
 ## 8. What "Unified" Means
 
+"Unified" has three concrete meanings:
+
 **1. Unified Component Model**
-All content types implement one interface. The engine ranks carousels without knowing whether they're store, item, NV, or ads.
+Every content type (store carousel, item carousel, NV carousel, ads carousel) implements the same `Component` interface. The ranking engine doesn't know or care what type of content it's ranking. There is no `if (component is StoreCarousel)` in the engine.
 
 **2. Unified Value Function**
-All content types' scores express `pImp × pAct × vAct` on a calibrated, comparable scale. No content type gets a separate scoring system. Organic, ads, and merch compete on the same axis.
+Every content type's score is expressed as `pImp × pAct × vAct` on a comparable, calibrated scale. Organic stores, ads, merch, and NV placements compete on the same scale. No content type gets a separate scoring system or a hardcoded multiplier that can't be measured.
 
 **3. Unified Experiment Platform**
-Both layers are configured through the same JSON contract and DV convention. MLEs self-serve through one interface. Predictor selection, model versions, blending params, and pipeline shape all live in one place.
+Both horizontal and vertical ranking are configured through the same JSON contract, the same DV wiring convention, and the same tracing infrastructure. MLEs self-serve both layers through the same interface. No layer requires a different workflow.
 
 ---
 
-## 9. The Full Pipeline (Updated)
+## 9. What the Current Code Gets Wrong
 
-```
-RETRIEVAL
-    │
-GROUPING (stores → carousels)
-    │
-ORGANIC HORIZONTAL RANKING  (Layer 3: Sibyl + business rules, per carousel)
-    │
-DECORATION + S1/S2/S3 RERANKING  (unobservable — runs after Iguazu fires)
-    │
-LAYOUT PROCESSING
-    ├──────────────────────────────────────────────┐
-    │                                              │
-VERTICAL RANKING (Layer 4, post-processing)    ADS HORIZONTAL BLENDING
-  Organic carousel order via UR + pinning        (HomepageAdsBlender, parallel)
-                                                 Insert ad stores at fixed slots
-    │                                              │
-    └───────────────────────┬──────────────────────┘
-                            │
-                     SERIALIZATION → CLIENT
-```
-
-Two completely separate ranking pipelines merge at serialization.
-They share nothing: no scores, no models, no config, no value function.
-
----
-
-## 10. What the Current Code Gets Wrong
+These are the root causes that UBP addresses:
 
 | Root Cause | Symptom | UBP Fix |
 |---|---|---|
-| No shared carousel interface | 9 typed classes, each ranks differently | `VerticalComponent` collapses all types |
-| Predictor selection in scattered DV boolean checks | New predictor = new `if` in `P13nExperimentManager.kt` | Predictor config declared in experiment JSON |
-| Model versions in a separate mapping JSON; intent model buried in blending config | Three files to touch for one experiment | Single experiment JSON: predictors + models + blending params |
-| No config seam for step sequence | Adding a step requires a code change | Steps declared in config; engine dispatches from registry |
-| Post-ranking fixups outside the pipeline | NV/PAD fixups run silently after the DAG, no traceability | All fixups declared as `FIXED_PINNING` steps in config |
-| Manual Iguazu instrumentation per processor | Inconsistent, often missing | Engine auto-traces after every step |
-| Organic/NV/ads scores on incomparable scales | Ads inserted after ranking; best ad may be buried | Calibration normalizes all content to one scale |
+| Each carousel type owns its own ranking logic | FavoritesCarousel, DVCarousel, TasteCarousel each do ranking differently, no shared interface | `Component` interface collapses all types; `Processor` registry handles step logic |
+| Step params live in 10+ scattered places | Changing one experiment touches 5 DVs + 3 JSON files + hardcoded constants | Single experiment JSON per treatment; params injected at call time |
+| No config seam for step sequence | Adding/removing a step requires code change | Steps declared in config; engine composes from registry at request time |
+| Post-ranking fixups are outside the pipeline | `updateSortOrderOfNVCarousel()` runs after the DAG with no traceability | All fixups become declared `FIXED_PINNING` steps in the config |
+| Manual per-step Iguazu instrumentation | Each processor manually calls IguazuEventUtil — inconsistent, often missing | Engine auto-calls `recordTrace()` after every step; standard schema |
+| Organic/ads/NV scores are incomparable | Ads inserted AFTER organic ranking — highest-value ads may not be at the top | All content declares `pAct` + `vAct`; calibration service normalizes scores |
 
 ---
 
-## 10. What Done Looks Like
+## 10. The Northstar: What Done Looks Like
 
 ```
-An MLE running a new vertical ranking experiment:
+An MLE who wants to run a new vertical blending experiment:
 
-  1. Trains a model → deploys to Sibyl
-  2. Writes an experiment file with their treatment (just the delta from control)
-  3. Adds one DV key
-  4. Hot-deploys the JSON — no pod restart, no code review
+  1. Writes a JSON file:  ubp/experiments/hp_vertical_blend_v4.json
+  2. Adds one DV key:     UBP_HP_VERTICAL_BLEND_V4("ubp_hp_vertical_blend_v4")
+  3. Deploys: runtime JSON hot-reload, no pod restart
 
-The platform handles:
-  ✓ Assembling the Sibyl request from config's predictor declarations
-  ✓ Composing the multi-predictor score
-  ✓ Applying calibration, intent, and boost steps per config
-  ✓ Tracing every step automatically
-  ✓ Traffic splitting via DV
+That's it. The BE engine handles:
+  - Feature resolution (from config's feature declarations)
+  - Sibyl RPC (from config's model name)
+  - Calibration (from config's calibration spec)
+  - Tracing (automatic per-step, standard schema)
+  - Traffic splitting (via DV infrastructure)
 
-The MLE never touches:
-  ✗ Kotlin source code
-  ✗ P13nExperimentManager
-  ✗ dv_treatment_sibyl_model_mapping.json
-  ✗ hp_vertical_blending_config.json
-  ✗ Logging instrumentation
-  ✗ Cross-team DV alignment
+What the MLE never touches:
+  - Java/Kotlin source code
+  - PR review cycles for parameter changes
+  - Manual logging instrumentation
+  - Cross-team alignment for DV wiring
 ```
 
-When that workflow works for both vertical and horizontal ranking, UBP is done.
+The day that workflow is possible for both vertical and horizontal ranking, UBP is done.
