@@ -74,7 +74,81 @@ UBP is the platform that governs **layers 3 and 4**. Retrieval and grouping are 
 
 ---
 
-## 3. One Value Function for Both Layers
+## 3. Sibyl and Predictors: The ML Scoring Layer
+
+Before discussing the value function, you need to understand how ML scores are actually obtained. Every ranking decision goes through **Sibyl** — DoorDash's internal ML prediction service.
+
+### What Sibyl Does
+
+Feed-service sends Sibyl a batch of **feature vectors** (one per carousel or store being ranked) and receives back a **score per item per predictor**. A single request can ask multiple predictors at once.
+
+```
+Feed-Service ──────────────────────────────────────────► Sibyl
+             PredictionRequest {
+               predictors: [mainPredictor, multiplierPredictor, ucbPredictor, ...]
+               featureSets: [carousel_0_features, carousel_1_features, ...]
+               useCase: "home_page_vertical_ranking"
+             }
+
+Sibyl ─────────────────────────────────────────────────► Feed-Service
+      PredictionResponse {
+        per predictor, per featureSet: { score: Double }
+      }
+```
+
+### The Predictor Roster
+
+A **predictor** is a named slot in Sibyl that serves a specific model family. A **model override** is the specific trained version within that slot. Today's vertical ranking uses up to 7 predictors per request:
+
+| Predictor | Role | Combined How |
+|---|---|---|
+| **Main (FW)** | Core conversion probability — the primary `pAct` signal | Multiplicative base |
+| **Multiplier** | Per-store scaling factor (store ranker boost) | `× multiplierScore` |
+| **Programmatic Boost** | Campaign/business-rule boost | `× progBoostScore` |
+| **UCB Uncertainty** | Exploration bonus for under-explored stores | `+ ucbScore` |
+| **MAB** | Multi-armed bandit bonus | `+ mabScore` |
+| **Vertical Intent** | User intent signal (RX vs. NV preference) | Applied in blending stage |
+| **VP Predictors** | `pDasherCost` + `pCommission` for profit-based ranking | Replaces base formula |
+
+The **composite Sibyl score** from Stage 1 (before blending):
+
+```
+sibylScore = (mainScore × multiplierScore × progBoostScore)
+           + ucbScore
+           + mabScore
+```
+
+This score is then further adjusted in the blending stage (see Section 5).
+
+### How an Experiment Selects Predictors and Models
+
+An experiment selects its ML model through two independent mechanisms:
+
+**1. Predictor switch (via DV boolean):**
+Whether to use the FW predictor, enable UCB, enable MAB, etc. — each controlled by its own DV flag in `P13nExperimentManager`. These are scattered boolean checks today. UBP declares them as `predictor_config` in the experiment JSON.
+
+**2. Model version (via DV → JSON lookup):**
+The specific trained model artifact for each predictor is resolved via a runtime JSON map:
+
+```
+DV value: "treatment_fw_v4"
+     │
+     ▼
+dv_treatment_sibyl_model_mapping.json
+{
+  "FEED_RANKING_FW": { "treatment_fw_v4": "store_ranker_fw_v4_model_id" },
+  "MULTIPLIER":      { "treatment_fw_v4": "multiplier_v4_model_id" }
+}
+     │
+     ▼
+Sibyl called with modelOverrideId = "store_ranker_fw_v4_model_id"
+```
+
+**The problem today:** these two mechanisms are separate files, separate DV keys, and separate code paths. Adding a new predictor to an experiment means touching `P13nExperimentManager.kt` (boolean check), `dv_treatment_sibyl_model_mapping.json` (model IDs), and `hp_vertical_blending_config.json` (blending params) — plus a separate entry for the intent model name, which lives *inside* the blending config. UBP collapses all of this into one experiment JSON.
+
+---
+
+## 4. The Value Function
 
 Every ranking decision — whether ranking a store within a carousel or a carousel on the page — answers the same question:
 
@@ -87,8 +161,8 @@ Expected Value = pImp × pAct × vAct
          Decays with position. Row 0 > Row 3. Slot 0 > Slot 5.
 
   pAct = P(user takes action | they see it)
-         The ML model output. Predicted CTR, CVR, order probability.
-         Must be calibrated to a comparable scale across all content types.
+         The calibrated ML model output. Predicted CTR, CVR, order probability.
+         Must be on a comparable scale across all content types.
 
   vAct = Value of that action (in business terms)
          GOV (gross order value), FIV (first-impression value),
@@ -96,42 +170,42 @@ Expected Value = pImp × pAct × vAct
          Weights are configurable per experiment.
 ```
 
-**Why this matters:** Today organic, ads, merch, and NV each use different scoring functions on incomparable scales. You cannot rank them together. UBP's entire value proposition is making these comparable through calibration and an explicit value function.
+**What exists today vs. what this requires:**
+
+| Term | Today's approximation | What's missing |
+|---|---|---|
+| `pAct` | Main Sibyl predictor output (conversion probability) | Calibration to comparable scale across content types |
+| `vAct` | VP experiment: `pConv × pDasherCost × pCommission × α × β`; otherwise: scattered multipliers and boost weights | A unified, declared weight vector. Organic/NV/ads/merch on the same scale |
+| `pImp` | **Not modeled.** Position assigned after scoring, not used to influence it | Position-decay model; joint optimization of score and slot assignment |
+
+The current scoring is not wrong — it is a pragmatic approximation. But it is an approximation: a collection of multiplicative heuristics assembled over time that encode business intent without being measurable or jointly optimizable. UBP's job is to make this an explicit, calibrated, measurable value function.
+
+**Why calibration is the critical path:** `pAct` outputs from different models (organic UR, NV ranker, ads CTR model) are not on comparable scales. Without calibration, you cannot rank organic carousels against NV carousels against ads on the same `pAct × vAct` axis. Every other UBP capability depends on calibration being correct first.
 
 ---
 
-## 4. The Two Ranking Engines
+## 5. How Blending Works Today (and What UBP Replaces)
 
-Both engines share the same shape: a config-driven pipeline of steps executed in sequence.
+After the Sibyl composite score is assembled, a second scoring stage applies three multiplicative adjustments in `BlendingUtil`:
 
 ```
-INPUT: list of Components (carousels OR stores, depending on layer)
-           │
-           ▼
-    ┌─────────────────────────────┐
-    │  for each step in config:   │
-    │    processor = registry     │
-    │                 [step.type] │
-    │    processor.process(       │
-    │      components,            │
-    │      context,               │
-    │      step.params            │   ← params come from config JSON, not from code
-    │    )                        │
-    │    if emitTrace:            │
-    │      record score snapshot  │   ← automatic, no manual instrumentation
-    └──────────────┬──────────────┘
-                   │
-                   ▼
-OUTPUT: same Components, reordered by final score
+finalScore = sibylScore
+           × calibration(verticalId, scoreBucket)     ← piecewise range lookup
+           × intentPredictionScore                    ← from intent Sibyl model
+           × intentLookupMultiplier(contextFeatures)  ← feature lookup table
+           × verticalBoostWeight(verticalId)          ← static per-vertical multiplier
+           + diversityBonus                           ← if diversity reranking enabled
 ```
 
-**Vertical engine** (Layer 4): components are carousels. Steps include: MODEL_SCORING, MULTIPLIER_BOOST, DIVERSITY_RERANK, FIXED_PINNING.
+- **Calibration** normalizes scores across verticals so they're roughly comparable — a manual piecewise table, updated offline
+- **Intent** combines a Sibyl intent model output with a feature lookup table encoding user cohort × vertical affinity (e.g., dashpass users boosted toward NV)
+- **Vertical boost weight** is a static hand-tuned multiplier per vertical — the most nakedly heuristic piece
 
-**Horizontal engine** (Layer 3): components are stores/items. Steps include: MODEL_SCORING, MULTIPLIER_BOOST, BUSINESS_RULES_SORT, ORDER_HISTORY_RERANK, ADS_BLEND.
+In UBP, these all become declared `MULTIPLIER_BOOST` and `CALIBRATION` steps in the pipeline config, with params injected from the experiment JSON. The logic is unchanged; the wiring and observability are what change.
 
 ---
 
-## 5. Three Core Interfaces
+## 6. The Three Core Interfaces
 
 Everything in UBP is built on three interfaces. If you understand these, you understand the platform.
 
@@ -165,6 +239,28 @@ interface VerticalProcessor {
 
 The critical property: `params` are **injected at call time**, not pulled from DV keys inside the processor. This is what makes processors reusable across experiments.
 
+**The `MODEL_SCORING` processor in detail:** this processor is not a thin wrapper around one Sibyl call. It is responsible for assembling the full `RegressionContext` — which predictors to use, which model versions, whether to enable UCB/MAB/boost — and assembling the composite score from all predictor outputs. The params it receives from config declare the full predictor configuration:
+
+```json
+{
+  "type": "MODEL_SCORING",
+  "params": {
+    "primary_predictor": "feed_ranking_fw",
+    "primary_model": "store_ranker_fw_v4",
+    "multiplier_predictor": "universal_ranker_multiplier",
+    "multiplier_model": "multiplier_v4",
+    "ucb_enabled": true,
+    "ucb_predictor": "ucb_uncertainty",
+    "ucb_model": "ucb_v2",
+    "mab_enabled": false,
+    "intent_predictor": "vertical_intent",
+    "intent_model": "intent_v3"
+  }
+}
+```
+
+This is the config contract that replaces today's scattered DV boolean checks + model mapping JSON + blending config intent model field.
+
 ### Engine — the orchestrator
 
 ```kotlin
@@ -183,7 +279,7 @@ The engine has no business logic. It reads the step list from config and dispatc
 
 ---
 
-## 6. The Experiment Model: N × M
+## 7. The Experiment Model: N × M
 
 ```
 N experiments on horizontal ranking
@@ -209,7 +305,7 @@ Each DV is read independently. The two assignments don't interfere. The engine f
 
 ---
 
-## 7. The Config Contract
+## 8. The Config Contract
 
 One JSON file per experiment. One DV controls which variant runs. No code changes to run a new experiment variant.
 
@@ -219,33 +315,101 @@ One JSON file per experiment. One DV controls which variant runs. No code change
   "control": {
     "vertical_pipeline": {
       "steps": [
-        { "id": "score",     "type": "MODEL_SCORING",    "params": { "model": "store_ranking_v1_1" } },
-        { "id": "blend",     "type": "MULTIPLIER_BOOST", "params": { ... } },
-        { "id": "diversity", "type": "DIVERSITY_RERANK", "params": { "enabled": false } },
-        { "id": "pin",       "type": "FIXED_PINNING",    "params": { ... } }
+        {
+          "id": "score",
+          "type": "MODEL_SCORING",
+          "params": {
+            "primary_predictor": "feed_ranking_fw",
+            "primary_model": "store_ranker_fw_v3",
+            "multiplier_predictor": "universal_ranker_multiplier",
+            "multiplier_model": "multiplier_v3",
+            "ucb_enabled": false,
+            "mab_enabled": false,
+            "intent_predictor": "vertical_intent",
+            "intent_model": ""
+          }
+        },
+        {
+          "id": "calibrate",
+          "type": "CALIBRATION",
+          "params": {
+            "calibration_table": "default_piecewise_v1"
+          }
+        },
+        {
+          "id": "blend",
+          "type": "MULTIPLIER_BOOST",
+          "params": {
+            "vertical_boost_weights": { "1": 1.0, "10": 1.2 },
+            "intent_lookup_table": "default_intent_v1"
+          }
+        },
+        {
+          "id": "pin",
+          "type": "FIXED_PINNING",
+          "params": { "pinning_rules": "default_pinned_order" }
+        }
       ]
     }
   },
   "treatment_intent_v3": {
     "vertical_pipeline": {
       "steps": [
-        { "id": "score",     "type": "MODEL_SCORING",    "params": { "model": "vertical_intent_v3" } },
-        { "id": "blend",     "type": "MULTIPLIER_BOOST", "params": { ... } },
-        { "id": "diversity", "type": "DIVERSITY_RERANK", "params": { "enabled": true, "weight": 0.4 } },
-        { "id": "pin",       "type": "FIXED_PINNING",    "params": { ... } }
+        {
+          "id": "score",
+          "type": "MODEL_SCORING",
+          "params": {
+            "primary_predictor": "feed_ranking_fw",
+            "primary_model": "store_ranker_fw_v4",
+            "multiplier_predictor": "universal_ranker_multiplier",
+            "multiplier_model": "multiplier_v4",
+            "ucb_enabled": true,
+            "ucb_predictor": "ucb_uncertainty",
+            "ucb_model": "ucb_v2",
+            "mab_enabled": false,
+            "intent_predictor": "vertical_intent",
+            "intent_model": "intent_v3"
+          }
+        },
+        {
+          "id": "calibrate",
+          "type": "CALIBRATION",
+          "params": { "calibration_table": "intent_v3_calibration" }
+        },
+        {
+          "id": "blend",
+          "type": "MULTIPLIER_BOOST",
+          "params": {
+            "vertical_boost_weights": { "1": 1.0, "10": 1.3 },
+            "intent_lookup_table": "intent_v3_lookup"
+          }
+        },
+        {
+          "id": "diversity",
+          "type": "DIVERSITY_RERANK",
+          "params": { "enabled": true, "weight": 0.4, "rx_nrx_balance": 0.6 }
+        },
+        {
+          "id": "pin",
+          "type": "FIXED_PINNING",
+          "params": { "pinning_rules": "default_pinned_order" }
+        }
       ]
     }
   }
 }
 ```
 
-**MLE surface:** drop a JSON file, add one DV key. No PR for parameter changes.
-
-**BE surface:** register a new Processor class when a new step type is needed. Everything else is config.
+Key properties of this contract:
+- **MODEL_SCORING declares the full predictor set** — which predictors, which model versions, which are enabled. No separate DV boolean checks. No separate model mapping JSON.
+- **All blending params are in one place** — calibration table, intent lookup, boost weights are all co-located with the predictor config they're paired with.
+- **Steps are additive** — the control and treatment differ by one step (`diversity`). That diff is visible in the JSON.
+- **MLE surface:** drop a JSON file, add one DV key. No PR for parameter changes.
+- **BE surface:** register a new Processor class when a new step type is needed. Everything else is config.
 
 ---
 
-## 8. What "Unified" Means
+## 9. What "Unified" Means
 
 "Unified" has three concrete meanings:
 
@@ -253,47 +417,56 @@ One JSON file per experiment. One DV controls which variant runs. No code change
 Every content type (store carousel, item carousel, NV carousel, ads carousel) implements the same `Component` interface. The ranking engine doesn't know or care what type of content it's ranking. There is no `if (component is StoreCarousel)` in the engine.
 
 **2. Unified Value Function**
-Every content type's score is expressed as `pImp × pAct × vAct` on a comparable, calibrated scale. Organic stores, ads, merch, and NV placements compete on the same scale. No content type gets a separate scoring system or a hardcoded multiplier that can't be measured.
+Every content type's score is expressed as `pImp × pAct × vAct` on a comparable, calibrated scale. Organic stores, ads, merch, and NV placements compete on the same scale. No content type gets a separate scoring system or a hardcoded multiplier that can't be measured. This requires calibration as a prerequisite.
 
 **3. Unified Experiment Platform**
-Both horizontal and vertical ranking are configured through the same JSON contract, the same DV wiring convention, and the same tracing infrastructure. MLEs self-serve both layers through the same interface. No layer requires a different workflow.
+Both horizontal and vertical ranking are configured through the same JSON contract, the same DV wiring convention, and the same tracing infrastructure. MLEs self-serve both layers through the same interface. No layer requires a different workflow. Predictor selection, model versioning, blending params, and pipeline shape are all declared in one place.
 
 ---
 
-## 9. What the Current Code Gets Wrong
+## 10. What the Current Code Gets Wrong
 
 These are the root causes that UBP addresses:
 
 | Root Cause | Symptom | UBP Fix |
 |---|---|---|
 | Each carousel type owns its own ranking logic | FavoritesCarousel, DVCarousel, TasteCarousel each do ranking differently, no shared interface | `Component` interface collapses all types; `Processor` registry handles step logic |
+| Predictor selection spread across boolean DV checks | Adding a new predictor requires a new `if` in `P13nExperimentManager.kt` per experiment | Predictor config declared in experiment JSON; `MODEL_SCORING` processor reads it |
+| Model versions in separate mapping JSON | Model IDs and blending params live in different files; intent model name buried in blending config | Single experiment JSON contains all predictor names + model versions + blending params |
 | Step params live in 10+ scattered places | Changing one experiment touches 5 DVs + 3 JSON files + hardcoded constants | Single experiment JSON per treatment; params injected at call time |
 | No config seam for step sequence | Adding/removing a step requires code change | Steps declared in config; engine composes from registry at request time |
 | Post-ranking fixups are outside the pipeline | `updateSortOrderOfNVCarousel()` runs after the DAG with no traceability | All fixups become declared `FIXED_PINNING` steps in the config |
 | Manual per-step Iguazu instrumentation | Each processor manually calls IguazuEventUtil — inconsistent, often missing | Engine auto-calls `recordTrace()` after every step; standard schema |
-| Organic/ads/NV scores are incomparable | Ads inserted AFTER organic ranking — highest-value ads may not be at the top | All content declares `pAct` + `vAct`; calibration service normalizes scores |
+| Organic/ads/NV scores are incomparable | Ads inserted AFTER organic ranking; no calibration across content types | All content declares `pAct` + `vAct`; calibration service normalizes to comparable scale |
+| `pImp` not modeled | Position assigned after scoring; score doesn't account for impression probability | Future: position-decay model jointly optimizes score and slot assignment |
 
 ---
 
-## 10. The Northstar: What Done Looks Like
+## 11. The Northstar: What Done Looks Like
 
 ```
 An MLE who wants to run a new vertical blending experiment:
 
-  1. Writes a JSON file:  ubp/experiments/hp_vertical_blend_v4.json
-  2. Adds one DV key:     UBP_HP_VERTICAL_BLEND_V4("ubp_hp_vertical_blend_v4")
-  3. Deploys: runtime JSON hot-reload, no pod restart
+  1. Trains a new model → deployed to Sibyl under a new model ID
+  2. Writes a JSON file:  ubp/experiments/hp_vertical_blend_v4.json
+     Declares: which predictors, which model IDs, which blending params,
+               which pipeline steps, which calibration table
+  3. Adds one DV key:     UBP_HP_VERTICAL_BLEND_V4("ubp_hp_vertical_blend_v4")
+  4. Deploys: runtime JSON hot-reload, no pod restart
 
 That's it. The BE engine handles:
-  - Feature resolution (from config's feature declarations)
-  - Sibyl RPC (from config's model name)
-  - Calibration (from config's calibration spec)
+  - Assembling the RegressionContext from config's predictor declarations
+  - Calling Sibyl with all configured predictors in one request
+  - Composing the multi-predictor score (main × multiplier × boost + ucb + mab)
+  - Applying calibration, intent, and boost multipliers per config
   - Tracing (automatic per-step, standard schema)
   - Traffic splitting (via DV infrastructure)
 
 What the MLE never touches:
   - Java/Kotlin source code
-  - PR review cycles for parameter changes
+  - P13nExperimentManager boolean checks
+  - dv_treatment_sibyl_model_mapping.json
+  - hp_vertical_blending_config.json (separate file, separate DV)
   - Manual logging instrumentation
   - Cross-team alignment for DV wiring
 ```
