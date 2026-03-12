@@ -4,6 +4,19 @@
 
 ---
 
+## 0. Two Different Meanings of "Horizontal Blending"
+
+Before anything else: "horizontal" in this codebase is overloaded.
+
+| Term | Meaning | Pipeline stage | UBP phase |
+|---|---|---|---|
+| **Horizontal ranking** | Ordering stores within a carousel by ML score | Layer 3 — before post-processing | Phase 1-2 |
+| **Horizontal blending** | Inserting ad store cards into ranked organic lists | Parallel to Layer 4 — ICP ads system | Phase 3 |
+
+These are implemented by entirely separate systems. The ICP ads blender (`HomepageAdsBlender`) runs in a parallel branch to post-processing and merges its output just before serialization. UBP Phase 1-2 does not touch it.
+
+---
+
 ## 1. The Homepage Is a Grid
 
 ```
@@ -31,7 +44,7 @@ That's the whole model. Everything else is implementation detail.
 
 ---
 
-## 2. The Four-Layer Pipeline
+## 2. The Full Pipeline (What Actually Runs)
 
 ```
 REQUEST
@@ -40,6 +53,7 @@ REQUEST
 ┌──────────────────────────────────────────────────────────┐
 │  LAYER 1: RETRIEVAL                                      │
 │  Fetch candidate stores, items, carousels from upstream  │
+│  Classes: restaurantStoreContentRetrievalJob             │
 │  Output: raw pool of ~200-1000 candidates                │
 └──────────────────────┬───────────────────────────────────┘
                        │
@@ -47,6 +61,7 @@ REQUEST
 ┌──────────────────────────────────────────────────────────┐
 │  LAYER 2: GROUPING                                       │
 │  Bucket candidates into named carousels                  │
+│  Classes: restaurantStoreGroupingJob                     │
 │  (Favorites, Taste, Reorder, NV, etc.)                   │
 │  Output: ~20 carousels, each with ~10-50 candidates      │
 └──────────────────────┬───────────────────────────────────┘
@@ -54,23 +69,44 @@ REQUEST
                        ▼
 ┌──────────────────────────────────────────────────────────┐
 │  LAYER 3: HORIZONTAL RANKING                             │
-│  Within each carousel: rank stores/items by score        │
+│  Within each carousel: rank stores/items by ML score     │
+│  Classes: DefaultHomePageStoreRanker                     │
+│           DefaultHomePageCampaignRanker                  │
 │  Output: same carousels, stores now in ranked order      │
+│                                                          │
+│  ⚠ S1/S2/S3 decoration reranking runs AFTER Iguazu      │
+│    fires → logged positions ≠ positions users see        │
 └──────────────────────┬───────────────────────────────────┘
                        │
                        ▼
 ┌──────────────────────────────────────────────────────────┐
-│  LAYER 4: VERTICAL RANKING                               │
-│  Across all carousels: rank carousels by score           │
-│  Assign final sortOrder to each carousel                 │
-│  Output: final sorted carousel list                      │
+│  LAYOUT PROCESSING                                       │
+│  Assemble StoreCarousel objects for post-processing      │
 └──────────────────────┬───────────────────────────────────┘
                        │
-                       ▼
-                  SERIALIZE → CLIENT
+              ┌────────┴────────┐
+              │                 │
+              ▼                 ▼
+┌─────────────────────┐  ┌───────────────────────────────┐
+│  LAYER 4: VERTICAL  │  │  ICP ADS HORIZONTAL BLENDING  │
+│  RANKING            │  │  HomepageAdsBlender.blend()   │
+│  reOrderGlobalEntities  │  4 parallel targets:         │
+│  V2()               │  │  - store carousels (2D blend) │
+│  UR scoring, multi- │  │  - home feed store list       │
+│  pliers, dedup,     │  │  - PAD collections            │
+│  fixups             │  │  - smart suggestions          │
+│  Classes:           │  │                               │
+│  DefaultHomePage    │  │  Algorithms:                  │
+│  PostProcessor      │  │  GenericHorizontalBlenderV2   │
+└──────────┬──────────┘  │  DedupeLastHorizontalBlender  │
+           │             └──────────────┬────────────────┘
+           └────────┬────────────────────┘
+                    │
+                    ▼
+               SERIALIZE → CLIENT
 ```
 
-UBP is the platform that governs **layers 3 and 4**. Retrieval and grouping are upstream inputs.
+**UBP governs layers 3 and 4.** Retrieval and grouping are upstream inputs. The ICP ads blending system is a separate parallel pipeline — UBP Phase 3 will eventually make organic and ad scores comparable so they can compete for the same slots.
 
 ---
 
