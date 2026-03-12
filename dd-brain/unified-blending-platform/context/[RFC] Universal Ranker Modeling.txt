@@ -1,0 +1,805 @@
+﻿[RFC] Universal Ranker Modeling
+
+
+Authors – Abhi Ramachandran Josh Zhu Mark Zhou Matthieu Monsch
+Team – Marketplace discovery
+Status – WIP, last updated: 04/21/2021.
+Communication – #universal-ranker
+Related Documents – meeting notes, modeling thoughts, recent experiment survey, iteration guide
+Reviewers
+Name
+	Team
+	Open Questions?
+	Rui Hu
+	Discovery
+	
+
+	Sonic Wang
+	Marketplace
+	
+
+	Mauricio Barrera
+	Discovery + Merchandising PM
+	
+
+	Melissa Hahn
+	Merchandising
+	
+
+	Arbaz Khan
+	ML Platform
+	
+
+	Change Log
+
+
+Date
+	Change
+	4/21/2021
+	Remove Eng implementation details and re-focus on modeling
+	04/13/2021
+	Initial draft
+	Synopsis 
+Answer to the following questions
+
+
+* What will we have the ability to rank?
+   * Vertical positions of Store carousels, deal carousel, collection carousels and store cells
+* What are we testing in the first version?
+   * Programmatically rank all carousels on homepage
+      * We will rank the positions of store, deals and collection carousels
+   * Programmatically rank store cells in store feed
+* What are we testing in the second version?
+   * We plan to test intermixing carousels and stores in the homepage
+* What are the main changes we expect from the way we run things today?
+   * V0:
+      * Change from pinning carousels to programmatically boosting carousels
+      * Programmatically rank collections along with carousels and deal carousels
+      * New store feed ranker
+   * V1:
+      * Intermixing carousel, collections and stores in the homepage[a][b]
+What
+We propose a single ranker (e.g. universal) to jointly rank carousels, stores, collections and deal carousels
+Why?
+Multiple experiments and analyses evaluating the diversity and ranking efficiency of core discovery surfaces suggest that the current system of fixing carousels above home feed and using a single ranker is suboptimal. In particular we see that stores with low probability of conversion (pConv) have high visibility while higher pConv stores in home feed require a lot of scrolling to find. 
+
+
+Today the carousel ranker ranks carousels by calculating a probability of conversion for each carousel and then ranking the carousels, however carousels are always ensured to be placed above the home feed. In particular conversions for carousels are treated independently and require calibrated probabilities.
+
+
+From past experiments, we believe that the flexibility and holistic objective of a joint “universal” ranker will lead to a ~0.1% absolute lift in conversion. Additionally, cross-vertical initiatives (e.g. new homepage) will later benefit from this architecture by being able to rank disparate types of entities together.
+
+
+  
+
+Goals
+Define an entity [c][d]as anything that we can place in a vertical position on the home feed. For example a single store[e][f], a store carousel (single entity because it takes up 1 vertical slot), or a collections tile. We then propose a ranker that:
+
+
+* Jointly ranks stores, carousels, and collections to ensure the ones that have the highest pConv[1] are ranked at the top.
+* Easily generalizes to new types of entities as long as they can be expressed as a sequence of embeddings.
+* Supports ranking overrides (for example to boost a particular entity type), providing an estimated loss for each.
+* Does not increase p95 latency of homepage by more than 10%.
+* Achieves incremental gains in global conversion and/or order rate, alongside homepage conversion improvements.
+
+
+The table below summarizes the entities currently considered as ranker candidates. All are available in the homepage (current, xvertical) and vertical Pages unless otherwise noted.
+
+
+Entity
+	Ranker Effect
+	Phasing[2]
+	Store carousel
+	Vertical position and order of stores within carousel and carousel landing page[g][h]
+	v1 (in scope)
+	Collection carousel
+	Vertical position and order of collection tiles within carousel and tile landing page
+	v1 (in scope)
+	Store cell
+	Vertical position only
+	v1 (in scope)
+	Offers Carousel
+	Vertical position only
+	v1 (in scope)
+	[upcoming] Item carousel
+	Vertical position and order of items in carousel
+	v1 (in scope)
+	Item cell (expanded item carousel)
+	Vertical position only
+	v2
+	Banner Carousel
+	Vertical position only
+	v2
+	Category Sections (xvertical homepage only)
+	Vertical position of category section, number of carousels in section
+	v2
+	
+
+Success Criteria 
+
+
+Qualitative Goals
+In order to be successful this model will:
+* Handle dedicated entities that already have dedicated rankers (e.g., offers carousel or manually configured store carousels)
+* Can easily be refit in order to handle new kinds of entities (e.g, item carousels)
+* Handle new types of carousels for existing entity types (e.g, store carousels) without a refit
+
+
+
+
+Product Metrics[i][j][k][l]
+* Homepage CTR (x.x% rel lift) (baseline: XXX )
+   * Def: num of daily device that clicked homepage / num of daily device that had homepage load
+* Homepage attributed conversion (x.x% rel lift) (baseline: XXX)
+   * Def: num of daily device that converted from homepage / num of daily device that clicked homepage
+
+
+
+
+
+
+	Baseline (7 days)
+	MDE
+	Sample size per variant
+	Homepage CTR
+	0.51 per cx 
+(std.dev.=0.44, n=12.8mm)
+	0.14% rel lift, 0.0007 abs lift
+0.10% rel lift, 0.0005 abs lift
+	6.2mm
+12.1mm
+	Homepage CVR
+	0.41 per cx
+(std.dev.=0.44, n=8.8mm)
+	0.22% rel lift, 0.0009 abs lift
+0.15% rel lift, 0.0006 abs lift
+	3.7mm
+8.3mm
+	
+
+
+
+Marketplace Metrics:
+* Daily Conversion (0.1%+ relative lift)
+* D7 Order Rate (0.1%+ relative lift)
+
+
+Negative Metrics: 
+* Non-Restaurant Volume (neutral)
+
+
+Check Metrics: 
+* ASAP
+* VP
+* Etc
+
+
+Decision Framework
+
+
+Launch
+	One or more product metrics are positive AND marketplace metrics are neutral or positive AND negative metrics are within boundaries
+	Deep Dive
+	Product usage metrics are neutral AND marketplace metrics are positive
+	Don’t Launch
+	Product usage metrics are negative OR marketplace metrics are negative OR negative metrics are not met
+	
+
+
+
+Non-goals
+The following are out of scope of this proposal:
+
+
+* Improving deduplication. To avoid having too many moving pieces, we will reuse the current implementation (described here).
+* Immediately handle impression fatigue. While including features such as view counts can help provide some impression discounting, this is not an explicit goal of this model. And related measures to improve the overall recommendation experience are better handled through a post-porcessing hoisting procedure which will allow for more sophisticated de-duplication and recommendation diversity
+* This architecture is flexible to handle incentive information for ads and promotions (see the general implementation discussion below) but is out of scope for our MVP
+Design[m][n]
+Architecture
+Conceptually, the overall ranker’s architecture consists of two sequential stages:
+
+
+1. Scoring, where entities are scored by an ML model;
+2. Hoisting, where diversification rules are combined with the above scores to produce the final ordering of entities.
+  
+
+
+
+Multiple-step ranking systems are common in the search literature (Ebay, Airbnb, Amazon, ...) as they make it easier to adjust rankings based on business needs.
+
+
+The universal ranker will be implemented as a sequence of discovery 2.0 jobs, to be run within the feed service (more specifically within the homepage pipeline workflow). The diagram below shows the main steps, with the new universal ranker ones in blue:
+  
+
+
+
+Note that scoring runs twice in order to work around current decoration bottlenecks (addressed separately) and avoid the added latency of an extra decoration (estimated at an additional 25ms p95 latency for fetching popular items from post pagination payload, this would increase further if done pre-pagination). The first scoring pass is used to score stores and truncate the number of entities that need to be decorated. The second scoring pass scores carousels and requires  UX decorations to filter out the nested stores[3].
+Implementation
+Scoring
+In this first stage, each candidate entity is scored by a model.
+Methodology
+We have two options to rank all entities and the entity constituents:
+
+
+* Horizontal Ranking → these are the existing rankers that exist for store carousels and similar
+   * We return a score for an entity where we ignore the sequence of the entity’s constituents
+   * This allows us to score both the entity constituents and the entity independently
+* Vertical Ranking → this is the universal ranker
+   * We need some ranker (possibly the universal ranker itself) to first rank all constituents inside an entity
+   * Then we do a second request to the ranker to rank all entities
+   * We can optionally consider the sequence of the constituents
+      * E.g., store position inside the carousel may be a usable feature
+   * At the cost of an extra pass, we can use different rankers inside each entity. This allows us to also support manual (operator-specified) rankings 
+
+
+For the initial proposal we will consider 2-pass ranking in order to better support surfaces like promotions or operator-defined carousels that may want to use different rankers.
+Features
+We have four core classes of features for any model[o][p][q][r][s][t][u][v]
+* User embedding
+   * consumer2vec or average item purchase embedding  
+* Entity embedding
+   * An aggregation of the entity’s constituent embeddings 
+      * For stores this will be store2vec
+      * For items this will be item2vec
+* Entity type code
+   * An integer denoting the type of the entity (carousel, collection, store, etc)
+* Entity metadata
+   * Entity name 
+      * Carousel name
+      * Store name
+      * Collection title[w][x][y][z][aa]
+   * …
+
+
+Which requires us to sent the following keys in a request:
+* user_id
+* the set of store_ids in the entity
+* entity_code
+* entity metadata codes
+Embedding aggregation
+Every entity is defined as a collection of embeddings, so a carousel is defined as a sequence[ab][ac] or average of the constituent store embeddings. Both definitions have different tradeoffs
+
+
+* Average the embeddings of the entity constituents 
+   * This can generalize to entities with a large number of constituents but may have poor performance on entities with low-quality internal rankings
+* Using a sequence (via concatenation or position coding) of embeddings
+   * We are limited to some maximum sequence length for the entity which may be truncated
+   * We will give a low rank to carousel that have inefficient rankings
+   * This treatment requires a two-pass ranker
+
+
+We propose using sequence information because we generally observe that customers do not scroll beyond the first ~3 results in a carousel so we expect the truncation problem to be minimal.
+
+
+The overall model structure would look like below:
+  
+
+
+
+Where we use separate encoders for user embeddings and the constituents of each entity. The universal ranker would consume these constituent embeddings along with an embedding type code and the user embedding to predict the target variable. 
+
+
+This architecture allows us to use embeddings which are computed on-the fly for content that may be dynamically adjusted on the home page (e.g., ads, promos or stores with ETA as a feature). For example, we may wish to have a specific deals/offers encoder which uses store and incentive information to embed an offer in real-time.
+
+
+In the MVP we will use pre-trained embeddings and will not be building separate constituent encoders, [ad][ae][af][ag][ah]but in the future we will support this using Sibyl composite models. In particular, our framework does not need to distinguish between pre-trained embeddings and embeddings that are computed in real-time. An alternative proposed in the appendix is to use end-to-end training to learn constituent embeddings during training. 
+
+
+  
+[ai][aj][ak][al][am][an][ao]
+  
+
+
+
+Training objective
+The model is trained on the probability of conversion on the entire entity 
+* Label: conversion event on any store inside the entity
+   * For a store this is just a regular conversion event
+   * For a carousel or collection any conversion on any store inside the collection will lead to a positive label
+* Prediction: probability of conversion on that entity
+Evaluation
+We evaluate model performance on AUC on the entity conversion predictions and labels.
+
+
+We will evaluate the model on two baselines:
+* Against the current performance of the carousel ranker + home feed
+* Against home feed only performance
+Caveats
+* This design does not provide a “discount” by vertical position which may bias results towards those at already high ranks
+* Probability of entity conversion does not make any assumptions about the entities inside the carousel, and may have a very different probability estimate vs the one given by the current carousel ranker
+* The model needs the carousel contents pre-selected, so this cannot ensure the optimal allocation of stores to carousels/available slots on the home feed
+   * This kind of optimal matching would require an estimate of all <store, position> conversion probabilities
+
+
+Training Details for MVP
+Dataset
+* From 2 weeks of data prior to launch
+* Training and validation data is from Week 1
+* Test data is from Week 2
+Features
+* User embedding
+* Store embedding
+Debuggability/Interpretability
+This model does not have any explicit goals around improving debuggability or interpretability. Due to the heavy dependence on pre-computed embeddings, the features are not very interpetable. In order to evaluate the model performance on recommendations we will perform:
+1. Extensive manual testing via testing parties
+2. A/B testing to meet the specified product goals above
+Alternative designs
+* Status-quo
+   * We continue to hard-code entity type order or rely on new suboptimal heuristics to intermix content. The cost increases as new types are introduced (for example store items).
+* Tree-based model scoring
+   * This would have the advantage of having been previously implemented in Sibyl with relatively known latencies. However tree models face some major limitations right now due to limitations with embedding support in Sibyl (e.g., we can't do feature engineering on sets of embeddings). This could be a good thing to test in the future.
+* Re-calibrating the scores of the carousel and LGBM ranker and training a single model from that
+   * This architecture is sensitive to the scores from the horizontal ranker and does not scale to tiles or collections yet. If we have problems using the two-tower implementation this is a reasonable fallback (discussed in the risks and mitigations sections below).
+Risks and Mitigation
+1. The current proposed architecture cannot be productionized due to high latency/load. This model architecture is somewhat novel at DoorDash at this scale and consequently there is some risk feed service cannot handle the cost of the inference step
+   1. Mitigations [Risk: Medium]
+      1. We will build a dummy model with a two tower architecture to test latency changes.
+      2. If the latency is too high, then we will test a simpler baseline using LGBM or LR models that create calibrated predictions for entities and store cells while working with the ML Platform team to improve neural network model serving performance
+      3. There are more details in the risks section of the Eng RFC
+2. The current architecture is not performant in offline testing compared to the current baseline.
+   1. Mitigations [Risk: Low]
+      1. We believe this is highly unlikely due to the extremely low performance of the current baseline (efficiency metric values ~0.5 which is effectively random). However if this is an issue, we will address this through further feature engineering (e.g, including the first ranking stage’s predictions)
+3. We see large gains in offline evaluation metrics but these results do not translate into online gains on the home page.
+   1. Mitigations [Risk: Low/Medium]
+      1. Due to the v1.7.2 experiment we believe this is unlikely to be a major risk. However, this is a problem similar to what we saw in 2020Q4 and 2021Q1. Our hypothesis that this problem is due to inefficient rankings, so if ranking efficiency gains do not translate to homepage attributed conversion gains, we will need to further investigate the relationship between offline and online metrics.
+      2. A systematic investigation here would entail tuning multiple rankers for different efficiency (or AUC) levels and trying to understand the impact of cannibalization between search and home page
+Milestones
+Workstreams
+DSML[ap][aq][ar][as]
+* Build dummy two-tower model for testing latency (Apr 29)
+* Two tower ranker model prototype (May 3)
+* Plan B - lgbm model with more feature engineering prototype (if any of the first two has negative results) (May 10)
+* Finalize a feasible model architecture that fits our MLP based on the two tower model performance for the next round of improvement. (Jun 10)
+Back-end
+* Add logging for collections (Apr 29)
+* Measure latency of dummy two-tower model and making sure latency is acceptable (May 3)
+* Implement scoring and hoisting workflow jobs (May 12)
+* Integrate new jobs in default homepage workflow (May 14)
+ML Platform[at][au][av][aw]
+* [DONE] Upgrading Pytorch to 1.8 (to support feature engineering in model code)
+Front-end
+* Cx Communication for intermixing stores and carousels  (tent. May 31)
+Rollout plan
+* V0 [May 17]: launch the ranker without full Lego support
+   * This will re-rank carousels but keep them all above the home feed
+   * This tests universal ranker against the carousel ranker
+* V1 [June 18]: launch with Lego to intermix stores and carousels in the feed
+Future work (out of scope for MVP)
+* Model incentives explicitly when ranking entities with deals/offer badges...
+   * Motivation: The MVP does not have explicit representation for incentives, likely leading to worse performance. One idea is to build embeddings for promotions. Ideally, we would have a unified representation which factors in incentives.
+* Support more entities (banners, categories, etc.) on more pages (cross-vertical homepage).
+   * Motivation: The MVP only ranks stores, carousels, and collections on the default home page. As a next step, we plan to extend this by adding more features and models to achieve better global conversion.
+* Revisit deduplication logic
+   * Motivation: The MVP reuses existing entity deduplication logic to limit the scope of ranking changes. However a previous experiment had shown that deduplication has a significant impact on conversion.
+* Boost diversity.
+   * Motivation: User experience and global conversion typically benefit from diversifying the results after scoring. Experimenting with an approach similar to Airbnb’s would be a good first step in that direction.
+* Allow model objectives beyond pConv (VP, multi-objective, …). 
+   * Motivation: This is helpful to better balance business needs (past attempt).
+* Supporting vector based model output values for intermediate layers in composite models [JIRA]
+   * Motivation: In order to rank content that dynamically[ax][ay][az][ba][bb] changes (e.g., free form text or ads/promos where the incentives may be adjusted in real-time) we need to be able to compute embeddings in realtime. Intermediate vector based model outputs allows us to load an encoder to compute an embedding in real-time which is then used as an input to the ranker. 
+________________
+Appendix
+Modeling[bc][bd]
+
+
+Mark’s ideas on possible architectures to test (HD version)
+  
+
+Above is a simplified design based on deepFM method. This arch uses our existing pre-trained embeddings (store, dish and query) instead of end2end training. Since feed ranking doesn’t have a strong intent signal as search ranking has, we need to leverage as many user’s historical engagement signals as possible to learn their intent and then match it to relevant items (store or carousel). Therefore, there are two important sets of features for a feed ranking model:
+1. user engagement data (e.g. stores / dishes user ordered / clicked / viewed / etc., queries user searched)
+2. item (store / dishes / query) attributes such as vertical, cuisine, daypart, brand
+By having those two sets of features, we can create many pairs of features. For example, given one item attribute feature (e.g. cuisine), we can create the corresponding user side feature, such as a list of cuisine types the user engaged in the past 30 days. All of those pairs of user side and item side features are fed to the DL model to learn the user's intent and find the most relevant item. Since we don’t have embeddings for item attributes (e.g. cuisine), we cannot create corresponding user side features. One solution could be creating two one-hot encoding features, one for the item and the other one for the user and treat them as dense features. As long as the cardinality of an item attribute is not very high (e.g. cuisine), then it’s worth testing.
+
+
+This design above just gives us a taste of the type of arch and features that I think would work based on my experience. I’m still new (2nd week) so that I’ve no idea what features are available / logged and am not sure how big the model size that our ML platform can handle. If this arch works, we can further test the following more complex modules:
+1. Carousel Position Weight: So far, we plan to concatenate the carousel and using a FC layer to process that. We could also have learnable weights to learn the carousel position importance when pool the embeddings. It might give us a better result.[be][bf]
+2. Attention/Gating (e.g. DIN model): The user engaged items are highly “correlated” with the items to rank. For example, one user ordered Chinese food and fast food, then for an asian store / dish, the conversion rate prediction should rely more on the Chinese food order history. Therefore, adding attention to the items user engaged could improve the model performance and personalization.
+3. AttentionFM: This is an extension on top of the Attention method above. This method assumes that for different feature interactions, its importance may vary for different item prediction.
+4. resNet (wiki): This method can help to capture both lower and upper level representation. And if our predictions are off in certain segments (e.g. city, cursion type), this method could also fix that to a certain extent and improve the overall model performance.
+5. End2end Training (depends on our ML platform). [bg][bh][bi][bj][bk][bl][bm][bn]This can enable us to use any item attribute (especially sparse attribute) available without pre-trained embeddings.[bo][bp][bq][br][bs]
+
+
+Earlier proposed model architecture
+
+
+  
+[bt][bu]
+
+
+Meeting notes
+03/26 - Session with John Hegeman + sync
+* we have an initial proposal for a Universal Ranker that ranks both store carousels and stores (and possibly future entities like curated collections or item carousels)
+   * idea: two-pass ranking where the first pass ranks within carousels/collections and the second pass ranks all entities + store cards
+   * the model treats every entity as a sequence of embeddings with an entity ID
+      * e.g, store carousels have the first k store embeddings and an entity_id of 0
+      * item carousels have the first k item embeddings and an entity_id of 1
+   * other features include user embeddings, entity metadata (e.g., carousel name)
+   * target variable is a conversion on the whole entity
+   * we’ll likely launch this in two phases since we can’t launch full intermixing of carousels and home feed until some front-end changes are completed in mid-May
+      * 1. we launch a unified ranker that re-ranks carousels but keeps home feed at the bottom (essentially replacing the current carousel ranker) in ~late April
+      * 2. we launch a variant that intermixes carousels and home feed in mid-May
+
+
+questions
+* ranking strategy
+   * for the universal ranker is there any benefit to a 1-pass solution assuming no QPS constraints?
+   * currently we’re assuming we want to be able to support different rankers within any entity (e.g, one ranker for promos in the promos carousel and a different one for items in the item carousel) which are then jointly ranked at the end
+   * [Notes] 2-pass makes more sense
+* content selection
+   * the ranker changes still need content selection (which stores are selected for a given carousel) decided ahead of time, either according to heuristics or human operator judgment
+   * as we start thinking about programmatic carousels, would we want to still stay with this 2-pass ranker framework?
+   * Another idea we were considering is treating store → carousel position as a matching problem
+      * [Notes] Greed ranking, first q: how important is the dedup logic
+      * [JH] have not traditionally seen gains from matching algo improvements
+      * [JH] [IDEA] Measure the value of your existing deduping logic →  A small % of users for whom we don’t really dedupe. Decision this can drive: should we invest in more complicated matching logic? 
+         * Expectation is that this may be more of a lever to prevent bad UX, vs. being an impact driver
+* content diversity
+   * our original de-duplication experiments didn’t show any improvements. how should we think about improving recommendation diversity as we continue? Some ideas we discussed:
+      * multi-objective ranking which may also take position biases into account
+      * explicitly promoting result diversity through embeddings/penalties
+      * multi-armed bandits for boosting low-impression stores
+   * What about expanding the set of possible ‘entity’ candidates we could show a Cx
+      * For instance, greatly expanding the set of ‘value props’ solved for in carousels (e.g. healthy / best tacos / affordable lunch / etc), coupled w/ the universal ranking?
+   * Notes:
+      * [JH] take a final pass of the model to re-rank based on the adjacencies (consider if diversity is a strong lever, need to understand this)
+      * New business experience might be more important than sophisticated exploration algo
+         * Consider a decaying boost for new Mx that join the platform. Cons is that this will be hard to test / hard to see the gains 
+         * Watch out for Mx gaming the system (join, leave, rejoin ad infinitum)
+      * Cx side exploration: learn more about the person over time, can try
+
+
+* ranking objective
+   * the proposed model still optimizes pConv, is there value in trying to optimize for other objectives apart from transfer learning? (e.g., pClick, variable profit, retention etc.)
+      * sometimes business priorities change (we want to maximize variable profit and are okay with a conversion loss) and we want to support those without needing to refit the ranker
+   * this approach does not clearly provide a notion of value in order to estimate the opportunity cost of ranking paid (ads) vs organic content, so is there a way we can start preparing to handle that?
+   * Usual things that matter in the value equation:
+      * Short term conversions (current objective function)
+      * Long term retention (not considered today, hard to model)
+         * Inputs we’ve considered to ‘model’: order quality (order that leads to high rating, low M&I/Cancellation rate)
+      * VP (have some levers to pull this)
+      * Mx Retention (not considered today, hard to model)
+   * Notes:
+      * May not see gains in these other metrics easily, given we haven’t seen gains in pure volume (conversions)
+      * Have seen gains when predicting beyond a specific event
+      * Probably easier to have several models, and have different weights (blending)
+
+
+
+
+Next Steps:
+
+
+[SW] Discussion: can we / should we also incorporate the HP/Search cannibalization as part of this push?
+* Could incorporate going to search as actions we track
+
+
+For context: Previous funnel analysis (here)
+
+
+What are the things we need to define in order to make progress here?
+* Scope and Approach (v0)
+   * Ranking path:
+      * 2-pass ranking is the preferred approach
+         *    * Elements we’ll control:
+      * Store Carousel
+      * Collection Carousel
+      * Offer Carousel
+      * Store cell
+      * Category section
+      * Vertical tile
+   * How to deal with platforms
+      * Idea 1: Can we take platform as a feature?
+         * iOS (new experience shipping to some markets in Q2)
+         * Android (new experience shipping to some markets in Q2)
+         * Web (new experience being built in Q2)
+      * Idea 2: Can differentiate the features per platform
+         * E.g. take 10 stores for mobile platforms, and 5 stores for web platform
+   * What’s the objective function?
+      * Conversion
+         * What’s going to happen w/ existing VP levers? → we’ll need to answer these kinds of questions
+   * What are the pages we’ll cover?
+      * Old homepage
+      * New homepage
+         * Different information hierarchy 
+      * New restaurants page?
+* Cx experience (are we mixing results, how will that look like?)
+   * What happens when we do this in the new homepage?
+   * What are the elements we’ll control in the HP
+   * What are the pages we’ll control? (HP + restaurant page?)
+   * What are the actions we’ll allow the ranker to take?
+      * Sort
+      * Hide/Show
+04/02
+Abhi, Josh, Matthieu
+* What do we need from Sibyl side?
+   * Online: score sequences of entities?
+      * Feature vector for carousel:
+         * Input: (top-level features => potentially not MVP) + top-level ID + list of store IDs
+         * Lists of embeddings is already supported for word embeddings (aggregation is done via averaging there)
+         * Not everything has an embedding right now: deals, collections, …
+            * Could train collection embedding
+      * https://doordash.atlassian.net/wiki/spaces/Eng/pages/1130201123/Feature+naming+convention
+      * Rely mostly on embeddings (vs store specific features)
+      * Ability to pick a model on the fly
+   * Offline: new features?
+* MAB in MVP?
+   * Safer to do as a later step
+   * Clearer signal
+04/05 - 2021Q2 planning + weekly sync
+Abhi, Josh, Mark, Matthieu
+* Planning doc & notes
+* Simulator follow up
+   * Goal is to have an estimate of global conversion of a ranking, assuming a traffic pattern
+      * Can be done with a calibrated model
+   *    * What are the use-cases?
+      * Take past traffic (say yesterday), estimate effect of constraints on the ranking
+      * Could run unconstrained version all the time as baseline
+      * When a team wants to add a constraint, we can get an estimate on the “cost” on old traffic
+   * Who are going to be the users?
+      * Other teams interested in adding constraint
+   * Bulk of work seems to be outside of modelling
+      * Call same calibrated model on past requests with added constraints
+   * 2 sets of problems
+      * Current model predicts conv prob of single entity -> needs to be whole page
+      * Probably need other objectives beyond conv (VP…)
+   * Benefits will be worth it for experiments which are expensive to run
+      * Can we just wait 2 days and run an experiment in each case?
+   * Requirements:
+      * Calibrated model (highest priority)
+      * Interface to define an experiment/simulation run
+04/07 - Sibyl integration
+Abhi, Arbaz, Jimmy, Josh, Kornel, Matthieu
+* MVP features are supported: lists of embeddings are already used for word embeddings
+   * Concern about data size but likely fine due to small (<10) carousel size
+* Post-MVP potential needs (to be filed as FRs):
+   * Intermediate non-scalar outputs for dynamic embedding computation. Could also be exposed for final outputs but that is significantly more work (e.g. API changes).
+   * Capacity planning for custom item embeddings. To start we can use the existing ones.
+04/09 - UX
+Abhi, Bin, Josh, Matthieu, Mauricio
+* Goal: find a UX that makes sense and highly relevant
+   * Trade-off between page structure and optimizability
+   * Idea: add explanations for recommendation (“why is this restaurant shown here?” ...)
+* Start by personalizing only the order of stores, carousels, collections
+* Short UX resources, estimated timelines:
+   * UX touch point in ~2-3 weeks
+   * Eng rollout blocked until ~mid May (Lego)
+   * Model should be ready before mid May
+04/21 - Focus docs
+Abhi, Josh, Mark, Matthieu
+* Implementation section
+   * Extract model information to separate doc
+   * Link to new modeling doc
+   * Add Model API shape/restrictions: currently available features, call out supported Sibyl functionality
+   * Add more detail on discovery 2.0 job internals
+   * Simplify hoisting
+* Open threads
+   * Embeddings
+   * Multi-objective support, can it be encapsulated within the model?
+
+
+
+
+Diagrams
+Simplified sequence homepage workflow steps (without scoring split):
+  
+
+Universal Ranker Diagram
+```mermaid
+graph BT
+   subgraph UserEncoder[User Encoder]
+       UserF1[User order history]
+       UserF2[User browsing history]
+       UserF3[User geo]
+       UserF4[Day part]
+
+
+       UserFC1[Encoder <Input dimension>]
+       UserFC2[Output Layer <Embedding dimension>]
+
+
+       UserF1 --> UserFC1
+       UserF2 --> UserFC1
+       UserF3 --> UserFC1
+       UserF4 --> UserFC1
+       UserFC1 --> UserFC2
+       UserFC2 --> UEmb[User embedding]
+   end
+```
+```mermaid
+graph BT
+   subgraph ConstituentEncoder[Constituent Encoder]
+       ConstituentFeature_1[Constituent Feature 1]
+       ConstituentFeature_2[Constituent Feature 2]
+       ConstituentFeature_n[Constituent Feature n]
+
+
+       ConstituentFC1[FC layer <Input dimension>]
+       ConstituentFC2[Output Layer <Embedding dimension>]
+
+
+       ConstituentFeature_1 --> ConstituentFC1
+       ConstituentFeature_2 --> ConstituentFC1
+       ConstituentFeature_n --> ConstituentFC1
+       ConstituentFC1 --> ConstituentFC2
+       ConstituentFC2 --> ConstituentEmbedding
+   end
+```
+
+
+```mermaid
+graph BT
+   UserEmbedding[User embedding]
+   ConstituentEmbedding_1[Constituent embedding 1]
+   ConstituentEmbedding_2[Constituent embedding 2]
+   ConstituentEmbedding_n[Constituent embedding n]
+
+
+   LSTM[LSTM Layer]
+   FC1[Fully Connected Layer]
+   FC2[Output Layer <Embedding dimension>]
+   FC3[FC Layer]
+   DotLayer[Dot product]
+   SigmoidLayer[Sigmoid]
+   Target[pConv]
+   EmbeddingTypeCode[Embedding type code]
+
+
+   ConstituentEmbedding_1 --> LSTM
+   ConstituentEmbedding_2 --> LSTM
+   ConstituentEmbedding_n --> LSTM
+   EmbeddingTypeCode --> FC1
+   LSTM --> FC1
+   FC1 --> FC2
+   UserEmbedding --> FC3
+   FC2 --> DotLayer
+   FC3 --> DotLayer
+   DotLayer --> SigmoidLayer
+   SigmoidLayer --> Target
+```
+
+
+
+
+
+
+________________
+[1] While we’ll typically be describing optimality of a ranking with respect to a pConv model, in the future this can be extended to other ranking objectives (VP, pClick or a multi-objective rankin[bv][bw][bx][by][bz]g).
+[2] Note that v1 (first model deliverable) only covers the current homepage
+[3] Currently only stores with an image and which support ASAP are displayed.
+[a]Random thought- if we currently have capability to intermix, would it be worth a quick experiment where we just manually boost the top N stores, even before the universal ranker is built? (say showing 2 carousels, 3 stores, more carousels, more stores).
+
+
+If the current store ranker is good (esp if refit) maybe this would be a quick win? Alternatively, if intercalating carousels and stores creates a confusing UX, it would flag that early.
+[b]Agreed - it would be a good data point. The reason it's not mentioned here is that design/engineering work to support this is unfortunately weeks away.
+[c]We've had Discovery Unit & Collection defined(ref attached), @yu.zhu@doordash.com @matthieu.monsch@doordash.com thoughts on further refinement/consolidation so that they can become first class concept in code interface/implementation/etc?
+
+
+https://doordash.atlassian.net/wiki/spaces/Eng/pages/1981514854/Concepts
+
+
+https://github.com/doordash/feed-service/tree/72e51e3a6ee479779edfc855c322d0d643816fe3/common/src/main/kotlin/com/doordash/consumer/feed/common/discovery2/models
+[d]Implementation-wise, I recommend making `Entity` a minimal interface, exposing only what is needed for ranking (~the features in the scoring section).
+
+
+Separately, we'll have implementations of this interface for the existing discovery concepts (all but the vertical collection). Decoupling the two will make it easier to support differentrepresentations of the same entity,  new types of entities, ...
+[e]For understanding the outcome, if stores and carousels are treated entity alike, it will be possible that stores and carousels interleave each other on the homepage.
+[f]Yes, that's the intent. There will likely be other types of entities too.
+
+
+(Getting this to work e2e will require UI work so the initial launch might not use the full flexibility and still place carousels up top.)
+[g]@abhi.ramachandran@doordash.com @mauricio.barrera@doordash.com - we can use the universal ranker for within carousel ranking but it's adding an extra "moving piece" compared to current behavior. Can you confirm we are OK w this?
+[h]i think the MVP proposal was to *not* use universal ranker for within-carousel ranking. we want to decouple the first (currently LR15) and second pass ranker (proposed to be universal ranker)
+[i]@mauricio.barrera@doordash.com curious how do we think about the definition here? eg. CTR of overall homepage or CTR of the components that ranking can impact (such as carousels, feed...)?
+
+
+the consideration is that cuisine filter/ pill filter are not impacted by universal ranker, so do we want to include CTR of filters into consideration as well?
+[j]ah this is a great question! What do you think of measuring CTR and attributed conversions of the overall homepage as the NS (we should me making 80% of it better), and keep tabs on CTR and attributed conversions of carousels only and store feed only to understand the shifts?
+[k]yep, that sounds good!
+[l]added MDE calculation @jessicaz@doordash.com would you review it please, thanks!
+[m]majority of the focus here is on scoring/ranking, any thoughts on the feedback loop - do we need a unified framework(client/BE implementation) & event spec(w/ analytics) to capture impressions & conversions that 1) supports the flexible entity types proposed here & their positioning 2) provides stronger conversion attribution than session based correlation?
+[n]we typically do last touch conversion attribution via segment event tracking. i think maybe tracking prior page could make this easier to track, but for the MVP we'll probably have to stick with the current conversion definition. 
+@jessicaz@doordash.com do you have thoughts on better event tracking we might want here?
+[o]what about metadata of the entity: carousel title, collection title, etc.
+[p]i think metadata makes sense if we have a way we can build universal features. so titles makes sense e.g., store_name or carousel_name. but maybe dashpass eligibility wouldn't make sense
+[q]I personally think titles could be an important visual feature. It conveys meaningful topical information.
+[r]Actually, could we have a list of all the possible features to be tested for modeling here? Since feature is the key to any ranking model, I think it's good to have a full list here so that everyone can tell what's available and propose new features. @abhi.ramachandran@doordash.com @yu.zhu@doordash.com @matthieu.monsch@doordash.com
+[s]https://docs.google.com/spreadsheets/d/12gM0uKs6ky0k6y6rbMYJsR0ebXVDCUhzAXOAoSp5QgY/edit#gid=0 filtering on Recommendations = Y, @abhi.ramachandran@doordash.com to confirm?
+[t]let's link this doc (or final source of truth) into the main proposal. Also, could we point to documentation / clearer definition of each embedding, in particular when reusing existing embeddings?
+[u]+1 on the clear definition on each embedding, since we have two versions on store2vec, and two versions on item2vec, and multiple versions on consumer2vec.
+[v]we'll clarify this in the final version. this is intentionally vague right now because we actually need to test different embeddings/features first to see if it meets our performance bar
+[w]Is there a need for these to be strings (for string manipulation or such later)?
+[x]yea i think it'd be easier to do it this way for model implementation. is that not possible, or do you recommend against that?
+[y]it'd be easier in collecting data for training purposes or would it be easier to get better model quality? its possible but will have to check with search team if we can get names for all entities or would a lookup be required.
+[z]@joshzhu@doordash.com would names be available for all entities to be passed with the request
+[aa]yes, names will be available, along with other metadata that will be used as categorical features
+[ab]Does a sequence mean embeddings will be stitched together for representing a carousel? that is the size of this embedding is N x size_of_store_embedding
+[ac]yes exactly, sort of the same way we handle text sequence embedding lookups today
+[ad]Since for MVP we will use pre-trained embeddings, do we know if store/item/user embedding vectors are all in the same high dimensional space?
+
+
+@abhi.ramachandran@doordash.com 
+
+
+cc @xiaochang.miao@doordash.com @mark.zhou@doordash.com @yu.zhu@doordash.com
+[ae]yes these are in the same space
+[af]Are they all derived from the multi-task item2vec? Just curious. Otherwise, the current store2vec (both co-purchase based and co-borrowing based) are not in the same space as item2vec.
+[ag]they'll be from item2vec although we can probably test with the others and project them down to test lsince they'll be different towers anyway
+[ah]IMO the modeling design is a little bit risky here, given that - (1) if embedding is the only feature for the model, the performance of the model strongly relies on the quality of embedding. Thus, it'd be great to highlight which version of the embeddings you are using. (2) If you are using the current multi-task-based item-embedding, the embedding quality is a strong dependency on the item tagging (which we know there is a gap). And its effectiveness is still under testing in conjunction with other features in the item recommendation model.
+[ai]Thinking a bit ahead in future: how would this be generalized to benefit a search ranking model?
+[aj]I think if this two-tower model works. It's straightforward to me that it can be used as a retrieval model, at least one of the retrieval methods. For the final ranking step, we could also use it or an even more complex architecture. My experience is that if two-tower works, then a more complexed architecture that takes into account user-item interaction at both lower and upper level representation will work better.
+[ak]Thanks for explaining! I'm interested in understanding more: 
+1) As a retrieval model one main challenge we face is that stores have geo restrictions (e.g. if a user is in SF but a global KNN of stores spread across US that won't be useful). So practically how do we retrieve with geo restrictions embedded? Without this retrieval would not benefit much from a KNN based approach since it still needs to walk through a geo radii to filter eligible candidates. Alternatively if we could use geo (e.g. hexagon tile) as input to obtaining embeddings *maybe* DNN could learn that geo restrictions are of very high weight and should be focused. Would like to hear your thoughts on this. 
+ 
+2) Can you elaborate the NN architecture of using user-item interactions? Right now we do have item recommendations based on a NN model. Let's see how similar ideas converge to something general to benefit multiple use cases.
+[al]@sonic.wang@doordash.com  
+1) I think we can have separate steps in the retrieval module. First step is matching such as geo matching which can be done by using item attributes. Then the 2nd step is an embedding based retrieval + other retrieval methods (e.g. popular items). Ideally we could have another step for dedup and truncation so that the number of items for the final rank is smaller. But that depends on the actual number of items returned after this step. 
+
+
+2) Good to know. I have my idea in the appendix of this doc. I tagged you there as well.
+[am]@sonic.wang@doordash.com @mark.zhou@doordash.com for the ANN retrieval problem we've already drafted a 1-pager here (https://docs.google.com/document/d/1mB8hIeKwQ3b0kOp3QZv0sIyuVWsccvdl-vypknNzVvU/edit#heading=h.yflgwhdg1ig) + started a discussion with @kunal.shah@doordash.com to start prototyping this. the rough idea is to build separate indexes for all geohash + hours restrictions and have a lookup during retrieval. we can have a more detailed discussion about this, but i think the current universal ranker design will be adaptable to retrieval use cases in the future
+[an]the two-tower architecture here is fairly similar to the architecture we are testing with item recommendations but a little more general
+[ao]Following up on this: 
+
+
+1) after reviewing the doc Abhi attached it's unclear the path towards productionizing an Approximate-Neareast-Neighbors indexing serving system. This should be separately followed up with discovery eng involved. cc @yu.zhu@doordash.com 
+
+
+2) Question on using Abhi's NN vs. Mark's NN designs. Can you do a more details comparison?
+[ap]Do we already have good diagnostic toolings around NNs? For example visualization tool, understanding score decomposition, etc.?
+[aq]+1, @abhi.ramachandran@doordash.com @mark.zhou@doordash.com , I think we may think how to interpret and what the feedback we can have if the initial results are not as promising as expected
+[ar]i think in general we've found NNs aren't much harder to work with than any other model class. there are some limitations with the production tests we can do with embedding features due to sibyl limitations, but imo our existing tooling should be sufficient here. if there's anything specific you have in mind though, we'll need to ask MLP or analytics to make sure it's supported
+[as]E.g. how we can interpret  / visualize the impacts of features for NN?
+[at]@hebo.yang@doordash.com @arbaz.khan@doordash.com listing the dependencies on ML platform here
+[au]Thanks, lgtm.
+[av]Does our platform have any DNN model training limitation or NN model serving limitation (e.g. size, qps, latencies, etc.)?
+
+
+Unlikely initial prototype would hit any, but better to understand the capability of current platform.
+[aw]Currently we have few NN models and no know hard limitations. However, with big DNN models it will probably incur higher latencies and other resource issues. In the short run, we could work will you for workarounds if encounter these.
+[ax](Possibly out of scope for this doc.) Are online features on the roadmap? I remember large gains from introducing impression discounting for example.
+[ay]how are you thinking about online features here? we will soon have support for real-time features but i didn't prioritize it right now since idk if we want to re-rank inside the same session
+[az]Good to hear that it's on the horizon. I don't have a clear idea what the best way to approach this would be yet. Where can I learn more about the planned real-time feature work?
+
+
+(Related to our conversation with John today - impression discounting can be an easy way to increase exploration/diversity.)
+[ba]ML Platform is working on a Flink-based system to handle real-time computation  https://doordash.atlassian.net/wiki/spaces/Eng/pages/1869513056/Riviera+User+Guide
+
+
+when you talk about impression discounting you mean client-side in the same session right?
+[bb]+1
+[bc]@han.shu@doordash.com  This is the section I plan to test based on my experience.
+[bd]@sonic.wang@doordash.com Here is the architecture I proposed.
+[be]@mark.zhou@doordash.com yea agreed, we can do something along these lines to integrate position. maybe even try an attention mechanism. we just need the horizontal position passed into the request
+[bf]Yeah, actually just do attention based pooling instead of concat is better. We just pass need to figure out a way to pass the position info in.
+[bg]while we have pre-trained embeddings for a lot of things, it may make sense to also do this for things that are more ephemeral like ads/promos
+[bh]@mark.zhou@doordash.com i also forgot to mention, but our models don't train in real-time or have scheduled re-training yet. MLP is planning on supporting scheduled retraining in the quarter, but end-2-end training will be blocked until that's done
+[bi]Good to know. In that case we should still focus on using pre-trained embeddings for now. Besides store and dish, what entities else do we have embeddings?
+[bj]user but we typically treat users as bags of stores or bags of dishes
+[bk]What about store / dish attributes (e.g. cuisine type)? Do we have those as categorical features?
+[bl]yes, store cuisine tags are currently available in feature store
+[bm]Great! At least we can do regular FM style interaction for that type of features. Do we have a list of the store / dish attributes for me to take a look?
+[bn]missed this somehow. the features we use in general are here: https://docs.google.com/spreadsheets/d/12gM0uKs6ky0k6y6rbMYJsR0ebXVDCUhzAXOAoSp5QgY/edit#gid=0
+
+
+all items are in `doordash_merchant.public.maindb_item` and all stores are in `proddb.public.dimension_store` so you can assume anything in those tables + joinable to those tables is available if we want. we'd just need to upload the features to the feature store
+[bo]@abhi.ramachandran@doordash.com I put my initial idea on the DL arch that I'd like to test here. Please take a look and let me know what you think. cc @matthieu.monsch@doordash.com @yu.zhu@doordash.com
+[bp]yep this sounds good. tbh the above architecture is a bit of a placeholder. i think doing deepFM or some other similar deep recommender architecture makes the most sense
+[bq]Great. What about the feature side? Any thing not feasible based on my plan? @abhi.ramachandran@doordash.com
+[br]no issues here, most of those features are available
+[bs]Great! Let's sync next week to figure out the list of features. I'll book some time :)
+[bt]no pooling or normalization involved?
+[bu]for the actual model there will probably be pooling and batch norm layers, yeah, but i think we'd experiment with the specific architecture so didn't want to specify that here
+[bv]There are teams already swapping in VP rankers for certain submarkets right now.
+
+
+pClick model won't be far down the road given that Ads would benefit from in one or two quarters.
+
+
+Can we put in a bit more thoughts in how this can be generalized to incorporate these?
+
+
+Also if let's say we want to optimize VP for a short period of time (1-2 months), how would we achieve that by just re-configuring our rankers?
+[bw]@abhi.ramachandran@doordash.com @yu.zhu@doordash.com
+[bx]one idea we've been discussing is blended rankers, but we don't have a final proposal here. this design should extend to that, but it should be largely independent of this particular implementation. i'd like to discuss more with product + John H before making a decision here
+[by]aligned on the need to have this incorporated, as we already have a clear use case for this (VP), and other requests we haven't considered (quality)
+[bz]blended rankers are the most current proposal from JH - let's get some input in the next session and document the proposal here
