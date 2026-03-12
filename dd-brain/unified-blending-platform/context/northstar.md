@@ -307,10 +307,23 @@ Each DV is read independently. The two assignments don't interfere. The engine f
 
 ## 8. The Config Contract
 
-One JSON file per experiment. One DV controls which variant runs. No code changes to run a new experiment variant.
+One JSON file per experiment group. One DV controls which variant runs. No code changes to run a new experiment variant.
+
+### Two experiment shapes
+
+Most experiments only change one variable — a new model, a different boost weight, enabling UCB. Forcing every experiment to re-declare the entire pipeline is the wrong design: it creates copy-paste drift, makes diffs unreadable, and breaks when control changes.
+
+UBP uses an **inheritance + override** pattern:
+
+- Every experiment file has a `"control"` variant that declares the full pipeline
+- All other variants use `"extends": "control"` and declare only **what differs** via `"step_params"`
+- The engine deep-merges: experiment step_params override the base params at the leaf level
+- A variant can also declare a full `"vertical_pipeline"` if it needs a structural change (different step sequence)
+
+### Control: the full pipeline (declared once)
 
 ```json
-// ubp/experiments/{experiment_id}.json
+// ubp/experiments/hp_vertical_blend.json
 {
   "control": {
     "vertical_pipeline": {
@@ -332,9 +345,7 @@ One JSON file per experiment. One DV controls which variant runs. No code change
         {
           "id": "calibrate",
           "type": "CALIBRATION",
-          "params": {
-            "calibration_table": "default_piecewise_v1"
-          }
+          "params": { "calibration_table": "default_piecewise_v1" }
         },
         {
           "id": "blend",
@@ -351,61 +362,95 @@ One JSON file per experiment. One DV controls which variant runs. No code change
         }
       ]
     }
-  },
-  "treatment_intent_v3": {
-    "vertical_pipeline": {
-      "steps": [
-        {
-          "id": "score",
-          "type": "MODEL_SCORING",
-          "params": {
-            "primary_predictor": "feed_ranking_fw",
-            "primary_model": "store_ranker_fw_v4",
-            "multiplier_predictor": "universal_ranker_multiplier",
-            "multiplier_model": "multiplier_v4",
-            "ucb_enabled": true,
-            "ucb_predictor": "ucb_uncertainty",
-            "ucb_model": "ucb_v2",
-            "mab_enabled": false,
-            "intent_predictor": "vertical_intent",
-            "intent_model": "intent_v3"
-          }
-        },
-        {
-          "id": "calibrate",
-          "type": "CALIBRATION",
-          "params": { "calibration_table": "intent_v3_calibration" }
-        },
-        {
-          "id": "blend",
-          "type": "MULTIPLIER_BOOST",
-          "params": {
-            "vertical_boost_weights": { "1": 1.0, "10": 1.3 },
-            "intent_lookup_table": "intent_v3_lookup"
-          }
-        },
-        {
-          "id": "diversity",
-          "type": "DIVERSITY_RERANK",
-          "params": { "enabled": true, "weight": 0.4, "rx_nrx_balance": 0.6 }
-        },
-        {
-          "id": "pin",
-          "type": "FIXED_PINNING",
-          "params": { "pinning_rules": "default_pinned_order" }
-        }
-      ]
-    }
   }
 }
 ```
 
-Key properties of this contract:
-- **MODEL_SCORING declares the full predictor set** — which predictors, which model versions, which are enabled. No separate DV boolean checks. No separate model mapping JSON.
-- **All blending params are in one place** — calibration table, intent lookup, boost weights are all co-located with the predictor config they're paired with.
-- **Steps are additive** — the control and treatment differ by one step (`diversity`). That diff is visible in the JSON.
-- **MLE surface:** drop a JSON file, add one DV key. No PR for parameter changes.
-- **BE surface:** register a new Processor class when a new step type is needed. Everything else is config.
+### Param-only experiments: declare only the delta
+
+The common case. Same pipeline shape as control; one or a few params differ.
+
+```json
+// "I trained a new main model. Everything else is identical."
+"treatment_fw_v4": {
+  "extends": "control",
+  "step_params": {
+    "score": { "primary_model": "store_ranker_fw_v4" }
+  }
+},
+
+// "I want to test a higher NV boost weight."
+"treatment_nv_boost": {
+  "extends": "control",
+  "step_params": {
+    "blend": { "vertical_boost_weights": { "1": 1.0, "10": 1.5 } }
+  }
+},
+
+// "I want to test enabling UCB exploration."
+"treatment_ucb_v2": {
+  "extends": "control",
+  "step_params": {
+    "score": { "ucb_enabled": true, "ucb_model": "ucb_v2" }
+  }
+},
+
+// "I want to test a new intent model with its own calibration."
+"treatment_intent_v3": {
+  "extends": "control",
+  "step_params": {
+    "score": {
+      "intent_model": "intent_v3",
+      "ucb_enabled": true,
+      "ucb_model": "ucb_v2"
+    },
+    "calibrate": { "calibration_table": "intent_v3_calibration" },
+    "blend":     { "intent_lookup_table": "intent_v3_lookup" }
+  }
+}
+```
+
+Each treatment declares only what it changes. The engine resolves the full config at request time by merging `step_params` over the base.
+
+### Structural experiments: new step sequence (rare)
+
+When an experiment adds or removes a step (not just changes a param), it declares the full pipeline. This makes the structural change explicit and intentional:
+
+```json
+// "I want to test diversity reranking, which doesn't exist in control."
+"treatment_diversity_v1": {
+  "extends": "control",
+  "vertical_pipeline": {
+    "steps": [
+      { "id": "score",     "type": "MODEL_SCORING",    "params": { ... } },
+      { "id": "calibrate", "type": "CALIBRATION",      "params": { ... } },
+      { "id": "blend",     "type": "MULTIPLIER_BOOST", "params": { ... } },
+      { "id": "diversity", "type": "DIVERSITY_RERANK",  "params": { "weight": 0.4 } },
+      { "id": "pin",       "type": "FIXED_PINNING",    "params": { ... } }
+    ]
+  }
+}
+```
+
+### Merge semantics
+
+The engine applies these rules at config resolution time:
+
+1. Start with the base variant's full `vertical_pipeline.steps`
+2. For each step in `step_params`, find the matching step by `id` and shallow-merge the params (experiment value wins on any key collision)
+3. If the treatment declares `vertical_pipeline` directly, it takes full precedence — no merge
+4. If no base is found, fail fast with an error (no silent fallback to partial config)
+
+**Shallow merge at the step level:** if `blend` params in control are `{ "vertical_boost_weights": { "1": 1.0, "10": 1.2 }, "intent_lookup_table": "default_intent_v1" }` and the treatment overrides `"vertical_boost_weights": { "1": 1.0, "10": 1.5 }`, the full `vertical_boost_weights` map is replaced, not individual keys within it. This prevents partial-map confusion.
+
+### Properties of this contract
+
+- **Experiments declare what they own** — the diff is explicit and reviewable; a model swap is 1 line
+- **Control is the single source of truth** for the pipeline shape — when control evolves, param-only experiments automatically inherit the change
+- **Structural changes require full declaration** — this is intentional friction; adding a step is a bigger decision than changing a weight
+- **All predictor config is in one place** — model versions, predictor toggles, blending params co-located; no separate DV boolean checks, no separate model mapping JSON
+- **MLE surface:** for a param-only experiment, edit 1–3 lines of JSON and add one DV key
+- **BE surface:** register a new `Processor` class when a new step type is needed; engine handles the rest
 
 ---
 
@@ -442,33 +487,80 @@ These are the root causes that UBP addresses:
 
 ---
 
-## 11. The Northstar: What Done Looks Like
+## 11. The Shared Baseline: One Control to Rule Them All
+
+The control is not per-experiment. It is a **single, platform-owned baseline** that represents current production behavior. It lives at:
 
 ```
-An MLE who wants to run a new vertical blending experiment:
+ubp/experiments/control.json
+```
+
+HP owns it. It is the canonical definition of what the pipeline does for users in no experiment. When a winning treatment is shipped to 100%, the control is updated to match — that's how the platform moves forward.
+
+Every experiment inherits from this baseline. MLEs never write a "control" — they write treatments.
+
+```
+ubp/experiments/
+  control.json                  ← platform baseline, HP-owned
+  hp_vertical_fw_v4.json        ← "I trained a new model"
+  hp_vertical_intent_v3.json    ← "I want to test an intent model"
+  nv_vertical_boost.json        ← "NV team wants to test a higher NV weight"
+  ads_vertical_blend.json       ← "Ads team wants to test inserting ads in vertical"
+```
+
+Any part of the control pipeline is fair game for any team to experiment on. The MLE owns their treatment; the platform owns the baseline.
+
+---
+
+## 12. The Northstar: What Done Looks Like
+
+For a **param-only experiment** (the common case — new model, weight change, toggle):
+
+```
+An MLE who wants to test a new vertical ranking model:
 
   1. Trains a new model → deployed to Sibyl under a new model ID
-  2. Writes a JSON file:  ubp/experiments/hp_vertical_blend_v4.json
-     Declares: which predictors, which model IDs, which blending params,
-               which pipeline steps, which calibration table
-  3. Adds one DV key:     UBP_HP_VERTICAL_BLEND_V4("ubp_hp_vertical_blend_v4")
+  2. Writes 3 lines of JSON in a new experiment file:
+       {
+         "treatment_fw_v4": {
+           "extends": "control",
+           "step_params": { "score": { "primary_model": "store_ranker_fw_v4" } }
+         }
+       }
+  3. Adds one DV key: UBP_HP_VERTICAL_FW_V4("ubp_hp_vertical_fw_v4")
   4. Deploys: runtime JSON hot-reload, no pod restart
 
-That's it. The BE engine handles:
-  - Assembling the RegressionContext from config's predictor declarations
-  - Calling Sibyl with all configured predictors in one request
-  - Composing the multi-predictor score (main × multiplier × boost + ucb + mab)
-  - Applying calibration, intent, and boost multipliers per config
-  - Tracing (automatic per-step, standard schema)
-  - Traffic splitting (via DV infrastructure)
-
-What the MLE never touches:
-  - Java/Kotlin source code
-  - P13nExperimentManager boolean checks
-  - dv_treatment_sibyl_model_mapping.json
-  - hp_vertical_blending_config.json (separate file, separate DV)
-  - Manual logging instrumentation
-  - Cross-team alignment for DV wiring
+That's it.
 ```
+
+For a **structural experiment** (new step, different pipeline):
+
+```
+An MLE who wants to test diversity reranking (a new step):
+
+  1. Writes a full pipeline declaration in a new experiment file
+     (copies control, adds the DIVERSITY_RERANK step at the right position)
+  2. Adds one DV key
+  3. Deploys
+
+A new processor may need to be registered by a BE engineer —
+this is the only code change. Everything else is config.
+```
+
+**What the BE engine handles automatically, for both cases:**
+- Assembling the RegressionContext from config's predictor declarations
+- Calling Sibyl with all configured predictors in one request
+- Composing the multi-predictor score (main × multiplier × boost + ucb + mab)
+- Applying calibration, intent, and boost multipliers per config
+- Tracing after every step (automatic, standard schema)
+- Traffic splitting (via DV infrastructure)
+
+**What the MLE never touches:**
+- Java/Kotlin source code (for param-only experiments, ever)
+- `P13nExperimentManager` boolean checks
+- `dv_treatment_sibyl_model_mapping.json`
+- `hp_vertical_blending_config.json` (separate file, separate DV today — gone in UBP)
+- Manual logging instrumentation
+- Cross-team alignment for DV wiring
 
 The day that workflow is possible for both vertical and horizontal ranking, UBP is done.
