@@ -204,10 +204,11 @@ M_CARD_CLICK). SAMPLE SYSTEM not used — cross-table join requires consistent c
 
 ### [PENDING] Query 7 Output
 
-| ds | period | impressions | clicks | ctr |
+| ds | group | impressions | clicks | ctr |
 |---|---|---|---|---|
 | 2026-01-20 | pre_bug | — | — | — |
-| 2026-02-17 | peak_bug | — | — | — |
+| 2026-02-17 | peak_bug_broken | — | — | — |
+| 2026-02-17 | peak_bug_healthy | — | — | — |
 
 ### [PENDING] Impact Estimate
 

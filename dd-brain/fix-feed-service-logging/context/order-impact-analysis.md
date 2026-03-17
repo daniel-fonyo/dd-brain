@@ -813,61 +813,118 @@ days — excluded.
 Same day of week as Feb 17 (both Tuesday). One day before the regression was introduced.
 Same season as Jan 21 regression start — no 4-week seasonality gap.
 
-**Sampling note:** `SAMPLE SYSTEM` cannot be used here because `M_CARD_VIEW` and
-`M_CARD_CLICK` are joined on `consumer_id`. SYSTEM sampling picks different micro-partition
-blocks from each table, breaking the join. `MOD(TRY_CAST(consumer_id AS BIGINT), 10) = 0`
-ensures the same 10% of consumers appear in both CTEs. `TRY_CAST` required because
-`consumer_id` is VARCHAR in these tables (unlike ICE where it is numeric). `TRY_CAST`
-returns NULL for any non-castable values, which the `= 0` filter naturally excludes.
+**`container = 'cluster'`** targets carousel containers specifically. On the explore page
+there are also store_list (All Stores) containers with different CTR patterns. Keep this
+filter to isolate carousel engagement — the part of the product affected by the regression.
 
-**Schema note:** `iguazu_partition_hour` does not exist on `M_CARD_VIEW` / `M_CARD_CLICK`
-(confirmed from sample records). Use `EXTRACT(HOUR FROM timestamp)` instead.
+**Sampling:** ICE uses `SAMPLE SYSTEM (1)`. M_CARD_VIEW and M_CARD_CLICK are inner-joined
+to ICE-classified consumers, so they are automatically scoped to the ICE sample — no
+separate MOD filter needed. `SAMPLE SYSTEM` is not applied to M_CARD_VIEW/M_CARD_CLICK
+because they are joined to each other on `consumer_id` (SYSTEM picks different blocks per
+table, breaking the join).
+
+**Schema note:** `iguazu_partition_hour` does not exist on `M_CARD_VIEW` / `M_CARD_CLICK`.
+Use `EXTRACT(HOUR FROM timestamp)` instead.
+
+**Output groups:**
+
+| group | day | meaning |
+|---|---|---|
+| `pre_bug` | Jan 20 | All consumers — no bug yet, all healthy |
+| `peak_bug_healthy` | Feb 17 | Store carousel events present (≥10) — old code path |
+| `peak_bug_broken` | Feb 17 | Store carousel events absent/minimal (≤3) — broken path |
+
+`peak_bug_healthy` vs `peak_bug_broken` removes seasonality (same day, same hour).
+`pre_bug` vs `peak_bug_broken` gives the full before/after on the affected population type.
 
 ```sql
 WITH
 
-views AS (
+-- Step 1: Classify consumers via ICE
+-- Jan 20: pre-bug — all consumers expected healthy (store_carousel present)
+-- Feb 17: split broken (≤3 store_carousel) vs healthy (≥10)
+ice_requests AS (
     SELECT
-        DATE(timestamp)     AS ds,
-        consumer_id,
-        store_id,
-        carousel_name,
-        card_position,
-        vertical_position
-    FROM IGUAZU.CONSUMER.M_CARD_VIEW
-    WHERE DATE(timestamp)                    IN ('2026-01-20', '2026-02-17')
-      AND EXTRACT(HOUR FROM timestamp)        = 17        -- noon ET (iguazu_partition_hour absent on this table)
-      AND LOWER(platform)                     = 'android' -- 100% Andromeda on both days; iOS excluded
-      AND container                           = 'cluster'
-      AND page                                = 'explore_page'
-      AND store_id                            IS NOT NULL
-      AND MOD(TRY_CAST(consumer_id AS BIGINT), 10) = 0   -- 10% sample; TRY_CAST: consumer_id is VARCHAR here
+        e.consumer_id,
+        e.iguazu_partition_date                                       AS ds,
+        COUNT(CASE WHEN e.facet_type = 'store_carousel' THEN 1 END)  AS store_carousel_count,
+        COUNT(CASE WHEN e.facet_type = 'store_list'     THEN 1 END)  AS store_list_count
+    FROM IGUAZU.SERVER_EVENTS_PRODUCTION.CX_CROSS_VERTICAL_HOME_PAGE_FEED_ICE AS e
+        SAMPLE SYSTEM (1)
+    WHERE e.iguazu_partition_date IN ('2026-01-20', '2026-02-17')
+      AND e.iguazu_partition_hour  = 17
+      AND e.facet_type IN ('store_carousel', 'store_list')
+    GROUP BY 1, 2
 ),
 
+classified_consumers AS (
+    SELECT
+        consumer_id,
+        ds,
+        CASE
+            WHEN ds = '2026-01-20'                                    THEN 'pre_bug'
+            WHEN ds = '2026-02-17' AND store_carousel_count >= 10     THEN 'peak_bug_healthy'
+            WHEN ds = '2026-02-17' AND store_carousel_count <= 3
+                                   AND store_list_count    >= 1       THEN 'peak_bug_broken'
+        END AS group_label
+    FROM ice_requests
+    WHERE store_list_count >= 1
+    HAVING group_label IS NOT NULL
+),
+
+-- Step 2: Carousel impressions for ICE-classified consumers only
+-- No MOD filter needed — inner join to classified_consumers scopes to ICE sample
+views AS (
+    SELECT
+        c.group_label,
+        v.consumer_id,
+        v.ds,
+        v.store_id,
+        v.carousel_name,
+        v.card_position,
+        v.vertical_position
+    FROM (
+        SELECT
+            DATE(timestamp)                AS ds,
+            consumer_id,
+            store_id,
+            carousel_name,
+            card_position,
+            vertical_position
+        FROM IGUAZU.CONSUMER.M_CARD_VIEW
+        WHERE DATE(timestamp)              IN ('2026-01-20', '2026-02-17')
+          AND EXTRACT(HOUR FROM timestamp)  = 17
+          AND LOWER(platform)               = 'android'
+          AND container                     = 'cluster'   -- carousel containers only; not store_list
+          AND page                          = 'explore_page'
+          AND store_id                      IS NOT NULL
+    ) v
+    INNER JOIN classified_consumers c
+        ON  v.consumer_id = c.consumer_id
+        AND v.ds          = c.ds
+),
+
+-- Step 3: Clicks — pre-filter to same dates/hour/platform/filters; join to views handles scoping
 clicks AS (
     SELECT DISTINCT
-        DATE(timestamp)     AS ds,
+        DATE(timestamp)                AS ds,
         consumer_id,
         store_id,
         carousel_name,
         card_position,
         vertical_position
     FROM IGUAZU.CONSUMER.M_CARD_CLICK
-    WHERE DATE(timestamp)                    IN ('2026-01-20', '2026-02-17')
-      AND EXTRACT(HOUR FROM timestamp)        = 17
-      AND LOWER(platform)                     = 'android'
-      AND container                           = 'cluster'
-      AND page                                = 'explore_page'
-      AND store_id                            IS NOT NULL
-      AND MOD(TRY_CAST(consumer_id AS BIGINT), 10) = 0   -- must match views CTE
+    WHERE DATE(timestamp)              IN ('2026-01-20', '2026-02-17')
+      AND EXTRACT(HOUR FROM timestamp)  = 17
+      AND LOWER(platform)               = 'android'
+      AND container                     = 'cluster'
+      AND page                          = 'explore_page'
+      AND store_id                      IS NOT NULL
 )
 
 SELECT
     v.ds,
-    CASE v.ds
-        WHEN '2026-01-20' THEN 'pre_bug'
-        WHEN '2026-02-17' THEN 'peak_bug'
-    END                                                          AS period,
+    v.group_label,
     COUNT(*)                                                     AS impressions,
     COUNT(k.consumer_id)                                         AS clicks,
     ROUND(COUNT(k.consumer_id) * 1.0 / NULLIF(COUNT(*), 0), 6)  AS ctr
@@ -880,32 +937,41 @@ LEFT JOIN clicks k
     AND v.card_position     = k.card_position
     AND v.vertical_position = k.vertical_position
 GROUP BY 1, 2
-ORDER BY 1;
+ORDER BY 1, 2;
 ```
 
 ---
 
 ### Query 7 — GOV Impact Formula
 
+Two independent CTR deltas to compute:
+
 ```
-ctr_delta               = ctr_pre_bug − ctr_peak_bug
+-- 1. Within-day causal estimate (controls for seasonality):
+ctr_delta_within_day  = ctr_peak_bug_healthy − ctr_peak_bug_broken
 
--- Scale peak_bug impressions to full Android population (×10 if MOD 10 sample):
-total_peak_bug_impressions = peak_bug_impressions × 10
+-- 2. Before/after estimate on broken population (has 4-week seasonality gap):
+ctr_delta_before_after = ctr_pre_bug − ctr_peak_bug_broken
 
--- Scale to full regression period:
--- Android was 100% broken Jan 21–Mar 10 (49 days).
--- Impressions sampled at 1 hour; scale to ~10 peak hours/day:
-total_regression_impressions = total_peak_bug_impressions × 10 × 49
+-- Scale broken impressions to full Android population:
+-- ICE used SAMPLE SYSTEM (1) → scale factor ≈ 100×
+total_broken_impressions_1hr = peak_bug_broken_impressions × 100
 
-lost_clicks  = total_regression_impressions × ctr_delta
-lost_orders  = lost_clicks × click_to_order_rate    -- from Query 6b (Android only)
+-- Scale to full regression period (Android 100% broken Jan 21–Mar 10, 49 days):
+-- Impressions measured at 1 hour; rough scale to full day ~16 peak-adjacent hours:
+total_broken_impressions_regression = total_broken_impressions_1hr × 16 × 49
+
+-- Apply chosen ctr_delta (use within-day as primary, before/after as check):
+lost_clicks  = total_broken_impressions_regression × ctr_delta
+lost_orders  = lost_clicks × click_to_order_rate    -- from Query 6b
 lost_GOV     = lost_orders × $29.39
 ```
 
-**Caveat:** ~4-week seasonality gap between Jan 20 and Feb 17 (Super Bowl Feb 9, Valentine's
-Day Feb 14 could inflate Feb 17 CTR). If `ctr_peak_bug > ctr_pre_bug`, seasonality is the
-likely explanation rather than the regression improving things.
+**Reading the results:**
+- If `ctr_peak_bug_broken < ctr_peak_bug_healthy`: within-day ranking degradation detected
+- If `ctr_peak_bug_broken < ctr_pre_bug`: before/after degradation detected
+- If `ctr_peak_bug_broken > ctr_pre_bug` but `< ctr_peak_bug_healthy`: seasonality inflating
+  Feb 17 baseline, but within-day comparison still valid
 
 ---
 
