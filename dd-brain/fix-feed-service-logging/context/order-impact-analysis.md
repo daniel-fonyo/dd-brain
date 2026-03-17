@@ -815,8 +815,13 @@ Same season as Jan 21 regression start — no 4-week seasonality gap.
 
 **Sampling note:** `SAMPLE SYSTEM` cannot be used here because `M_CARD_VIEW` and
 `M_CARD_CLICK` are joined on `consumer_id`. SYSTEM sampling picks different micro-partition
-blocks from each table, breaking the join. `MOD(consumer_id, 10) = 0` ensures the same 10%
-of consumers appear in both CTEs.
+blocks from each table, breaking the join. `MOD(TRY_CAST(consumer_id AS BIGINT), 10) = 0`
+ensures the same 10% of consumers appear in both CTEs. `TRY_CAST` required because
+`consumer_id` is VARCHAR in these tables (unlike ICE where it is numeric). `TRY_CAST`
+returns NULL for any non-castable values, which the `= 0` filter naturally excludes.
+
+**Schema note:** `iguazu_partition_hour` does not exist on `M_CARD_VIEW` / `M_CARD_CLICK`
+(confirmed from sample records). Use `EXTRACT(HOUR FROM timestamp)` instead.
 
 ```sql
 WITH
@@ -830,13 +835,13 @@ views AS (
         card_position,
         vertical_position
     FROM IGUAZU.CONSUMER.M_CARD_VIEW
-    WHERE DATE(timestamp)              IN ('2026-01-20', '2026-02-17')
-      AND iguazu_partition_hour         = 17       -- noon ET; use EXTRACT(HOUR FROM timestamp) if column absent
-      AND LOWER(platform)               = 'android' -- 100% Andromeda on both days; iOS excluded
-      AND container                     = 'cluster'
-      AND page                          = 'explore_page'
-      AND store_id                      IS NOT NULL
-      AND MOD(consumer_id, 10)          = 0         -- 10% sample; consistent with clicks CTE
+    WHERE DATE(timestamp)                    IN ('2026-01-20', '2026-02-17')
+      AND EXTRACT(HOUR FROM timestamp)        = 17        -- noon ET (iguazu_partition_hour absent on this table)
+      AND LOWER(platform)                     = 'android' -- 100% Andromeda on both days; iOS excluded
+      AND container                           = 'cluster'
+      AND page                                = 'explore_page'
+      AND store_id                            IS NOT NULL
+      AND MOD(TRY_CAST(consumer_id AS BIGINT), 10) = 0   -- 10% sample; TRY_CAST: consumer_id is VARCHAR here
 ),
 
 clicks AS (
@@ -848,13 +853,13 @@ clicks AS (
         card_position,
         vertical_position
     FROM IGUAZU.CONSUMER.M_CARD_CLICK
-    WHERE DATE(timestamp)              IN ('2026-01-20', '2026-02-17')
-      AND iguazu_partition_hour         = 17
-      AND LOWER(platform)               = 'android'
-      AND container                     = 'cluster'
-      AND page                          = 'explore_page'
-      AND store_id                      IS NOT NULL
-      AND MOD(consumer_id, 10)          = 0         -- must match views CTE
+    WHERE DATE(timestamp)                    IN ('2026-01-20', '2026-02-17')
+      AND EXTRACT(HOUR FROM timestamp)        = 17
+      AND LOWER(platform)                     = 'android'
+      AND container                           = 'cluster'
+      AND page                                = 'explore_page'
+      AND store_id                            IS NOT NULL
+      AND MOD(TRY_CAST(consumer_id AS BIGINT), 10) = 0   -- must match views CTE
 )
 
 SELECT

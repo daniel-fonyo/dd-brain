@@ -286,6 +286,24 @@ self-selected group of heavier, more engaged consumers. Any regression signal is
 
 ---
 
+## Alternative Framing (Note)
+
+All analyses above attempt to measure consumer impact through Snowflake behavioral data.
+A potentially more tractable framing is:
+
+> *Quantify the data quality loss, identify which ML models trained on the affected window,
+> and assess whether rankings degraded — rather than trying to attribute GOV directly.*
+
+The regression doc's "Next Steps" points here: ~32B missing events, ~1.85 vs 13.54
+store_carousel events/request on broken vs healthy path, 49-day training data window
+affected. Which models consumed this data? What fraction of their training set was broken?
+Did offline model metrics shift?
+
+This would likely yield a cleaner and more defensible impact statement than a GOV estimate
+derived from noisy behavioral comparisons. Deferred pending completion of Query 7.
+
+---
+
 ## Limitations
 
 | Issue | Note |
