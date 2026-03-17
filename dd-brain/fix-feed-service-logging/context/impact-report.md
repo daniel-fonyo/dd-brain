@@ -1,7 +1,7 @@
 # CX User Impact Report
 ## Store Carousel Iguazu Event Regression — Jan 21–Mar 10, 2026
 
-*Status: Complete. All queries have run.*
+*Status: Queries A, B, 5 complete. Query 6a/6b (CTR-based GOV estimate) pending.*
 
 ---
 
@@ -24,9 +24,15 @@ requests in the sample window.
 The avg order value was $0.58 lower on the broken path ($25.63 vs $26.21), in the expected
 direction, but this difference cannot be isolated from population characteristics.
 
-**Conclusion: no measurable CX impact detected.** The regression was a logging regression —
-carousels were still served to users. Any ML degradation from incomplete training data would
-be gradual and is below the noise floor of available data and methodology.
+**CTR-based approach (Query 6, pending):** Uses store carousel click-through rate as a more
+direct signal of ranking quality degradation, bypassing the order attribution issues above.
+If `ctr_broken < ctr_healthy` on the same day, the lost clicks can be chained to a GOV
+estimate via a baseline click-to-order rate.
+
+**Conclusion so far: no measurable CX impact detected through order rate analysis.** The
+regression was a logging regression — carousels were still served to users. Any ML
+degradation from incomplete training data would be gradual. The CTR-based analysis (Query 6)
+is the remaining approach that may surface a signal.
 
 ---
 
@@ -49,6 +55,8 @@ accumulate gradually as models retrained, not immediately on Jan 21.
 | `IGUAZU.SERVER_EVENTS_PRODUCTION.CX_CROSS_VERTICAL_HOME_PAGE_FEED_ICE` | Homepage request counts; broken/healthy path classification |
 | `SEGMENT_EVENTS_RAW.CONSUMER_PRODUCTION.M_CHECKOUT_PAGE_SYSTEM_CHECKOUT_SUCCESS` | Mobile orders + GOV |
 | `SEGMENT_EVENTS_RAW.CONSUMER_PRODUCTION.SYSTEM_CHECKOUT_SUCCESS` | Web orders + GOV |
+| `IGUAZU.CONSUMER.M_CARD_VIEW` | Mobile store carousel impressions (Query 6) |
+| `IGUAZU.CONSUMER.M_CARD_CLICK` | Mobile store carousel clicks (Query 6) |
 
 ---
 
@@ -174,6 +182,55 @@ bias. A clean causal estimate would require either:
 
 ---
 
+## CTR-Based GOV Estimation [PENDING — Query 6a/6b not yet run]
+
+Uses store carousel CTR as a direct measure of ranking quality degradation. Avoids the
+order over-counting and selection-bias-in-order-rate issues from Query 5. CTR measures
+engagement with the specific content shown — if degraded rankings surface less relevant
+stores, CTR drops regardless of user type.
+
+**Estimation chain:**
+```
+lost_GOV = total_broken_impressions × (ctr_healthy − ctr_broken) × click_to_order_rate × $29.39
+```
+
+Sample: same as Query 5 — Feb 17, 17:00 UTC, SYSTEM 1% on ICE. Broken/healthy
+classification via `store_carousel_count ≤ 3` / `≥ 10`.
+
+### [PENDING] Query 6a Output — CTR by Path (Feb 17)
+
+| path | impressions | clicks | ctr |
+|---|---|---|---|
+| broken_andromeda | — | — | — |
+| healthy_old_path | — | — | — |
+
+### [PENDING] Query 6b Output — Click-to-Order Rate (Baseline Jan 15–19)
+
+| unique_clicker_days | clicker_days_with_order | click_to_order_rate |
+|---|---|---|
+| — | — | — |
+
+### [PENDING] GOV Impact Estimate
+
+```
+ctr_delta                = ctr_healthy − ctr_broken
+impressions_per_request  = broken_impressions_in_sample / broken_requests_in_sample
+
+total_broken_requests    = 2,987,633,468 × 0.63        (~63% avg broken fraction from appendix)
+total_broken_impressions = total_broken_requests × impressions_per_request
+
+lost_clicks  = total_broken_impressions × ctr_delta
+lost_orders  = lost_clicks × click_to_order_rate
+lost_GOV     = lost_orders × $29.39
+```
+
+**Expected result if impact exists:** `ctr_broken < ctr_healthy`, with the gap reflecting
+how much worse store rankings became after ML models retrained on incomplete data.
+
+**Expected result if no impact:** CTR rates are similar across both groups.
+
+---
+
 ## Limitations
 
 | Issue | Note |
@@ -183,3 +240,4 @@ bias. A clean causal estimate would require either:
 | Selection bias in T/C | Andromeda DV assignment is not random — it tracks app version. `broken_andromeda` users are systematically different (heavier users, newer builds) from `healthy_old_path`. Order rate comparison is not apples-to-apples. |
 | Order rate inflation | `consumer_id + date` join assigns one consumer's order to all their requests in the sample window — not just the request that preceded the order. Rates are inflated ~6×. A session-level or request-to-order funnel join would be more correct. |
 | Hour filter on checkout | Checkout table filtered to hour 17 UTC. Orders placed outside that hour by consumers who browsed at noon are missed. Affects both groups equally so the relative comparison would hold — but the absolute rates are underestimates. |
+| CTR selection bias (Query 6) | Same Andromeda DV selection bias applies to CTR comparison — broken path users may click more or less in general. The CTR delta is therefore an upper bound on regression-attributable CTR loss, not a clean causal estimate. |
