@@ -1,7 +1,7 @@
 # CX User Impact Report
 ## Store Carousel Iguazu Event Regression — Jan 21–Mar 10, 2026
 
-*Status: Queries A, B, 5 complete. Query 6a/6b (CTR-based GOV estimate) pending.*
+*Status: Queries A, B, 5, 6a complete. Query 6b (click-to-order rate) pending.*
 
 ---
 
@@ -24,15 +24,16 @@ requests in the sample window.
 The avg order value was $0.58 lower on the broken path ($25.63 vs $26.21), in the expected
 direction, but this difference cannot be isolated from population characteristics.
 
-**CTR-based approach (Query 6, pending):** Uses store carousel click-through rate as a more
-direct signal of ranking quality degradation, bypassing the order attribution issues above.
-If `ctr_broken < ctr_healthy` on the same day, the lost clicks can be chained to a GOV
-estimate via a baseline click-to-order rate.
+**CTR-based approach (Query 6a):** The broken path had *higher* CTR than healthy
+(0.000888 vs 0.000508), the same wrong direction as Query 5. `ctr_delta` is negative —
+no GOV loss detectable via the CTR channel. Selection bias dominates both analyses.
 
-**Conclusion so far: no measurable CX impact detected through order rate analysis.** The
-regression was a logging regression — carousels were still served to users. Any ML
-degradation from incomplete training data would be gradual. The CTR-based analysis (Query 6)
-is the remaining approach that may surface a signal.
+**Conclusion: no measurable CX impact detected.** The regression was a logging regression —
+carousels were still served to users. Across every metric (order rate, AOV, CTR), the
+broken path performs equal to or better than the healthy path. This is the signature of
+selection bias: Andromeda DV users are heavier, more engaged app users with higher
+intrinsic order propensity and CTR, independent of carousel ranking quality. Any ML
+degradation from incomplete training data is below the noise floor of available methodology.
 
 ---
 
@@ -197,12 +198,14 @@ lost_GOV = total_broken_impressions × (ctr_healthy − ctr_broken) × click_to_
 Sample: same as Query 5 — Feb 17, 17:00 UTC, SYSTEM 1% on ICE. Broken/healthy
 classification via `store_carousel_count ≤ 3` / `≥ 10`.
 
-### [PENDING] Query 6a Output — CTR by Path (Feb 17)
+### Query 6a Output — CTR by Path (Feb 17)
 
 | path | impressions | clicks | ctr |
 |---|---|---|---|
-| broken_andromeda | — | — | — |
-| healthy_old_path | — | — | — |
+| broken_andromeda | 1,036,525 | 920 | 0.000888 |
+| healthy_old_path | 289,436 | 147 | 0.000508 |
+
+Impressions per request (from Query 5 request counts): broken ≈ 13.5, healthy ≈ 15.8 — both realistic for a homepage carousel feed.
 
 ### [PENDING] Query 6b Output — Click-to-Order Rate (Baseline Jan 15–19)
 
@@ -210,24 +213,34 @@ classification via `store_carousel_count ≤ 3` / `≥ 10`.
 |---|---|---|
 | — | — | — |
 
-### [PENDING] GOV Impact Estimate
+### GOV Impact Estimate
 
 ```
-ctr_delta                = ctr_healthy − ctr_broken
-impressions_per_request  = broken_impressions_in_sample / broken_requests_in_sample
-
-total_broken_requests    = 2,987,633,468 × 0.63        (~63% avg broken fraction from appendix)
-total_broken_impressions = total_broken_requests × impressions_per_request
-
-lost_clicks  = total_broken_impressions × ctr_delta
-lost_orders  = lost_clicks × click_to_order_rate
-lost_GOV     = lost_orders × $29.39
+ctr_delta = ctr_healthy − ctr_broken = 0.000508 − 0.000888 = −0.000380
 ```
 
-**Expected result if impact exists:** `ctr_broken < ctr_healthy`, with the gap reflecting
-how much worse store rankings became after ML models retrained on incomplete data.
+**ctr_delta is negative** — broken path has higher CTR than healthy. The GOV formula
+produces a negative (i.e., zero detectable) loss. No further computation needed.
 
-**Expected result if no impact:** CTR rates are similar across both groups.
+### Interpretation
+
+Broken path users click ~75% more per card impression than healthy path users (0.000888 vs
+0.000508). Combined with the Query 5 finding (broken users have higher order rate), this
+consistently points to **selection bias as the dominant effect**:
+
+| Metric | broken_andromeda | healthy_old_path | Direction |
+|---|---|---|---|
+| Order rate (Query 5) | 0.6165 | 0.5357 | broken > healthy ❌ |
+| Avg order value (Query 5) | $25.63 | $26.21 | broken < healthy ✓ |
+| CTR (Query 6a) | 0.000888 | 0.000508 | broken > healthy ❌ |
+| Clicks per request | ~0.012 | ~0.008 | broken > healthy ❌ |
+
+Three out of four metrics are in the wrong direction. The only metric moving the expected
+way (AOV, −$0.58) is also the most susceptible to basket composition differences between
+user segments.
+
+**The Andromeda DV split is not a valid treatment/control.** Broken path users are a
+self-selected group of heavier, more engaged consumers. Any regression signal is swamped.
 
 ---
 
