@@ -793,6 +793,117 @@ bound on the regression-attributable CTR loss, not a clean causal estimate.
 
 ---
 
+## Query 7 — Before/After CTR (Android, Same Day of Week)
+
+The cleanest available comparison. No broken/healthy classification, no ICE table, no
+selection bias from DV assignment.
+
+**Why Android only:**
+
+| Day | Android DV state | iOS DV state |
+|---|---|---|
+| Jan 20, 2026 (pre-bug) | 100% Andromeda, **code healthy** (regression introduced Jan 21) | 0% Andromeda (iOS not rolled until Jan 28–29) |
+| Feb 17, 2026 (peak bug) | 100% Andromeda, **code broken** (~83% events missing) | 100% Andromeda, broken |
+
+Android is the same population on both days (100% Andromeda), with the only variable being
+whether the logging bug was present. iOS is a completely different population across the two
+days — excluded.
+
+**Why Jan 20:**
+Same day of week as Feb 17 (both Tuesday). One day before the regression was introduced.
+Same season as Jan 21 regression start — no 4-week seasonality gap.
+
+**Sampling note:** `SAMPLE SYSTEM` cannot be used here because `M_CARD_VIEW` and
+`M_CARD_CLICK` are joined on `consumer_id`. SYSTEM sampling picks different micro-partition
+blocks from each table, breaking the join. `MOD(consumer_id, 10) = 0` ensures the same 10%
+of consumers appear in both CTEs.
+
+```sql
+WITH
+
+views AS (
+    SELECT
+        DATE(timestamp)     AS ds,
+        consumer_id,
+        store_id,
+        carousel_name,
+        card_position,
+        vertical_position
+    FROM IGUAZU.CONSUMER.M_CARD_VIEW
+    WHERE DATE(timestamp)              IN ('2026-01-20', '2026-02-17')
+      AND iguazu_partition_hour         = 17       -- noon ET; use EXTRACT(HOUR FROM timestamp) if column absent
+      AND LOWER(platform)               = 'android' -- 100% Andromeda on both days; iOS excluded
+      AND container                     = 'cluster'
+      AND page                          = 'explore_page'
+      AND store_id                      IS NOT NULL
+      AND MOD(consumer_id, 10)          = 0         -- 10% sample; consistent with clicks CTE
+),
+
+clicks AS (
+    SELECT DISTINCT
+        DATE(timestamp)     AS ds,
+        consumer_id,
+        store_id,
+        carousel_name,
+        card_position,
+        vertical_position
+    FROM IGUAZU.CONSUMER.M_CARD_CLICK
+    WHERE DATE(timestamp)              IN ('2026-01-20', '2026-02-17')
+      AND iguazu_partition_hour         = 17
+      AND LOWER(platform)               = 'android'
+      AND container                     = 'cluster'
+      AND page                          = 'explore_page'
+      AND store_id                      IS NOT NULL
+      AND MOD(consumer_id, 10)          = 0         -- must match views CTE
+)
+
+SELECT
+    v.ds,
+    CASE v.ds
+        WHEN '2026-01-20' THEN 'pre_bug'
+        WHEN '2026-02-17' THEN 'peak_bug'
+    END                                                          AS period,
+    COUNT(*)                                                     AS impressions,
+    COUNT(k.consumer_id)                                         AS clicks,
+    ROUND(COUNT(k.consumer_id) * 1.0 / NULLIF(COUNT(*), 0), 6)  AS ctr
+FROM views v
+LEFT JOIN clicks k
+    ON  v.ds                = k.ds
+    AND v.consumer_id       = k.consumer_id
+    AND v.store_id          = k.store_id
+    AND v.carousel_name     = k.carousel_name
+    AND v.card_position     = k.card_position
+    AND v.vertical_position = k.vertical_position
+GROUP BY 1, 2
+ORDER BY 1;
+```
+
+---
+
+### Query 7 — GOV Impact Formula
+
+```
+ctr_delta               = ctr_pre_bug − ctr_peak_bug
+
+-- Scale peak_bug impressions to full Android population (×10 if MOD 10 sample):
+total_peak_bug_impressions = peak_bug_impressions × 10
+
+-- Scale to full regression period:
+-- Android was 100% broken Jan 21–Mar 10 (49 days).
+-- Impressions sampled at 1 hour; scale to ~10 peak hours/day:
+total_regression_impressions = total_peak_bug_impressions × 10 × 49
+
+lost_clicks  = total_regression_impressions × ctr_delta
+lost_orders  = lost_clicks × click_to_order_rate    -- from Query 6b (Android only)
+lost_GOV     = lost_orders × $29.39
+```
+
+**Caveat:** ~4-week seasonality gap between Jan 20 and Feb 17 (Super Bowl Feb 9, Valentine's
+Day Feb 14 could inflate Feb 17 CTR). If `ctr_peak_bug > ctr_pre_bug`, seasonality is the
+likely explanation rather than the regression improving things.
+
+---
+
 ## Limitations
 
 | Issue                        | Note                                                                                                                                                                                                                                                                                                                                                                                              |

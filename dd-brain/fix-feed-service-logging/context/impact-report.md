@@ -1,7 +1,7 @@
 # CX User Impact Report
 ## Store Carousel Iguazu Event Regression — Jan 21–Mar 10, 2026
 
-*Status: Queries A, B, 5, 6a complete. Query 6b (click-to-order rate) pending.*
+*Status: Queries A, B, 5, 6a complete. Query 7 (before/after Android CTR) pending.*
 
 ---
 
@@ -28,12 +28,14 @@ direction, but this difference cannot be isolated from population characteristic
 (0.000888 vs 0.000508), the same wrong direction as Query 5. `ctr_delta` is negative —
 no GOV loss detectable via the CTR channel. Selection bias dominates both analyses.
 
-**Conclusion: no measurable CX impact detected.** The regression was a logging regression —
-carousels were still served to users. Across every metric (order rate, AOV, CTR), the
-broken path performs equal to or better than the healthy path. This is the signature of
-selection bias: Andromeda DV users are heavier, more engaged app users with higher
-intrinsic order propensity and CTR, independent of carousel ranking quality. Any ML
-degradation from incomplete training data is below the noise floor of available methodology.
+**Before/after Android CTR (Query 7, pending):** Cleanest available comparison. Android was
+100% on the Andromeda DV on both Jan 20 (pre-bug, code healthy) and Feb 17 (peak bug, ~83%
+broken). iOS excluded — it was 0% Andromeda on Jan 20 and 100% on Feb 17 (different
+populations). Compares same-platform, same-DV-state, same day-of-week and hour across the
+two dates. No broken/healthy classification needed.
+
+**Conclusion so far: no measurable CX impact detected through treatment/control analyses.**
+Query 7 is the remaining approach with the cleanest comparison design.
 
 ---
 
@@ -180,6 +182,46 @@ bias. A clean causal estimate would require either:
 - An instrumental variable approach using the DV ramp schedule as an instrument
 - Retrospective analysis after multiple model retraining cycles (to measure ranking
   degradation downstream)
+
+---
+
+## Before/After Android CTR — Query 7 [PENDING]
+
+Cleanest available design. No broken/healthy path classification. No ICE table.
+
+**Why Android, why these dates:**
+
+| Day | Android DV | iOS DV |
+|---|---|---|
+| Jan 20, 2026 | 100% Andromeda, **code healthy** (bug introduced Jan 21) | 0% Andromeda |
+| Feb 17, 2026 | 100% Andromeda, **code broken** (~83% missing) | 100% Andromeda, broken |
+
+Android is the same population on both days — same DV state, only variable is the bug.
+iOS excluded: completely different populations across the two days.
+
+Sampled: `MOD(consumer_id, 10) = 0` (10% of consumers, consistent across M_CARD_VIEW and
+M_CARD_CLICK). SAMPLE SYSTEM not used — cross-table join requires consistent consumer set.
+
+### [PENDING] Query 7 Output
+
+| ds | period | impressions | clicks | ctr |
+|---|---|---|---|---|
+| 2026-01-20 | pre_bug | — | — | — |
+| 2026-02-17 | peak_bug | — | — | — |
+
+### [PENDING] Impact Estimate
+
+```
+ctr_delta                    = ctr_pre_bug − ctr_peak_bug
+total_peak_bug_impressions   = peak_bug_impressions × 10      (undo 10% sample)
+total_regression_impressions = total_peak_bug_impressions × 10 peak hrs/day × 49 days
+lost_clicks                  = total_regression_impressions × ctr_delta
+lost_orders                  = lost_clicks × click_to_order_rate
+lost_GOV                     = lost_orders × $29.39
+```
+
+**Seasonality caveat:** ~4-week gap between Jan 20 and Feb 17. Super Bowl (Feb 9) and
+Valentine's Day (Feb 14) may inflate Feb 17 CTR, masking or reversing any regression signal.
 
 ---
 
