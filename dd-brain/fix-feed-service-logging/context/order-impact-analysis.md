@@ -830,9 +830,9 @@ Use `EXTRACT(HOUR FROM timestamp)` instead.
 
 | group | day | meaning |
 |---|---|---|
-| `pre_bug` | Jan 20 | All consumers — no bug yet, all healthy |
-| `peak_bug_healthy` | Feb 17 | Store carousel events present (≥10) — old code path |
-| `peak_bug_broken` | Feb 17 | Store carousel events absent/minimal (≤3) — broken path |
+| `pre_bug` | Jan 20 | All valid consumers — no bug yet, all healthy |
+| `peak_bug_healthy` | Feb 17 | ≥10 carousels in position 0 — old code path, logging intact |
+| `peak_bug_broken` | Feb 17 | <4 carousels in position 0 — broken path, logging confirmed suppressed |
 
 `peak_bug_healthy` vs `peak_bug_broken` removes seasonality (same day, same hour).
 `pre_bug` vs `peak_bug_broken` gives the full before/after on the affected population type.
@@ -841,19 +841,34 @@ Use `EXTRACT(HOUR FROM timestamp)` instead.
 WITH
 
 -- Step 1: Classify consumers via ICE
--- Jan 20: pre-bug — all consumers expected healthy (store_carousel present)
--- Feb 17: split broken (≤3 store_carousel) vs healthy (≥10)
+-- Filter to real homepage requests using quality signals:
+--   horizontal_position_in_facet = 0  → one row per carousel (first slot), dedups cleanly
+--   store_id / consumer_id NOT NULL    → valid store and user
+--   dd_session_id <> 'feed-service-default' → excludes synthetic/test sessions
+--   time_zone not null/empty           → excludes bots
+--   NVL(offset, 0) < 3                → first-page results only
+--   facet_type = 'store_carousel'      → only carousel events; store_list not needed
+--
+-- Count = number of distinct carousels with a valid store in position 0.
+-- Broken path (avg 1.85 carousels/request): count < 4
+-- Healthy path (~13-15 carousels/request): count >= 10
+-- 4-9: ambiguous, excluded
 ice_requests AS (
     SELECT
-        e.consumer_id,
-        e.iguazu_partition_date                                       AS ds,
-        COUNT(CASE WHEN e.facet_type = 'store_carousel' THEN 1 END)  AS store_carousel_count,
-        COUNT(CASE WHEN e.facet_type = 'store_list'     THEN 1 END)  AS store_list_count
-    FROM IGUAZU.SERVER_EVENTS_PRODUCTION.CX_CROSS_VERTICAL_HOME_PAGE_FEED_ICE AS e
+        f.consumer_id,
+        f.iguazu_partition_date          AS ds,
+        COUNT(*)                         AS store_carousel_count
+    FROM IGUAZU.SERVER_EVENTS_PRODUCTION.CX_CROSS_VERTICAL_HOME_PAGE_FEED_ICE AS f
         SAMPLE SYSTEM (1)
-    WHERE e.iguazu_partition_date IN ('2026-01-20', '2026-02-17')
-      AND e.iguazu_partition_hour  = 17
-      AND e.facet_type IN ('store_carousel', 'store_list')
+    WHERE f.iguazu_partition_date        IN ('2026-01-20', '2026-02-17')
+      AND f.iguazu_partition_hour         = 17
+      AND f.facet_type                    = 'store_carousel'
+      AND f.horizontal_position_in_facet  = 0
+      AND f.store_id                      IS NOT NULL
+      AND f.consumer_id                   IS NOT NULL
+      AND f.dd_session_id                <> 'feed-service-default'
+      AND (f.time_zone <> '' AND f.time_zone IS NOT NULL)
+      AND NVL(f.offset, 0)                < 3
     GROUP BY 1, 2
 ),
 
@@ -862,13 +877,11 @@ classified_consumers AS (
         consumer_id,
         ds,
         CASE
-            WHEN ds = '2026-01-20'                                    THEN 'pre_bug'
-            WHEN ds = '2026-02-17' AND store_carousel_count >= 10     THEN 'peak_bug_healthy'
-            WHEN ds = '2026-02-17' AND store_carousel_count <= 3
-                                   AND store_list_count    >= 1       THEN 'peak_bug_broken'
+            WHEN ds = '2026-01-20'                                THEN 'pre_bug'
+            WHEN ds = '2026-02-17' AND store_carousel_count >= 10 THEN 'peak_bug_healthy'
+            WHEN ds = '2026-02-17' AND store_carousel_count < 4   THEN 'peak_bug_broken'
         END AS group_label
     FROM ice_requests
-    WHERE store_list_count >= 1
     HAVING group_label IS NOT NULL
 ),
 
