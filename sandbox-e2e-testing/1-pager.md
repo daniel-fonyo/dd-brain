@@ -1,5 +1,65 @@
 # Feed Service Homepage E2E Sandbox Testing — 1-Pager
 
+## Visuals
+
+### 1. End-to-End Pipeline
+
+```mermaid
+flowchart LR
+    A([Engineer\nor CI trigger]) --> B[Provision\nSandbox]
+    B --> C[Navigate\nHomepage]
+    C --> D[Feed Loads\nvia feed-service]
+
+    D --> E[Capture Logs\n& Network]
+    D --> F[Snowflake\nEvents Emitted]
+    D --> G[DV / Experiment\nAssignments]
+    D --> H[Screenshot\n+ Snapshot]
+
+    E --> I{Assertion\nEngine}
+    F --> I
+    G --> I
+    H --> I
+
+    I --> J[/Pass ✅ or\nFail ❌ Report/]
+```
+
+---
+
+### 2. Assertion Layers
+
+```mermaid
+block-beta
+  columns 1
+  A["🖥️  Visual Layer — screenshot diff, structural snapshot, carousel interactions"]
+  B["🧪  Ranking Sanity — top-N order, no duplicate / wrong content type, inversion flags"]
+  C["🔬  DV / Experiment Layer — enrollment confirmed, correct variant assigned"]
+  D["📡  Snowflake Event Layer — impression events, ranking signals, item IDs & positions"]
+  E["📋  Log / Network Layer — feed-service logs, API response shape, no load errors"]
+  F["🏗️  Sandbox Layer — env provisioned, correct user profile & config loaded"]
+```
+
+---
+
+### 3. Test Report Mockup
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Homepage E2E Test Report                                │
+│  Sandbox: user-abc  |  2026-03-18 14:32  |  run #42     │
+├──────────────────────────────────────────────────────────┤
+│  🏗️  Sandbox Provision       ✅  ready in 8.4s           │
+│  📋  Feed Load & Logs        ✅  0 errors, 2.1s load     │
+│  📡  Snowflake Events        ✅  12 / 12 events emitted  │
+│  🔬  DV / Experiments        ✅  exp-ranking-v3 enrolled │
+│  🖥️  Visual Snapshot         ⚠️  1 layout diff flagged   │
+│  🧪  Ranking Sanity          ✅  top-10 looks correct    │
+├──────────────────────────────────────────────────────────┤
+│  Overall: PASS (5/6)   ⚠️ 1 warning — see visual diff   │
+└──────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Problem
 
 Validating homepage ranking changes today is manual and slow. Engineers spin up sandbox environments, load the homepage, eyeball the feed, check logs, and try to correlate events and experiment assignments by hand. This is error-prone, doesn't scale, and creates risk when shipping ranking changes.
