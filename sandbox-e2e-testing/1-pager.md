@@ -4,7 +4,6 @@
 
 ### 1. End-to-End Pipeline
 
-&nbsp;
 
 ```mermaid
 flowchart TD
@@ -28,7 +27,8 @@ flowchart TD
     B3 --> AA
     S3 --> AA
 
-    subgraph AA["🧪 Assertion Agents — run in parallel"]
+    subgraph AA["🧪 Assertion Agents"]
+    
         AA1[Log Analysis Agent]
         AA2[Snowflake Event Agent]
         AA3[DV / Experiment Agent]
@@ -68,21 +68,21 @@ block-beta
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                                                                         │
 │   Homepage E2E Test Report                                              │
-│   Sandbox: user-abc  |  2026-03-18 14:32  |  run #42                   │
+│   Sandbox: user-abc  |  2026-03-18 14:32  |  run #42                    │
 │                                                                         │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│   📋  Feed Load & Logs    ✅  0 errors, 2.1s load                       │
-│   🔀  Shadow Traffic      ✅  p50 +2ms vs baseline, responses match     │
-│   📡  Snowflake Events    ✅  12 / 12 events emitted                    │
-│   🔬  DV / Experiments    ✅  exp-ranking-v3 enrolled                   │
-│   🖥️  Visual Snapshot     ⚠️  1 layout diff flagged                    │
-│   🧪  Ranking Sanity      ❌  carousel[2] score/order mismatch          │
-│                               scores: A>B  |  shown: B>A               │
+│   📋  Feed Load & Logs    ✅  0 errors, 2.1s load                        │
+│   🔀  Shadow Traffic      ✅  p50 +2ms vs baseline, responses match      │
+│   📡  Snowflake Events    ✅  12 / 12 events emitted                     │
+│   🔬  DV / Experiments    ✅  exp-ranking-v3 enrolled                    │
+│   🖥️  Visual Snapshot     ⚠️  1 layout diff flagged                      │
+│   🧪  Ranking Sanity      ❌  carousel[2] score/order mismatch           │
+│                               scores: A>B  |  shown: B>A                │
 │                                                                         │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│   Overall: FAIL (4/6)  —  1 warning, 1 failure                         │
+│   Overall: FAIL (4/6)  —  1 warning, 1 failure                          │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
