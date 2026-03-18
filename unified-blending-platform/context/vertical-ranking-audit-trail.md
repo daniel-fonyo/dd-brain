@@ -139,7 +139,7 @@ grep -E "\[final-sort\]|\[pipeline-exit\]" logs | grep "consumer=<consumer_id>"
 ---
 
 ## feed-service branch
-`feat/dfonyo-vertical-ranking-debug-logs`
+`feat/dfonyo-vertical-ranking-debug-logs` (committed, not yet pushed)
 
 ## Files modified
 - `VerticalBlending.kt` — blend-filter, blend-score, blend-diversity, blend-exit
