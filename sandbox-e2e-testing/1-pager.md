@@ -5,25 +5,42 @@
 ### 1. End-to-End Pipeline
 
 ```mermaid
-flowchart LR
-    A([Engineer / CI]) --> B[Navigate Homepage]
-    B --> C[Feed Loads]
+flowchart TD
+    A([Developer / CI]) --> Orch
 
-    C --> D[Shadow Traffic]
-    D --> D2[Change vs Baseline]
+    subgraph Orch["🤖 Orchestrator Agent"]
+        O1[Decompose task, spawn subagents, collect results]
+    end
 
-    C --> E[Logs and Network]
-    C --> F[Snowflake Events]
-    C --> G[DV / Experiments]
-    C --> H[Screenshot and Snapshot]
+    Orch --> BA
+    Orch --> STA
 
-    D2 --> I{Assertion Engine}
-    E --> I
-    F --> I
-    G --> I
-    H --> I
+    subgraph BA["🌐 Browser Agent"]
+        B1[Navigate homepage] --> B2[Feed loads] --> B3[Capture logs, network, screenshots]
+    end
 
-    I --> J[/Report/]
+    subgraph STA["🔀 Shadow Traffic Agent"]
+        S1[Sample prod traffic] --> S2[Route to change branch] --> S3[Compare latency and response vs baseline]
+    end
+
+    B3 --> AA
+    S3 --> AA
+
+    subgraph AA["🧪 Assertion Agents — run in parallel"]
+        AA1[Log Analysis Agent]
+        AA2[Snowflake Event Agent]
+        AA3[DV / Experiment Agent]
+        AA4[Visual Inspection Agent]
+        AA5[Ranking Sanity Agent]
+    end
+
+    AA --> RA
+
+    subgraph RA["📊 Report Agent"]
+        R1[Aggregate results, flag failures, format report]
+    end
+
+    RA --> Z[/Report/]
 ```
 
 ---
