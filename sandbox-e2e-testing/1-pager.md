@@ -28,7 +28,7 @@ flowchart TD
     B3 --> AA
     S3 --> AA
 
-    subgraph AA["🧪 Assertion Agents — run in parallel"]
+    subgraph AA["🧪 Assertion Agents"]
         AA1[Log Analysis Agent]
         AA2[Snowflake Event Agent]
         AA3[DV / Experiment Agent]
