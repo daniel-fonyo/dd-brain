@@ -64,6 +64,96 @@ block-beta
 
 ---
 
+### 4. Developer Feedback Loop
+
+Three ways to trigger the same pipeline — manual handoff, on-demand report, and CI on every PR.
+
+```mermaid
+sequenceDiagram
+    participant Dev as Developer
+    participant CLI as Claude CLI
+    participant Skill as Sandbox Skill
+    participant Env as Sandbox Env
+    participant Pipeline as Test Pipeline
+    participant PR as GitHub PR
+
+    Note over Dev,PR: Mode 1 — Hand off sandbox setup
+    Dev->>CLI: "set up my sandbox env"
+    CLI->>Skill: invoke sandbox-setup
+    Skill->>Env: provision / resync
+    Env-->>CLI: ready
+    CLI-->>Dev: Sandbox ready at localhost:3000
+
+    Note over Dev,PR: Mode 2 — Sync changes and get report
+    Dev->>CLI: "sync my latest changes and run assertions"
+    CLI->>Skill: invoke sandbox-test (sync branch)
+    Skill->>Env: pull branch changes
+    Skill->>Pipeline: load homepage + run full assertion suite
+    Pipeline-->>CLI: assertion results
+    CLI-->>Dev: report inline in terminal
+
+    Note over Dev,PR: Mode 3 — CI reports on every PR
+    Dev->>PR: opens pull request
+    PR->>Pipeline: GitHub Actions trigger
+    Pipeline->>Env: provision sandbox
+    Pipeline->>Pipeline: run full assertion suite
+    Pipeline-->>PR: post report as PR comment
+```
+
+---
+
+### 5. CLI Interaction Mockups
+
+**Mode 1 — Sandbox setup**
+```
+$ claude "set up my sandbox env"
+
+  Spinning up sandbox for user-abc...
+  Syncing feed-service branch: feat/ranking-v3
+  Sandbox ready at localhost:3000 ✅
+```
+
+**Mode 2 — Sync + assertion report**
+```
+$ claude "sync my latest changes and give me an assertion report"
+
+  Pulling feat/ranking-v3...
+  Loading homepage...
+  Running assertions...
+
+  ┌──────────────────────────────────────────────────┐
+  │  Homepage E2E Report  |  feat/ranking-v3         │
+  ├──────────────────────────────────────────────────┤
+  │  Feed Load & Logs    ✅  0 errors, 2.1s          │
+  │  Shadow Traffic      ✅  p50 +2ms vs baseline    │
+  │  Snowflake Events    ✅  12 / 12 emitted         │
+  │  DV / Experiments    ✅  exp-ranking-v3 enrolled │
+  │  Visual Snapshot     ⚠️  1 layout diff flagged  │
+  │  Ranking Sanity      ❌  carousel[2] score/order │
+  │                          mismatch (A>B shown B>A)│
+  ├──────────────────────────────────────────────────┤
+  │  FAIL (4/6)  —  details: /tmp/e2e-report-42/    │
+  └──────────────────────────────────────────────────┘
+```
+
+**Mode 3 — CI PR comment**
+```
+🤖 Homepage E2E Report — feat/ranking-v3
+
+| Check            | Result  | Detail                          |
+|------------------|---------|---------------------------------|
+| Feed Load & Logs | ✅ PASS | 0 errors, 2.1s load             |
+| Shadow Traffic   | ✅ PASS | p50 +2ms vs baseline            |
+| Snowflake Events | ✅ PASS | 12/12 emitted                   |
+| DV / Experiments | ✅ PASS | exp-ranking-v3 enrolled         |
+| Visual Snapshot  | ⚠️ WARN | 1 layout diff — [view diff]()   |
+| Ranking Sanity   | ❌ FAIL | carousel[2] score/order mismatch|
+
+Overall: FAIL — 1 warning, 1 failure
+```
+
+---
+
 ## Problem
 
 Validating homepage ranking changes today is manual and slow. Engineers spin up sandbox environments, load the homepage, eyeball the feed, check logs, and try to correlate events and experiment assignments by hand. This is error-prone, doesn't scale, and creates risk when shipping ranking changes.
