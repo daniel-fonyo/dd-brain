@@ -8,20 +8,21 @@
 ```mermaid
 flowchart TD
     A([Developer / CI]) --> Orch
-    PR([PR Diff]) --> DA1
-
-    subgraph DA1["🔍 Debug Agent — Phase 1: Instrument"]
-        D1[Analyze diff] --> D2[Identify log insertion points] --> D3[Inject temp debug statements]
-    end
-
-    DA1 --> Orch
+    PR([PR Diff]) --> Orch
 
     subgraph Orch["🤖 Orchestrator Agent"]
         O1[Decompose task, spawn subagents, collect results]
     end
 
+    Orch --> DA1
     Orch --> BA
     Orch --> STA
+
+    subgraph DA1["🔍 Debug Agent — Phase 1: Instrument"]
+        D1[Analyze diff] --> D2[Identify log insertion points] --> D3[Inject temp debug statements]
+    end
+
+    DA1 --> BA
 
     subgraph BA["🌐 Browser Agent"]
         B1[Navigate homepage] --> B2[Feed loads] --> B3[Capture logs, network, screenshots]
