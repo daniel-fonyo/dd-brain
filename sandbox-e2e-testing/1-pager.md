@@ -6,21 +6,24 @@
 
 ```mermaid
 flowchart LR
-    A([Engineer\nor CI trigger]) --> B[Provision\nSandbox]
-    B --> C[Navigate\nHomepage]
-    C --> D[Feed Loads\nvia feed-service]
+    A([Engineer / CI]) --> B[Navigate Homepage]
+    B --> C[Feed Loads]
 
-    D --> E[Capture Logs\n& Network]
-    D --> F[Snowflake\nEvents Emitted]
-    D --> G[DV / Experiment\nAssignments]
-    D --> H[Screenshot\n+ Snapshot]
+    C --> D[Shadow Traffic]
+    D --> D2[Change vs Baseline]
 
-    E --> I{Assertion\nEngine}
+    C --> E[Logs and Network]
+    C --> F[Snowflake Events]
+    C --> G[DV / Experiments]
+    C --> H[Screenshot and Snapshot]
+
+    D2 --> I{Assertion Engine}
+    E --> I
     F --> I
     G --> I
     H --> I
 
-    I --> J[/Pass ✅ or\nFail ❌ Report/]
+    I --> J[/Report/]
 ```
 
 ---
@@ -31,11 +34,11 @@ flowchart LR
 block-beta
   columns 1
   A["🖥️  Visual Layer — screenshot diff, structural snapshot, carousel interactions"]
-  B["🧪  Ranking Sanity — top-N order, no duplicate / wrong content type, inversion flags"]
+  B["🧪  Ranking Sanity — carousel scores ordered correctly; item/store scores within each carousel match visual position"]
   C["🔬  DV / Experiment Layer — enrollment confirmed, correct variant assigned"]
   D["📡  Snowflake Event Layer — impression events, ranking signals, item IDs & positions"]
   E["📋  Log / Network Layer — feed-service logs, API response shape, no load errors"]
-  F["🏗️  Sandbox Layer — env provisioned, correct user profile & config loaded"]
+  F["🔀  Shadow Traffic Layer — prod sample routed to change branch; latency & response compared to baseline"]
 ```
 
 ---
@@ -43,19 +46,20 @@ block-beta
 ### 3. Test Report Mockup
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│  Homepage E2E Test Report                                │
-│  Sandbox: user-abc  |  2026-03-18 14:32  |  run #42     │
-├──────────────────────────────────────────────────────────┤
-│  🏗️  Sandbox Provision       ✅  ready in 8.4s           │
-│  📋  Feed Load & Logs        ✅  0 errors, 2.1s load     │
-│  📡  Snowflake Events        ✅  12 / 12 events emitted  │
-│  🔬  DV / Experiments        ✅  exp-ranking-v3 enrolled │
-│  🖥️  Visual Snapshot         ⚠️  1 layout diff flagged   │
-│  🧪  Ranking Sanity          ✅  top-10 looks correct    │
-├──────────────────────────────────────────────────────────┤
-│  Overall: PASS (5/6)   ⚠️ 1 warning — see visual diff   │
-└──────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  Homepage E2E Test Report                                        │
+│  Sandbox: user-abc  |  2026-03-18 14:32  |  run #42             │
+├──────────────────────────────────────────────────────────────────┤
+│  📋  Feed Load & Logs    ✅  0 errors, 2.1s load                 │
+│  🔀  Shadow Traffic      ✅  p50 +2ms vs baseline, responses match│
+│  📡  Snowflake Events    ✅  12 / 12 events emitted              │
+│  🔬  DV / Experiments    ✅  exp-ranking-v3 enrolled             │
+│  🖥️  Visual Snapshot     ⚠️  1 layout diff flagged              │
+│  🧪  Ranking Sanity      ❌  carousel[2]: item scores vs visual  │
+│                              order mismatch (scores: A>B, shown: B>A)│
+├──────────────────────────────────────────────────────────────────┤
+│  Overall: FAIL (4/6)  — 1 warning, 1 failure                    │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ---
