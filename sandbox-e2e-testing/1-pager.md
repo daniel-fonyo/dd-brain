@@ -8,6 +8,13 @@
 ```mermaid
 flowchart TD
     A([Developer / CI]) --> Orch
+    PR([PR Diff]) --> DA1
+
+    subgraph DA1["🔍 Debug Agent — Phase 1: Instrument"]
+        D1[Analyze diff] --> D2[Identify log insertion points] --> D3[Inject temp debug statements]
+    end
+
+    DA1 --> Orch
 
     subgraph Orch["🤖 Orchestrator Agent"]
         O1[Decompose task, spawn subagents, collect results]
@@ -21,14 +28,18 @@ flowchart TD
     end
 
     subgraph STA["🔀 Shadow Traffic Agent"]
-        S1[Sample prod traffic] --> S2[Route to change branch] --> S3[Compare latency and response vs baseline]
+        S1[Sample prod traffic] --> S2[Route to change branch] --> S3[Compare vs baseline]
     end
 
+    B3 --> DA2
     B3 --> AA
     S3 --> AA
 
+    subgraph DA2["🔍 Debug Agent — Phase 2: Analyze"]
+        DAN1[Read debug logs] --> DAN2[Validate variable values and state] --> DAN3[Flag unexpected values or flow]
+    end
+
     subgraph AA["🧪 Assertion Agents"]
-    
         AA1[Log Analysis Agent]
         AA2[Snowflake Event Agent]
         AA3[DV / Experiment Agent]
@@ -36,6 +47,7 @@ flowchart TD
         AA5[Ranking Sanity Agent]
     end
 
+    DA2 --> RA
     AA --> RA
 
     subgraph RA["📊 Report Agent"]
@@ -58,6 +70,7 @@ block-beta
   D["📡  Snowflake Event Layer — impression events, ranking signals, item IDs & positions"]
   E["📋  Log / Network Layer — feed-service logs, API response shape, no load errors"]
   F["🔀  Shadow Traffic Layer — prod sample routed to change branch; latency & response compared to baseline"]
+  G["🔍  Debug Analysis Layer — PR diff instrumented with temp logs; variable values and execution flow validated post-load"]
 ```
 
 ---
@@ -72,6 +85,7 @@ block-beta
 │                                                                         │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
+│   🔍  Debug Analysis      ✅  4 vars checked — all values in range       │
 │   📋  Feed Load & Logs    ✅  0 errors, 2.1s load                        │
 │   🔀  Shadow Traffic      ✅  p50 +2ms vs baseline, responses match      │
 │   📡  Snowflake Events    ✅  12 / 12 events emitted                     │
@@ -89,7 +103,64 @@ block-beta
 
 ---
 
-### 4. Developer Feedback Loop
+### 4. Debug Agent — Two-Phase Flow
+
+The Debug Agent bridges the gap between a PR diff and runtime observability. It instruments the code before load and interprets the output after — performing the same validation loop a human engineer would run manually.
+
+```mermaid
+sequenceDiagram
+    participant DA as Debug Agent
+    participant Code as feed-service
+    participant Browser as Browser Agent
+    participant Logs as Captured Logs
+
+    Note over DA,Logs: Phase 1 — Instrumentation (pre-load)
+    DA->>DA: Read PR diff
+    DA->>DA: Identify changed functions, variables, call sites
+    DA->>Code: Inject temp debug statements at critical points
+    Note right of Code: log(rankingScore), log(blendWeights), log(experimentFlag)
+
+    Note over DA,Logs: Homepage loads with debug instrumentation
+    Browser->>Code: Navigate homepage
+    Code->>Logs: Emit debug output alongside normal logs
+
+    Note over DA,Logs: Phase 2 — Analysis (post-load)
+    DA->>Logs: Read all captured debug output
+    DA->>DA: Correlate values against expected behavior from diff
+    DA->>DA: Validate variable values are in expected range
+    DA->>DA: Validate execution flow hit expected paths
+    DA->>DA: Flag unexpected nulls, wrong types, missing calls
+    DA->>Code: Remove temp debug statements
+    DA-->>DA: Emit debug analysis result to Report Agent
+```
+
+**Example Debug Agent output**
+```
+🔍 Debug Agent — Instrumenting from PR diff...
+
+  Identified 4 insertion points:
+  + ranker.go:142     log rankingScore before sort
+  + blender.go:87     log blendWeights after normalization
+  + experiments.go:31 log experimentFlag assignment
+  + scorer.go:204     log itemScores after model inference
+
+  Loading homepage...
+
+  Analyzing debug output...
+  ✅ rankingScore (ranker.go:142)     0.87, 0.72, 0.61 — in expected range
+  ✅ blendWeights (blender.go:87)     [0.6, 0.3, 0.1] — normalized correctly
+  ❌ experimentFlag (experiments.go:31) got nil — expected "ranking-v3"
+       → experiment not enrolled at this point in execution
+  ✅ itemScores (scorer.go:204)       shape [24] — matches expected carousel size
+
+  Removing temp debug statements...
+  Result: 1 failure — experimentFlag nil at assignment
+```
+
+---
+
+### 5. Developer Feedback Loop
+
 
 Three ways to trigger the same pipeline — manual handoff, on-demand report, and CI on every PR.
 
@@ -127,7 +198,7 @@ sequenceDiagram
 
 ---
 
-### 5. CLI Interaction Mockups
+### 6. CLI Interaction Mockups
 
 **Mode 1 — Sandbox setup**
 ```
