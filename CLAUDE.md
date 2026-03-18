@@ -1,12 +1,8 @@
 For any task, reference the repos below for code.
 ## Repos
 - feed-service located in /Users/daniel.fonyo/Projects/feed-service
-- services-protobuf locaed in /Users/daniel.fonyo/Projects/services-protobuf
+- services-protobuf located in /Users/daniel.fonyo/Projects/services-protobuf
 	- Use this for proto contracts and schemas
-
-## Project Management
-You are in the following git project: /Users/daniel.fonyo/Projects/brain
-This project is used to store all files and directories to be used by you for context.
 
 ## Project Management
 You are in the following git project: /Users/daniel.fonyo/Projects/brain
