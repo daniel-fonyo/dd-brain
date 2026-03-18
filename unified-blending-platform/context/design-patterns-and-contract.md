@@ -22,13 +22,13 @@ The config JSON picks which strategies run and in what order. The engine dispatc
 
 ### Chain of Responsibility — pipeline execution
 
-Each step in the pipeline receives the component list, does its work, and passes it to the next step. Each processor is a handler in the chain. The chain is defined by the config, not hardcoded.
+Each step receives the component list, does its work, and passes it to the next. The step order is **hardcoded in the engine** — it is determined by the semantics of each step and never needs to change:
 
 ```
 components → [MODEL_SCORING] → [MULTIPLIER_BOOST] → [DIVERSITY_RERANK] → [FIXED_PINNING] → sorted result
 ```
 
-Unlike the classic pattern, every handler in the chain always runs (no early termination). The chain is assembled from config at request time.
+There is no valid experiment where this order would be different: you can't boost before you have scores, can't diversity-rerank before you've boosted, can't pin before final scores exist. MLEs configure params within each step, not the sequence itself.
 
 ---
 
@@ -69,14 +69,54 @@ This is the mechanism that makes the Chain of Responsibility config-driven: the 
 
 ---
 
-## MLE Contract — Minimal JSON
+## The Value Function
+
+This is where all the variables come together. The engine computes this for every component (carousel or store) at every position:
+
+```
+EV(c, k) = pImp(k) × pAct(c) × vAct(c)
+```
+
+**Variable dictionary:**
+
+| Abbrev | Full name | What it is | Who owns it |
+|---|---|---|---|
+| `EV` | Expected Value | Final ranking score — higher = shown earlier | Engine output |
+| `pImp(k)` | Probability of Impression | P(user sees component at position k). Decays with position: `decay_rate ^ k` | BE — not MLE-configurable |
+| `pAct(c)` | Probability of Action | P(user clicks/orders given they see c). The Sibyl model output. | MLE provides model + features |
+| `vAct(c)` | Value of Action | Business worth if action happens: `gov_w × GOV + fiv_w × FIV + strategic_w × Strategic` | MLE provides weights |
+| `GOV` | Gross Order Value | Revenue from the order | BE signal |
+| `FIV` | First Impression Value | Strategic value of first-time NV/vertical exposure | BE signal |
+| `k` | Position index | 0-indexed row (vertical) or slot (horizontal) | — |
+| `c` | Component | A carousel (vertical) or store/item (horizontal) | — |
+
+**Where each variable is computed in the pipeline:**
+
+```
+MODEL_SCORING     → calls Sibyl → writes pAct(c) to component.score
+MULTIPLIER_BOOST  → multiplies score by calibration + boost weights
+                    (approximates vAct today; becomes explicit in Phase 3)
+DIVERSITY_RERANK  → adjusts scores to enforce page diversity constraints
+FIXED_PINNING     → overrides score for hard-pinned components
+final sort        → sorts by component.score descending = sorts by EV descending
+```
+
+Today `vAct` and `pImp` are implicit — boost weights stand in for value weights with no principled formula. Phase 1 makes `pAct` explicit (MLE declares the model). Phase 3 makes `vAct` and `pImp` explicit (configurable weights + position decay model).
+
+---
+
+## Vertical MLE Contract — Minimal JSON
 
 The formula is: **Expected Value = pImp × pAct × vAct**
 
-- `pImp` — position decay, owned by BE (not MLE-configurable)
-- `pAct` — action probability, **MLE provides the model**
-- `vAct` — value of action, **MLE provides the weights**
-- pipeline steps — **MLE declares which processors run and with what params**
+Step order is hardcoded in the engine. MLEs configure only the knobs:
+
+| Field | Controls | Maps to formula |
+|---|---|---|
+| `p_act.model` + `p_act.features` | Which Sibyl model to call and what to send it | pAct |
+| `v_act` | Business outcome weights (GOV, FIV, strategic) | vAct |
+| `boost_weights` | Per-vertical score multipliers | pAct post-processing |
+| `diversity` | Whether diversity reranking runs and how strongly | pipeline param |
 
 ```json
 {
@@ -86,25 +126,15 @@ The formula is: **Expected Value = pImp × pAct × vAct**
       "model": "store_ranker_v1",
       "features": ["STORE_ID", "CONSUMER_ID", "STORE_ETA", "DAY_OF_WEEK", "IS_DASHPASS"]
     },
-    "v_act": {
-      "gov": 1.0,
-      "fiv": 0.0,
-      "strategic": 0.0
-    },
-    "steps": [
-      { "type": "MODEL_SCORING" },
-      { "type": "MULTIPLIER_BOOST", "boost_weights": { "nv": 1.0 } },
-      { "type": "DIVERSITY_RERANK", "enabled": false },
-      { "type": "FIXED_PINNING",    "pins": [] }
-    ]
+    "v_act": { "gov": 1.0, "fiv": 0.0, "strategic": 0.0 },
+    "boost_weights": { "nv": 1.0 },
+    "diversity": { "enabled": false, "weight": 0.0 }
   },
 
   "treatment_nv_boost": {
     "extends": "control",
     "v_act": { "gov": 0.8, "strategic": 0.2 },
-    "step_params": {
-      "MULTIPLIER_BOOST": { "boost_weights": { "nv": 1.5 } }
-    }
+    "boost_weights": { "nv": 1.5 }
   },
 
   "treatment_intent_v3": {
@@ -114,36 +144,21 @@ The formula is: **Expected Value = pImp × pAct × vAct**
       "model": "vertical_intent_v3",
       "features": ["STORE_ID", "CONSUMER_ID", "DAY_OF_WEEK", "IS_DASHPASS", "NV_LIFESTAGE"]
     },
-    "step_params": {
-      "DIVERSITY_RERANK": { "enabled": true, "weight": 0.4 }
-    }
+    "diversity": { "enabled": true, "weight": 0.4 }
   }
 }
 ```
 
-### What each field does
-
-| Field | Controls | Maps to formula |
-|---|---|---|
-| `p_act.predictor` + `p_act.model` | Which Sibyl endpoint and model version to call | pAct |
-| `p_act.features` | What features to send to Sibyl | pAct inputs |
-| `v_act.gov/fiv/strategic` | How to weight business outcomes in the score | vAct |
-| `steps[].type` | Which processors run and in what order | pipeline shape |
-| `step_params` | Tune a specific processor without changing the pipeline | processor params |
+The engine always runs: `MODEL_SCORING → MULTIPLIER_BOOST → DIVERSITY_RERANK → FIXED_PINNING`.
+MLEs never configure the sequence — they configure what each step does.
 
 ### What MLEs never touch
 
+- Step order — hardcoded by the engine
 - Sibyl RPC, retries, timeouts — BE owns
 - Feature fetching logic — BE owns
-- pImp (position decay) — BE owns, not an experiment variable
-- Trace/logging schema — BE owns, auto-emitted by engine
-- Processor implementations — BE owns
-
-### The `extends` shortcut
-
-`"extends": "control"` copies the full control pipeline then applies only the declared overrides. This is the common case — no need to re-declare every step for a small change.
-
-If the step sequence itself changes (adding/removing a step), declare the full `steps` array instead.
+- pImp (position decay) — BE owns
+- Trace schema + logging — BE owns, auto-emitted after every step
 
 ---
 
@@ -172,6 +187,9 @@ The key difference: carousels have different ranking needs. Favorites needs orde
 
 ### Minimal horizontal JSON
 
+Step order is hardcoded: `MODEL_SCORING → MULTIPLIER_BOOST → BUSINESS_RULES_SORT → ORDER_HISTORY_RERANK`.
+`carousel_overrides` lets specific carousels opt in/out of steps that don't apply to them.
+
 ```json
 {
   "control": {
@@ -181,17 +199,12 @@ The key difference: carousels have different ranking needs. Favorites needs orde
       "features": ["STORE_ID", "CONSUMER_ID", "STORE_ETA", "DAY_OF_WEEK", "IS_DASHPASS"]
     },
     "v_act": { "gov": 1.0, "fiv": 0.0, "strategic": 0.0 },
-    "default_steps": [
-      { "type": "MODEL_SCORING" },
-      { "type": "MULTIPLIER_BOOST", "boost_weights": { "nv": 1.0 } },
-      { "type": "BUSINESS_RULES_SORT" }
-    ],
+    "boost_weights": { "nv": 1.0 },
+    "order_history_rerank": { "enabled": false },
     "carousel_overrides": {
-      "FAVORITES": [
-        { "type": "MODEL_SCORING" },
-        { "type": "BUSINESS_RULES_SORT" },
-        { "type": "ORDER_HISTORY_RERANK", "tiers": ["S1", "S2", "S3"], "lookback": 10 }
-      ]
+      "FAVORITES": {
+        "order_history_rerank": { "enabled": true, "tiers": ["S1", "S2", "S3"], "lookback": 10 }
+      }
     }
   },
 
@@ -207,15 +220,13 @@ The key difference: carousels have different ranking needs. Favorites needs orde
   "treatment_nv_strategic": {
     "extends": "control",
     "v_act": { "gov": 0.7, "strategic": 0.3 },
-    "step_params": {
-      "MULTIPLIER_BOOST": { "boost_weights": { "nv": 1.8 } }
-    }
+    "boost_weights": { "nv": 1.8 }
   }
 }
 ```
 
 ### `carousel_overrides` semantics
 
-If a carousel type has an entry in `carousel_overrides`, that step list replaces `default_steps` entirely for that carousel. This is how carousel-specific logic (S1/S2/S3, NV-only boost) is declared without polluting the default pipeline.
+Per-carousel param overrides on top of the defaults. The engine applies the default config first, then merges the carousel-specific override for that carousel type. This keeps carousel-specific logic (S1/S2/S3 only on FAVORITES, NV boost only on NV) declared explicitly rather than hardcoded inside carousel classes.
 
-The S1/S2/S3 `ORDER_HISTORY_RERANK` step is notable: today it runs silently after logging fires, so the logged positions are wrong. Under UBP it's a declared step — engine traces it, logged positions match what users see.
+The `ORDER_HISTORY_RERANK` step is notable: today it runs silently after Iguazu fires, so logged positions ≠ positions users see. Under UBP it's a declared step — auto-traced, logged positions are accurate.
