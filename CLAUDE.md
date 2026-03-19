@@ -14,6 +14,9 @@ This project is used to store all files and directories to be used by you for co
 3. **Merge**: When the task is complete (or whenever handing back to the user), merge the worktree branch back to `main` and remove the worktree. `main` is the source of truth — Obsidian reads from `main`. **Never leave commits only in a worktree branch when turning the conversation back to the user.**
 4. Every document edit is committed so there is full version history of all context changes.
 
+### Branch Verification (all repos)
+Before making any changes in a referenced repo, **always verify the current branch** matches the intended target. Run `git branch --show-current` and confirm it aligns with the task. Never assume — check first.
+
 ### Referenced Repo Workflow (code changes)
 For `feed-service`, `services-protobuf`, or any other referenced repo:
 1. **Never merge to main directly.** Always work on a feature branch within that repo.
@@ -26,6 +29,11 @@ For `feed-service`, `services-protobuf`, or any other referenced repo:
 
 ### Permissions
 - When the user grants a permission prompt during a session, immediately append the corresponding rule to the `allow` array in `~/.claude/settings.json` so it is pre-approved in future sessions.
+
+### Personal Sandbox Test Setup (feed-service)
+Before any sandbox deploy/test, apply this local-only change (never commit):
+- In `HomepageRequestToContext.kt`, hardcode `getConsumerIdFromRequest` to `return 757606047L`
+- File: `pipelines/homepage/src/main/kotlin/com/doordash/consumer/pipelines/homepage/HomepageRequestToContext.kt`
 
 ### General Rules
 - Always make a plan before starting work. Execute the plan step by step.
