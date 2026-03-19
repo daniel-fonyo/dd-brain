@@ -277,12 +277,16 @@ DV "ubp_hp_horizontal_v2" → "treatment_fw_v2"        (Layer 3 assignment)
 Vertical config (`ubp/experiments/vertical_v3.json`):
 ```json
 {
-  "treatment_intent_v3": {
+	...,
+  "vp_experiment": {
     "extends": "control",
     "p_act": {
       "predictor": "feed_ranking_fw_v1",
       "model": "vertical_intent_v3",
-      "features": ["STORE_ID", "CONSUMER_ID", "NV_LIFESTAGE", "IS_DASHPASS"]
+      "weights": {
+		    cost: 0.3,
+		    profit: 0.1
+      }
     }
   }
 }
@@ -331,3 +335,15 @@ From the real log dump (`consumer=757606047`, `trace_id=f61f3cdb...`):
 | Horizontal | `ubp_hp_horizontal_{experiment_id}` | `ubp/experiments/{experiment_id}.json` |
 
 Engine reads DV assignment → looks up JSON key by assignment value → resolves `extends` chain → injects params into processors.
+
+```
+
+```
+- VP
+	- dasher cost mode and comish fee models
+-  Exploration ranker 
+	- Runs after UR
+- How to validate values from contract?
+	- Need to check output score makes sense? Can we enforce this?
+- Per segment logic per DV thats hardcoded
+	- How does runtime config handle this?
