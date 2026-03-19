@@ -12,9 +12,16 @@ the existing domain model and the ranking engine.
 > collaborate."
 > — refactoring.guru
 
-The 9 domain types (`StoreCarousel`, `ItemCarousel`, `DealCarousel`, etc.) have incompatible
-interfaces — each has its own `predictionScore`, `sortOrder`, `id` field names, and structure.
-`FeedRow` is the target interface. Each `*Row` class is the adapter.
+The 9 carousel container types all implement `BaseCarousel` — they share `id`, `sortOrder`,
+`predictionScore`, and score metadata fields. The incompatibility is at the **item level**:
+`StoreEntity` items have `predictionScore + sortOrder`; `ItemEntity` items have `rankingScore`
+with no `sortOrder`. `FeedRow` is the target interface. Each `*Row` class is the adapter.
+
+> **Investigate (pre-implementation):** `BaseCarousel` already defines most of what `FeedRow`
+> needs. Worth checking whether the adapters can delegate directly to `BaseCarousel` fields
+> for `id` and `score`, or whether a common `Rankable` interface could reduce boilerplate
+> across the 9 adapters. Do not gold-plate — only refactor if it materially simplifies the
+> adapter code.
 
 ```
 StoreCarousel   ──┐
