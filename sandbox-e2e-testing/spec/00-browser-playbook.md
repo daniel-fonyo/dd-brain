@@ -38,32 +38,44 @@ The doordashtest.com UI will evolve over time. When any step fails:
 
 The entire browser session is recorded automatically — no manual screenshot steps needed.
 
-**Config** (`~/.claude/mcp.json`):
+**Mechanism**: Playwright's `contextOptions.recordVideo` in a dedicated config file. The MCP server is started with `--config` pointing to this file.
+
+**Config file** (`~/.claude/playwright-mcp-config.json`):
 ```json
 {
-  "mcpServers": {
-    "playwright": {
-      "command": "npx",
-      "args": [
-        "@playwright/mcp@latest",
-        "--viewport-size=1280x720",
-        "--save-video=1280x720",
-        "--output-dir=/tmp/playwright-mcp-output"
-      ]
+  "browser": {
+    "browserName": "chromium",
+    "launchOptions": { "headless": false },
+    "contextOptions": {
+      "viewport": { "width": 1280, "height": 720 },
+      "recordVideo": {
+        "dir": "/tmp/playwright-mcp-output",
+        "size": { "width": 1280, "height": 720 }
+      }
     }
   }
 }
 ```
 
+**MCP server config** (`~/.claude.json` and `~/.claude/mcp.json`):
+```json
+{
+  "args": ["x", "@playwright/mcp@latest", "--config", "/Users/daniel.fonyo/.claude/playwright-mcp-config.json"],
+  "command": "/Users/daniel.fonyo/.devbox/ai/claude/bun"
+}
+```
+
 - **Format**: `.webm` (VP8) — GitHub-compatible for upload to PRs/issues
 - **Resolution**: 1280x720 — readable and compact
-- **Output**: `/tmp/playwright-mcp-output/` (staging) — move to audit trail after session
-- Video is written when the browser context closes (`browser_close` or session end)
+- **Output**: `/tmp/playwright-mcp-output/<uuid>.webm` — each session gets a random UUID filename
+- Video is finalized when `browser_close` is called — not before
 - **Important**: MCP config changes require a Claude Code session restart to take effect
+- **Note**: `--save-video` is NOT a valid `@playwright/mcp` flag. Use `contextOptions.recordVideo` in the config file instead.
 
-**Post-session**: copy video to audit trail:
-```
-cp /tmp/playwright-mcp-output/*.webm <runDir>/session.webm
+**Post-session**: find and copy video to audit trail:
+```bash
+VIDEO_FILE=$(ls -t /tmp/playwright-mcp-output/*.webm 2>/dev/null | head -1)
+cp "${VIDEO_FILE}" <runDir>/session.webm
 ```
 
 ---
@@ -331,13 +343,15 @@ browser_console_messages → level: error
 
 Record count and content of any JS errors. Known benign errors: React hydration #418/#425/#423 (SSR artifacts).
 
-### 7. Close Browser
+### 7. Close Browser and Capture Video
 
 ```
 browser_close
 ```
-- Finalizes session video to `/tmp/playwright-mcp-output/`
-- Copy to audit trail: `cp /tmp/playwright-mcp-output/*.webm <runDir>/session.webm`
+- Finalizes session video — the `.webm` file only appears after this call completes
+- Each session produces one file: `/tmp/playwright-mcp-output/<uuid>.webm`
+- Find it: `VIDEO_FILE=$(ls -t /tmp/playwright-mcp-output/*.webm 2>/dev/null | head -1)`
+- Copy to audit trail: `cp "${VIDEO_FILE}" <runDir>/session.webm`
 
 ---
 
@@ -372,8 +386,8 @@ browser_close
 | Debug Mode toggle not found | Use fallback: checkbox near bottom-right. If that fails, search for "Debug" text |
 | Debug overlays not appearing | Toggle may not have fired — verify checkbox `checked` state via evaluate |
 | Page shows blank/spinner | Wait longer (10s), then retry navigate |
-| Video not saved | Ensure `browser_close` is called — video writes on context close |
-| Video too large | Reduce viewport: `--save-video=800x600` in mcp.json |
+| Video not saved | Ensure `browser_close` is called — video writes on context close. Verify `~/.claude/playwright-mcp-config.json` has `recordVideo` and MCP server was restarted after config change |
+| Video too large | Reduce size in `~/.claude/playwright-mcp-config.json` → `recordVideo.size` (e.g., `800x600`) |
 | Latency measurement returns null | Use `performance.getEntriesByType('navigation')` fallback |
 | Snapshot too large (token limit) | Debug mode is on — use `browser_evaluate`, never `browser_snapshot` |
 | `setTimeout` not defined | In `browser_run_code`, use `page.waitForTimeout()` instead |
@@ -392,3 +406,4 @@ browser_close
 | 2026-03-19 | Added snapshot token limit warnings | Debug mode snapshots exceeded 700K chars |
 | 2026-03-19 | Added `browser_run_code` extraction code | Generic "read snapshot" approach doesn't work with debug mode on |
 | 2026-03-19 | Added pod liveness check as Step 0 | Without live pod, test runs against default feed, not sandbox code |
+| 2026-03-19 | Fixed video recording — use `contextOptions.recordVideo` | `--save-video` is not a valid `@playwright/mcp` flag; config file approach works |
