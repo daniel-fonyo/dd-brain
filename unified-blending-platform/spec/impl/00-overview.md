@@ -92,8 +92,7 @@ Parts 1–7 cover **vertical Phase 1**. Horizontal **Phase 1.5** follows immedia
 reuses the same interfaces with different implementations — `RowItem` instead of `FeedRow`,
 `RowItemRankingStep` instead of `FeedRowRankingStep`, `RowItemRanker` instead of `FeedRowRanker`.
 
-Phase 1 + Phase 1.5 together are the "aha moment": both ranking layers are config-driven,
-and ads blend natively within carousels as `RowItem` objects (no separate insertion pass).
+Phase 1 + Phase 1.5 together prove the core claim: both ranking layers are config-driven.
 
 ---
 
@@ -119,15 +118,10 @@ They are not MLE-configurable and do not belong in experiment config JSON.
 declared in experiment JSON (e.g. "for this diversity experiment, hold NV_CAROUSEL at position 0").
 It does NOT replace the hardcoded NV post-checkout pinning or PAD positioning above.
 
-### Ads — blend as RowItems in Phase 1.5, not as vertical FeedRows
+### Ads — post-POC scope
 
-Ads are not vertical-level rows. They blend at the **store ranker level** — ad candidates compete
-with organic stores as `RowItem` objects within each carousel's `MODEL_SCORING` step. There is no
-`AD_CAROUSEL` FeedRow at any phase. Do not add it.
-
-Phase 1 vertical ranking does not touch ads. Ads blending (Phase 1.5) is a horizontal concern:
-`RowItemRanker` receives both organic and ad store candidates for a carousel and ranks them
-together. See `context/Homepage Ads Blending.md`.
+Ads blending is not part of the POC. There is no `AD_CAROUSEL` FeedRow. The POC covers only
+organic store and carousel ranking. Ads integration comes after the POC proves the engine is stable.
 
 ### Value function — Phase 1 approximation
 
