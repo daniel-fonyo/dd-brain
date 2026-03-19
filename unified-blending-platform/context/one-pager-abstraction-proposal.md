@@ -129,62 +129,90 @@ New files (pure additions):
 Existing files modified: NONE
 ```
 
-### Wiring (the only existing-file change)
+### Shadow Validation (DV-gated, parallel execution)
 
-One `if/else` branch added to `DefaultHomePagePostProcessor`:
+Shadow validation runs **in parallel** with the existing ranking path — not as an if/else branch.
+A DV controls whether shadow mode is active. The shadow path swallows all exceptions so it can
+never affect the production result.
 
 ```kotlin
-if (ubpEnabled) {
-    feedRowRanker.rank(rows, pipeline, context)   // new path
+// Production path — always runs, always returns result to user
+val result = rankAndDedupeContent(...)
+
+// Shadow path — runs in parallel when DV is enabled, never affects user
+if (ubpShadowEnabled) {
+    try {
+        val shadowResult = feedRowRanker.rank(rows, pipeline, context)
+        compareSortOrders(result, shadowResult)  // log divergences
+    } catch (e: Exception) {
+        log.warn("UBP shadow failed — swallowed", e)  // never propagates
+    }
+}
+
+return result  // always the old-path result
+```
+
+1. Users always see the old-path result. The shadow path's output is discarded.
+2. Compare sort order outputs. Log divergences.
+3. Target: `divergence_count = 0` across sustained traffic before proceeding to rollout.
+
+### Rollout (DV-gated, gradual migration)
+
+Once shadow validation proves `divergence_count = 0`, the shadow DV is replaced with a rollout
+DV that gates the new path as the **primary** path via an if/else branch:
+
+```kotlin
+if (ubpRolloutEnabled) {
+    feedRowRanker.rank(rows, pipeline, context)   // new path — serves result to user
 } else {
     rankAndDedupeContent(...)                      // old path — unchanged, byte-for-byte
 }
 ```
 
-The old path is the `else` branch. It compiles and runs identically. Non-UBP traffic is unaffected.
+The rollout DV is ramped gradually: 1% → 5% → 25% → 50% → 100%. At each stage, monitor latency,
+error rates, and ranking quality metrics. The old path is the `else` branch — it compiles and runs
+identically. Non-UBP traffic is unaffected.
 
-**Characterization tests with UBP flag OFF must remain green** — proving the old path is untouched.
-
-### Shadow Validation
-
-Before any real traffic uses the new path:
-
-1. Run **both** paths for the same request.
-2. Compare sort order outputs.
-3. Log divergences.
-4. Users only see old-path results.
-5. Target: `divergence_count = 0`.
+**Characterization tests with UBP flag OFF must remain green at every stage** — proving the old
+path is untouched.
 
 ---
 
-## What These Abstractions Unlock (Future)
+## What These Abstractions Unlock
 
-The abstractions above are independently valuable, but they also create the foundation for larger
-improvements that are currently impossible:
+### Immediate value
 
-### Near-term
+The abstractions proposed above are independently valuable even before the engine is wired in or any traffic is migrated.
 
-| Capability | How abstractions enable it |
-|---|---|
-| **New carousel type onboarding** | New type = 1 `FeedRowAdapter` class instead of touching 10+ files. Product teams can onboard without core team pairing. |
-| **Per-step observability** | Engine emits `{ row_id, step_id, score_before, score_after }` after each step. Queryable in Snowflake. No ad hoc logging. |
-| **Independent step testing** | Each step has its own unit tests. Step changes don't require full pipeline regression testing — characterization tests catch unintended side effects. |
+**Clear interfaces and abstraction boundaries.** Today, understanding vertical ranking requires tracing through `DefaultHomePagePostProcessor` → `BaseEntityRankerConfiguration` → `EntityScorer` → `BlendingUtil` → `BoostingBundle` → `Ranking` → `NonRankableHomepageOrderingUtil` — a chain of inline method calls across utility objects with no clear contracts between them. The `FeedRow` interface and `FeedRowRankingStep` interface create explicit boundaries: each step has a defined input, output, and parameter contract. Engineers can reason about one step without understanding the entire pipeline.
 
-### Medium-term
+**Easier to reason about vertical ranking.** Each stage of the ranking pipeline becomes a named, isolated step with typed parameters. Instead of reading 6+ files to understand what happens to a carousel's score, you read one step class. Instead of tracing DV keys across scattered runtime JSONs, you look at one params object. The ranking pipeline becomes a sequence of well-named steps that read top-to-bottom.
 
-| Capability | How abstractions enable it |
-|---|---|
-| **Config-driven experiments** | MLEs declare `{ experiment_id, model_name, traffic_pct, params }`. UBP resolves the full pipeline. No code changes per experiment. |
-| **Per-layer traffic management** | Hash-based bucket partitioning per layer (`vertical`, `horizontal`). Experiments are mutually exclusive within a layer, orthogonal across layers. Eliminates the DV waterfall. |
-| **Horizontal ranking** | Mirror the same pattern: `RowItem` interface, `RowItemRankingStep`, `RowItemRanker`. Plug into `DefaultHomePageStoreRanker` with the same if/else wiring. |
+**Simplified new carousel type onboarding.** Today, adding a new carousel type means touching 10+ files across the ranking pipeline because type-checks are scattered everywhere. With the `FeedRow` interface, a new carousel type requires one adapter class. The adapter converts to/from `FeedRow`; the engine and all steps work with it automatically. Product teams bringing a new carousel to the homepage no longer need deep HP knowledge or core team pairing.
 
-### Long-term
+**Independent testability.** Each step has its own unit tests with injected parameters. Step changes don't require full pipeline regression testing — characterization tests catch unintended side effects at the integration level, and step-level tests verify the step's own behavior. This is a fundamental improvement over the current situation where no tests cover the ranking pipeline.
 
-| Capability | How abstractions enable it |
-|---|---|
-| **Calibration step** | New `CalibrationType.PIECEWISE` or `ISOTONIC` step — add to pipeline config, no engine changes. |
-| **Value function step** | `pImp x pAct x vAct` composite scoring — one new step class, one config entry. |
-| **Ads/organic fair competition** | `AdsFeedRow` adapter lets ads compete in the same pipeline as organic carousels. |
+**Per-step observability.** The engine emits `{ row_id, step_id, score_before, score_after }` after each step, queryable in Snowflake. No ad hoc logging. Debugging ranking behavior becomes: query the trace, see exactly which step changed what score and by how much.
+
+### Horizontal ranking follows the same pattern
+
+Once the vertical abstractions are proven, horizontal ranking (store/item ordering within each carousel) follows the identical architecture: `RowItem` interface with adapters, `RowItemRankingStep` with step wrappers, `RowItemRanker` engine. The incision point is `DefaultHomePageStoreRanker.rank()` wrapping `modifyLiteStoreCollection()`. Same shadow → rollout migration path.
+
+---
+
+## Future: Unified Blending Platform
+
+The abstractions above are the foundation for the full Unified Blending Platform vision. The clean interfaces make the following possible without rearchitecting:
+
+**Config-driven experiments.** MLEs declare `{ experiment_id, model_name, traffic_pct, params }`. The engine resolves the full pipeline from a canonical `control.json` with MLE overrides applied on top. No code changes per experiment. No 2-week HP engineer involvement for parameter tuning.
+
+**Per-layer traffic management.** Hash-based bucket partitioning per layer replaces the DV waterfall. Experiments are mutually exclusive within a layer, orthogonal across layers. An MLE says "I want 5% traffic on vertical" — the router allocates it. No dummy DVs, no priority lists, no reserve segments.
+
+**Unified value function.** Today, organic stores, NV stores, ads, and merchandising carousels are scored on completely different scales by different systems. Nobody can answer: "Is this NV carousel worth more to the user than this Rx carousel at position 3?" The `FeedRow` interface and step architecture make it possible to introduce a shared value function — `EV = pImp(k) × pAct(c) × vAct(c)` — where every content type's score is expressed on a comparable, calibrated scale. Calibration steps (`PIECEWISE`, `ISOTONIC`) become new step types added to the pipeline config. Value weights (`gov_w`, `fiv_w`, `strategic_w`) become step parameters. No engine changes required.
+
+**Ads/organic fair competition.** An `AdsFeedRow` adapter lets ad carousels implement the same `FeedRow` interface. Ads compete in the same pipeline as organic carousels on a shared scoring scale. This replaces the current architecture where ads are inserted after organic ranking by a separate blender (`HomepageAdsBlender`) with no cross-comparison.
+
+All of this is built on the same three interfaces (`FeedRow`, `FeedRowRankingStep`, `FeedRowRanker`) and the same patterns (Adapter, Strategy, Chain of Responsibility) proposed in this document. The abstractions come first; the platform is built on proven foundations.
 
 ---
 ---
@@ -386,15 +414,7 @@ In feed-service, the primary seams are:
 
 ---
 
-### B.4 Scratch Refactoring
-
-Play with the code — extract methods, rename variables, move things around. The goal is to understand the code, not clean it. Revert all changes when done. Do not commit scratch refactoring.
-
-This is how we built our understanding of the ranking pipeline before writing any spec. The call chain analysis in this document is the output of scratch refactoring.
-
----
-
-### B.5 The Strangler Fig Pattern
+### B.4 The Strangler Fig Pattern
 
 Build new functionality alongside old, gradually replace without killing the old system. Both paths coexist until the new path is proven at 100% traffic.
 
@@ -421,7 +441,7 @@ The old path is never deleted until the new path is proven at 100% traffic.
 
 ---
 
-### B.6 The Order of Operations
+### B.5 The Order of Operations
 
 Feathers prescribes a specific order for safely modifying legacy code:
 
@@ -484,88 +504,7 @@ Clear lines between layers of the system:
 
 ---
 
-## D. Industry Research: Experiment Traffic Management
-
-This section summarizes industry best practices for per-layer experiment traffic allocation, which inform the future traffic management system these abstractions enable.
-
-### D.1 Google's Overlapping Experiment Infrastructure (KDD 2010)
-
-The foundational model. Domains contain layers; layers contain experiments. Within a layer, experiments are mutually exclusive. Across layers, experiments overlap. Each layer uses a different hash salt for independent assignment: `f(user_id, layer_salt)`.
-
-This maps directly to UBP: a "vertical ranking layer" and "horizontal ranking layer" are natural layer boundaries because they control different parameters.
-
-**Source:** Tang et al., "Overlapping Experiment Infrastructure: More, Better, Faster Experimentation," KDD 2010.
-
----
-
-### D.2 Hash-Based Bucketing (Industry Standard)
-
-The standard mechanism for traffic splitting within a layer:
-
-```
-bucket = MurmurHash3(user_id, layer_salt) % 1000
-
-Buckets 0-49:    Experiment A (5%)
-Buckets 50-149:  Experiment B (10%)
-Buckets 150-999: Control (85%)
-```
-
-Each experiment gets a random, unbiased sample. No priority ordering. Adding or removing an experiment only affects its bucket range. No DV waterfall.
-
-MurmurHash3 is the industry standard (used by Optimizely, Amplitude, Spotify, and most platforms). FNV hash is known to produce correlated assignments across experiments (discovered by OfferUp and Yahoo) and should be avoided.
-
-**Sources:** Spotify Engineering Blog (2020-2021), Depop Engineering Blog, Towards Data Science.
-
----
-
-### D.3 The DV Waterfall Anti-Pattern
-
-The current DoorDash approach: experiments are evaluated in priority order, each "claiming" traffic before the next. Lower-priority experiments only get leftover traffic from a biased subset.
-
-Problems: traffic starvation, ordering bias, scaling nightmare (changing one experiment breaks all downstream), difficult to analyze (leftover population is biased).
-
-The industry consensus solution: random bucket partitioning within a layer. Experiments are peers, not a priority chain.
-
-**Source:** See `context/experiment-traffic-industry-research.md` for the full survey of Google, Microsoft, Meta, Netflix, Spotify, LinkedIn, Uber, and DoorDash approaches with 25+ cited sources.
-
----
-
-### D.4 Microsoft: Interaction Effects Are Negligible
-
-Microsoft's Bing Experimentation Platform (ExP), which runs 200+ experiments concurrently, found that interaction effects between overlapping experiments occur in approximately 0.002% of cases. This is the most cited statistic in the industry for justifying overlapping experiment designs.
-
-**Source:** Microsoft Research Experimentation Platform; Kohavi et al.
-
----
-
-### D.5 Spotify: Bucket Reuse
-
-Spotify uses one global bucket structure. All users are hashed into 1 million buckets using `HASH(user_id, salt) % 1_000_000`. Experiments claim bucket ranges. When buckets are freed after an experiment ends, a new salt reshuffles freed users to prevent carryover effects.
-
-This is the simplest coordination model: easy to coordinate exclusivity, merge programs, and quarantine bad samples.
-
-**Source:** Spotify Engineering Blog, "Experimentation Coordination Strategy" (2021).
-
----
-
-## E. Value Function Framework
-
-The ranking engine implements a value function that provides a principled basis for all ranking decisions:
-
-```
-EV(c, k) = pImp(k) × pAct(c) × vAct(c)
-
-Where:
-  pImp(k) = P(user sees position k)         — position decay, BE-owned
-  pAct(c) = P(user acts | they see c)       — ML model output (Sibyl)
-  vAct(c) = Value of that action             — gov_w × GOV + fiv_w × FIV + strategic_w × Strategic
-```
-
-In the initial implementation (Phase 1), `pImp = 1.0` (not yet modeled) and `vAct` is approximated by the `MULTIPLIER_BOOST` step's calibration × intent × vertical boost weights. The abstraction layer makes it possible to introduce explicit `pImp` decay and `vAct` weight configuration in future phases without changing the engine — each becomes a new step or a parameter update to an existing step.
-
----
-
-## F. Summary of References
+## D. Summary of References
 
 **Books:**
 - Feathers, Michael. *Working Effectively with Legacy Code.* Prentice Hall, 2004.
@@ -576,14 +515,3 @@ In the initial implementation (Phase 1), `pImp = 1.0` (not yet modeled) and `vAc
 **Web references:**
 - refactoring.guru/design-patterns (Adapter, Strategy, Chain of Responsibility, Facade, Factory Method, Prototype, Observer, Proxy, Template Method)
 - Fowler, Martin. "StranglerFigApplication." martinfowler.com, 2004.
-
-**Industry papers and blog posts:**
-- Tang et al. "Overlapping Experiment Infrastructure." KDD 2010 (Google).
-- Kohavi et al. "Online Experimentation at Microsoft." Stanford, 2009.
-- Spotify Engineering Blog. "New Experimentation Platform" Parts 1-2, "Experimentation Coordination Strategy." 2020-2021.
-- Netflix Tech Blog. "It's All A/Bout Testing," "Return-Aware Experimentation." 2020-2025.
-- LinkedIn Engineering. "XLNT A/B Testing Platform."
-- Uber Engineering. "Under the Hood of XP," "Supercharging A/B Testing." 2020.
-- DoorDash Engineering. "Improving Experiment Capacity by 4X," "Interleaving Designs," "MAB Platform," "Display Modules," "Homepage Recommendation," "GenAI Homepage."
-- Statsig. "Embrace Overlapping A/B Tests," "Interaction Effect Detection."
-- Eppo. "Mutual Exclusion (Layers)," "Layers for Coordinated Experimentation."
