@@ -545,13 +545,10 @@ ubp_assembled_contract
 
 ```kotlin
 // In DefaultHomePagePostProcessor.reOrderGlobalEntitiesV2()
-val shadowMode = discoveryExperimentManager.getUbpVerticalShadowMode(context.experimentMap)
+// Always runs — no DV gating. Safe because this is sandbox-only code.
+val oldResult = rankAndDedupeContent(context, ...)
 
-val (content, placementEventData) = when (shadowMode) {
-    "shadow" -> {
-        val oldResult = rankAndDedupeContent(context, ...)
-
-        runCatching {
+runCatching {
             // Assemble the contract from what the old path actually used
             val assembled = contractAssembler.assembleVertical(context)
 
@@ -585,14 +582,11 @@ val (content, placementEventData) = when (shadowMode) {
             } else {
                 logger.info("ubp_shadow_match layer=vertical request_id=${context.requestId}")
             }
-        }.onFailure {
-            logger.warn("ubp_shadow_error layer=vertical request_id=${context.requestId}", it)
-        }
-
-        oldResult
-    }
-    else -> rankAndDedupeContent(context, ...)
+}.onFailure {
+    logger.warn("ubp_shadow_error layer=vertical request_id=${context.requestId}", it)
 }
+
+// Always return old result — shadow never changes user-visible behavior
 ```
 
 ---
@@ -601,14 +595,12 @@ val (content, placementEventData) = when (shadowMode) {
 
 ```kotlin
 // In DefaultHomePageStoreRanker.rank()
-val shadowMode = discoveryExptManager.getUbpHorizontalShadowMode(context.experimentMap)
-
+// Always runs — no DV gating. Safe because this is sandbox-only code.
 return scoredCollections.map { collection ->
     CoroutineScope(...).async {
         val oldResult = modifyLiteStoreCollection(context, collection, storesById, metadata, ...)
 
-        if (shadowMode == "shadow") {
-            runCatching {
+        runCatching {
                 // Assemble per-carousel contract (now includes score modifiers, campaigns, etc.)
                 val assembled = contractAssembler.assembleHorizontal(context, collection, metadata)
 
@@ -637,12 +629,11 @@ return scoredCollections.map { collection ->
                         "divergence_count=${divergences.size}"
                     )
                 }
-            }.onFailure {
-                logger.warn("ubp_shadow_error layer=horizontal request_id=${context.requestId}", it)
-            }
+        }.onFailure {
+            logger.warn("ubp_shadow_error layer=horizontal request_id=${context.requestId}", it)
         }
 
-        oldResult
+        oldResult  // always return old result
     }
 }.awaitAll()
 ```
@@ -701,17 +692,6 @@ Phase A is where you spend time. Phases B-D are mechanical.
 
 ---
 
-## New DV Manifest Entries
-
-```kotlin
-UBP_HP_VERTICAL_SHADOW("ubp_hp_vertical_shadow"),
-UBP_HP_HORIZONTAL_SHADOW("ubp_hp_horizontal_shadow"),
-```
-
-Both default to `"off"`. Enable `"shadow"` for a canary % of traffic.
-
----
-
 ## Critical Rules
 
 1. **New path errors must never affect users.** Wrapped in `runCatching`. On failure: log `ubp_shadow_error`, return old result.
@@ -732,9 +712,8 @@ Both default to `"off"`. Enable `"shadow"` for a canary % of traffic.
 | New | `libraries/common/.../ubp/horizontal/params/ScoreModifierParams.kt` |
 | New | `libraries/common/.../ubp/horizontal/params/CampaignSortParams.kt` |
 | New | `libraries/common/.../ubp/horizontal/params/BusinessRulesSortParams.kt` |
-| Modify | `DefaultHomePagePostProcessor.kt` — add shadow branch with assembler |
-| Modify | `DefaultHomePageStoreRanker.kt` — add shadow branch with assembler |
-| Modify | `DiscoveryExperimentManager.kt` — add 2 DV entries |
+| Modify | `DefaultHomePagePostProcessor.kt` — add shadow assembler call after old path |
+| Modify | `DefaultHomePageStoreRanker.kt` — add shadow assembler call after old path |
 
 ---
 
@@ -749,7 +728,7 @@ before the engine exists. This is the fast path to visual feedback.
 
 ## Done When
 
-- Assembler runs on canary traffic and emits `ubp_assembled_contract` logs for both layers
+- Assembler runs on sandbox and emits `ubp_assembled_contract` logs for both layers
 - **experimentMap snapshot** logged with every contract
 - You can grep a `request_id` and see the full vertical + horizontal contract JSONs
 - Vertical contracts show: predictor, blending params, diversity state, **boosting state**, pin rules

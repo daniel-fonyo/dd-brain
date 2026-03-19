@@ -62,7 +62,7 @@ Part 3: FeedRowRankingStep Interface + 4 Implementations
 Part 4: FeedRowRanker Engine + Registry
   ↓  (engine must exist before it can be wired in)
 Part 6: Wiring into Pipeline
-  ↓  (engine live but behind shadow DV)
+  ↓  (engine live in sandbox — no DV gating)
 Part 7: Tracing
      (can be built in parallel with 3/4, but completes after 6)
 ```

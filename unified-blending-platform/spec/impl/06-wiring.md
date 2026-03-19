@@ -9,10 +9,10 @@ still returns the old result.
 
 ## What Changes
 
-Part 1 added shadow branches with `UbpContractAssembler`:
+Part 1 added shadow assembler calls in both pipeline files (no DV gating — sandbox-only):
 
-- `DefaultHomePagePostProcessor` gated on `ubp_hp_vertical_shadow`
-- `DefaultHomePageStoreRanker` gated on `ubp_hp_horizontal_shadow`
+- `DefaultHomePagePostProcessor` — vertical assembler + shadow comparison
+- `DefaultHomePageStoreRanker` — horizontal assembler + shadow comparison per carousel
 
 Both already assemble contracts and log them. This part adds the engine call: run
 `FeedRowRanker.rank()` / `RowItemRanker.rank()` with the assembled contract, then compare
@@ -115,11 +115,10 @@ runCatching {
 
 ```kotlin
 // In DefaultHomePageStoreRanker.rank()
-// (from Part 1 — the shadow branch, now with engine wired)
-if (shadowMode == "shadow") {
-    runCatching {
-        // Assemble per-carousel contract
-        val assembled = contractAssembler.assembleHorizontal(context, collection)
+// (from Part 1 — always runs, no DV gating — sandbox-only)
+runCatching {
+    // Assemble per-carousel contract
+    val assembled = contractAssembler.assembleHorizontal(context, collection, metadata)
 
         logger.info(
             "ubp_assembled_contract layer=horizontal " +
@@ -144,9 +143,8 @@ if (shadowMode == "shadow") {
                 "divergence_count=${divergences.size}"
             )
         }
-    }.onFailure {
-        logger.warn("ubp_shadow_error layer=horizontal request_id=${context.requestId}", it)
-    }
+}.onFailure {
+    logger.warn("ubp_shadow_error layer=horizontal request_id=${context.requestId}", it)
 }
 ```
 
@@ -195,17 +193,11 @@ fun provideContractAssembler(
 
 `ModelScoringStep` requires `EntityScorer`, which is already provided by the existing module.
 
-## getUbpShadowMode Helpers
+## getUbpTreatment Helpers (Post-Sandbox — When DV Gating Is Added)
 
-Add to `DiscoveryExperimentManager`:
+When promoting beyond sandbox, add to `DiscoveryExperimentManager`:
 
 ```kotlin
-fun getUbpVerticalShadowMode(experimentMap: Map<String, String>): String =
-    experimentMap[Manifest.UBP_HP_VERTICAL_SHADOW.key] ?: "off"
-
-fun getUbpHorizontalShadowMode(experimentMap: Map<String, String>): String =
-    experimentMap[Manifest.UBP_HP_HORIZONTAL_SHADOW.key] ?: "off"
-
 fun getUbpVerticalTreatment(experimentMap: Map<String, String>): String =
     experimentMap[Manifest.UBP_HP_VERTICAL_V1.key] ?: "control"
 
@@ -216,11 +208,13 @@ fun getUbpHorizontalTreatment(experimentMap: Map<String, String>): String =
 Add to `Manifest`:
 
 ```kotlin
-UBP_HP_VERTICAL_SHADOW("ubp_hp_vertical_shadow"),
-UBP_HP_HORIZONTAL_SHADOW("ubp_hp_horizontal_shadow"),
 UBP_HP_VERTICAL_V1("ubp_hp_vertical_v1"),
 UBP_HP_HORIZONTAL_V1("ubp_hp_horizontal_v1"),
 ```
+
+**Note:** Shadow DVs (`ubp_hp_vertical_shadow`, `ubp_hp_horizontal_shadow`) are not needed.
+Shadow runs unconditionally in sandbox. DV gating for treatment DVs above is added when
+promoting to real traffic (Stage 3+).
 
 ## Transition: Assembly → Static control.json
 
