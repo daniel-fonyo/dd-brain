@@ -40,6 +40,7 @@ flowchart TD
         DAN1[Read debug logs] --> DAN2[Validate variable values and state] --> DAN3[Flag unexpected values or flow]
     end
 
+
     subgraph AA["🧪 Assertion Agents"]
         AA1[Log Analysis Agent]
         AA2[Snowflake Event Agent]
