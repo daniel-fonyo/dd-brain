@@ -55,13 +55,13 @@ Entry point for "test this change". Smart about what to do based on current stat
 
 3. Readiness check
    kubectl get pod <pod> -n feed-service-sandbox
-   └── Running → skip setup, proceed
+   └── Running → proceed
    └── Missing/Error → invoke sandbox-setup first
 
-4. Sync changes
-   devbox run web-group1-remote (background)
-   └── wait for "Service is ready now"
-   └── update state if pod/url changed
+4. Sync decision (skip for CI — CI always syncs on commit)
+   └── user said "resync" / "retest my changes"? → run devbox run
+   └── git status --porcelain has output? → run devbox run (local changes present)
+   └── no changes, no resync request → skip devbox run (sandbox already up-to-date)
 
 5. Init audit run
    create feed-service/.claude/sandbox/runs/<run-id>/
@@ -174,7 +174,14 @@ Extend to accept a `runDir` parameter (path to current audit run directory):
 
 ---
 
-## Open Questions
-- Should `devbox run` stay alive between test runs, or always re-sync?
-- How many runs to retain before pruning old entries?
-- Should `steps.jsonl` be readable by future Claude sessions for pattern analysis?
+## Design Decisions
+
+| Question | Decision |
+|---|---|
+| devbox run — always or conditional? | Conditional: only if local changes exist (`git status`) or user explicitly requests resync. CI always runs it. |
+| Pruning | No pruning. Runs accumulate indefinitely. |
+| steps.jsonl purpose | Claude's structured run memory. When user asks "what happened last time?" or "why did it fail?", Claude reads steps.jsonl to reconstruct the run without re-executing. Also enables pattern queries across runs (e.g. "which step keeps failing?"). Keep it. |
+
+## Prerequisite: Browser POC
+
+Before implementing sandbox-run, validate that Playwright MCP can control the IT-managed Chrome browser. POC: navigate to doordash.com, scroll carousels, capture screenshots. See `spec/00-browser-poc.md`.
