@@ -3,8 +3,9 @@
 ## Goal
 
 Run both the old ranking path and the new UBP engine path on every request simultaneously.
-Always return the old result to the user. Emit both outputs to Snowflake for comparison.
-This validates that `control.json` exactly replicates prod behavior before any real traffic migrates.
+Always return the old result to the user. Log any sort-order differences as structured errors
+for comparison. This validates that `control.json` exactly replicates prod behavior before any
+real traffic migrates.
 
 ## Design Pattern: Proxy (Structural)
 
@@ -23,7 +24,7 @@ Caller
 ShadowRankingProxy.rank()
   ├── oldPath() → result_old   (always returned)
   ├── newPath() → result_new   (run but discarded)
-  └── emit(requestId, result_old, result_new) → Iguazu
+  └── if divergence → logger.warn(structured diff)
 ```
 
 ## Is-a / Has-a
@@ -50,13 +51,20 @@ val (content, placementEventData) = when (shadowMode) {
         runCatching {
             val rows = toFeedRows(layout)
             val newResult = feedRowRanker.rank(rows, "control", context)
-            ubpShadowEmitter.emit(
-                requestId = context.requestId,
-                layer = "vertical",
-                oldSortOrders = oldResult.first.toSortOrderMap(),
-                newSortOrders = newResult.toSortOrderMap(),
-            )
-        }.onFailure { logger.warn("UBP shadow vertical failed", it) }
+
+            val oldOrder = oldResult.first.toSortOrderMap()
+            val newOrder = newResult.toSortOrderMap()
+            val divergences = oldOrder.filter { (id, pos) -> newOrder[id] != pos }
+
+            if (divergences.isNotEmpty()) {
+                logger.warn(
+                    "ubp_shadow_divergence layer=vertical " +
+                    "request_id=${context.requestId} " +
+                    "divergence_count=${divergences.size} " +
+                    "diffs=${divergences.map { (id, old) -> "$id:$old->${newOrder[id]}" }.joinToString(",")}"
+                )
+            }
+        }.onFailure { logger.warn("ubp_shadow_error layer=vertical request_id=${context.requestId}", it) }
 
         oldResult  // always return old
     }
@@ -80,14 +88,20 @@ return scoredCollections.map { collection ->
         if (shadowMode == "shadow") {
             runCatching {
                 val newResult = rowItemRanker.rank(collection, "control", context)
-                ubpShadowEmitter.emit(
-                    requestId = context.requestId,
-                    layer = "horizontal",
-                    carouselId = collection.id,
-                    oldStoreOrder = oldResult.storeIds,
-                    newStoreOrder = newResult.storeIds,
-                )
-            }.onFailure { logger.warn("UBP shadow horizontal failed", it) }
+
+                val divergences = oldResult.storeIds
+                    .zip(newResult.storeIds)
+                    .filter { (old, new) -> old != new }
+
+                if (divergences.isNotEmpty()) {
+                    logger.warn(
+                        "ubp_shadow_divergence layer=horizontal " +
+                        "request_id=${context.requestId} " +
+                        "carousel_id=${collection.id} " +
+                        "divergence_count=${divergences.size}"
+                    )
+                }
+            }.onFailure { logger.warn("ubp_shadow_error layer=horizontal request_id=${context.requestId}", it) }
         }
 
         oldResult  // always return old
@@ -95,31 +109,18 @@ return scoredCollections.map { collection ->
 }.awaitAll()
 ```
 
-## Shadow Emitter
+## Log Format
 
-**New class:** `UbpShadowEmitter`
+All shadow output uses a single log line with structured key=value pairs:
 
-```kotlin
-class UbpShadowEmitter(private val iguazuModule: IguazuModule) {
-    fun emit(requestId: String, layer: String, oldSortOrders: Map<String, Int>, newSortOrders: Map<String, Int>) {
-        // Emit one event per divergent row_id
-        val divergences = oldSortOrders.entries
-            .filter { (id, oldPos) -> newSortOrders[id] != oldPos }
-
-        if (divergences.isNotEmpty()) {
-            iguazuModule.emit(UbpShadowDivergenceEvent(
-                requestId = requestId,
-                layer = layer,
-                divergences = divergences.map { (id, oldPos) ->
-                    SortOrderDivergence(rowId = id, oldPosition = oldPos, newPosition = newSortOrders[id])
-                }
-            ))
-        }
-    }
-}
+```
+ubp_shadow_divergence  layer=vertical  request_id=<id>  divergence_count=<n>  diffs=<id>:<old>-><new>,...
+ubp_shadow_error       layer=vertical  request_id=<id>  (exception attached)
 ```
 
-Emit only on divergence — not on every request. Keeps Iguazu volume manageable.
+This makes divergences grep-able and queryable in the logging system without any new infra.
+
+**Validation target:** `divergence_count = 0` on sampled requests before promoting to real traffic.
 
 ## New DV Manifest Entries
 
@@ -131,28 +132,11 @@ UBP_HP_HORIZONTAL_SHADOW("ubp_hp_horizontal_shadow"),
 
 Both default to `"off"`. Enable `"shadow"` for a canary % of traffic.
 
-## Snowflake Validation Query
-
-```sql
-SELECT
-    layer,
-    COUNT(*) AS total_requests,
-    COUNTIF(divergence_count > 0) AS divergent_requests,
-    COUNTIF(divergence_count > 0) / COUNT(*) AS divergence_rate,
-    AVG(divergence_count) AS avg_divergences_per_request
-FROM ubp_shadow_divergence_events
-WHERE _date >= CURRENT_DATE - 1
-GROUP BY layer
-ORDER BY layer;
-```
-
-Target: divergence_rate < 0.01 (>99% match) before promoting to real traffic.
-
 ## Critical Rules
 
-1. **New path errors must never affect users.** Always wrapped in `runCatching`. On failure: log, skip, return old result.
-2. **New path latency must not add to p99.** Run new path asynchronously if it threatens latency budget. Log its duration separately.
-3. **Shadow is temporary.** Delete the shadow branch once Stage 2 (real traffic) is validated. Don't let it become permanent scaffolding.
+1. **New path errors must never affect users.** Always wrapped in `runCatching`. On failure: log with `ubp_shadow_error`, skip, return old result.
+2. **New path latency must not add to p99.** Log its duration; alert if it exceeds 5ms p99 additional.
+3. **Shadow is temporary.** Delete the shadow branch once the control arm is validated. Don't let it become permanent scaffolding.
 
 ## Files to Create / Modify
 
@@ -160,9 +144,9 @@ Target: divergence_rate < 0.01 (>99% match) before promoting to real traffic.
 |---|---|
 | Modify | `DefaultHomePagePostProcessor.kt` — add shadow branch |
 | Modify | `DefaultHomePageStoreRanker.kt` — add shadow branch |
-| New | `libraries/common/.../ubp/shadow/UbpShadowEmitter.kt` |
-| New | proto: `ubp_shadow_divergence.proto` |
 | Modify | `DiscoveryExperimentManager.kt` — add 2 DV entries |
+
+No new classes, no new protos. Just the two modified files and the DV entries.
 
 ## Prerequisites
 
@@ -172,5 +156,5 @@ stub/no-op until Parts 2–5 are complete. The shadow DV stays `"off"` until the
 ## Done When
 
 - Shadow runs on canary traffic (`ubp_hp_vertical_shadow = "shadow"` for 1% of users)
-- Snowflake query shows divergence_rate < 0.01 for vertical
+- Logs show `ubp_shadow_divergence` lines with `divergence_count=0` for vertical
 - Latency impact < 5ms p99 additional
