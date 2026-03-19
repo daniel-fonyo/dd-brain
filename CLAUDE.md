@@ -11,7 +11,7 @@ This project is used to store all files and directories to be used by you for co
 ### Brain Worktree Workflow (document changes)
 1. **Start**: Create a worktree in `brain` at the very beginning of ANY interaction that requires creating or editing brain documents — no exceptions, even for small or quick edits.
 2. **Work**: Make all document edits (plans, context, notes) inside the worktree branch.
-3. **Merge**: When the task is complete, merge the worktree branch back to `main` and remove the worktree. `main` is the source of truth — Obsidian reads from `main`.
+3. **Merge**: When the task is complete (or whenever handing back to the user), merge the worktree branch back to `main` and remove the worktree. `main` is the source of truth — Obsidian reads from `main`. **Never leave commits only in a worktree branch when turning the conversation back to the user.**
 4. Every document edit is committed so there is full version history of all context changes.
 
 ### Referenced Repo Workflow (code changes)
