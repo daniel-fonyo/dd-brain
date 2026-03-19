@@ -9,11 +9,11 @@ IT dept manages Chrome — need to confirm Playwright MCP can control it before 
 
 ## Setup
 
-Playwright MCP is configured machine-level in `feed-service/.mcp.json` (gitignored). It does **not** live in brain or any checked-in location.
+Playwright MCP is configured globally in `~/.claude/mcp.json` — available in all Claude Code sessions regardless of working directory.
 
 **Pre-requisites:**
 1. Install Node: `brew install node`
-2. `feed-service/.mcp.json` already created with:
+2. `~/.claude/mcp.json` contains:
    ```json
    {
      "mcpServers": {
@@ -24,7 +24,7 @@ Playwright MCP is configured machine-level in `feed-service/.mcp.json` (gitignor
      }
    }
    ```
-3. Open a **Claude Code session from `feed-service/`** — Playwright MCP will be available as a tool after approving it on first use.
+3. Playwright MCP will be available as a tool in any Claude Code session after approving it on first use.
 
 > **Note:** Playwright MCP uses bundled Chromium by default, not the IT-managed Chrome binary. This avoids managed browser policy restrictions.
 
