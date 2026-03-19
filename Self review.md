@@ -1,0 +1,13 @@
+- 50-100 PRs
+	- a few for highlight
+	- write thorough self review
+		- scope
+		- complexity
+		- problem
+		- solution is principled? tradeoff?
+- rating
+	- good
+	- excellent
+	- redefine
+- Project docs
+- keep track of projects to take credit
