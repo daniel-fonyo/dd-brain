@@ -45,7 +45,7 @@ The entire browser session is recorded automatically — no manual screenshot st
 {
   "browser": {
     "browserName": "chromium",
-    "launchOptions": { "headless": false },
+    "launchOptions": { "headless": true },
     "contextOptions": {
       "viewport": { "width": 1280, "height": 720 },
       "recordVideo": {
