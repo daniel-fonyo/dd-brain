@@ -33,10 +33,7 @@
 
 ## Problem Statement
 
-The DoorDash homepage started as a single-vertical product (just Restaurants). Over time it grew
-to serve multiple content types on the same page: Rx stores, NV (grocery/convenience) stores,
-item carousels, ads, deals, DashPass merchandising. Each of these was built independently by
-different teams with their own ranking logic.
+The DoorDash homepage started as a single-vertical product (just Restaurants). Over time it grew to serve multiple content types on the same page: Rx stores, NV (grocery/convenience) stores, item carousels, ads, deals, DashPass merchandising. Each of these was built independently by different teams with their own ranking logic.
 
 The result: **there is no single system deciding what goes where on the page**. Instead there are
 4–5 separate systems each doing their own thing, stitched together with heuristics:
@@ -50,8 +47,7 @@ The result: **there is no single system deciding what goes where on the page**. 
 Nobody can answer: "Is this NV carousel worth more to the user than this Rx carousel at position 3?" — because the scores are on completely different scales and computed by different systems.
 
 **Engineering consequence:** Every new experiment requires 10–15 file changes, 2+ weeks of HP
-engineer involvement, and logic that accumulates permanently. MLEs cannot ship experiments without
-HP. Partner teams cannot add custom logic without modifying the core pipeline.
+engineer involvement, and logic that accumulates permanently. MLEs cannot ship experiments without HP. Partner teams cannot add custom logic without modifying the core pipeline.
 
 ---
 
@@ -218,6 +214,7 @@ DV "ubp_hp_vertical_v3"   → "intent_model_v3"    (vertical)
 | `MODEL_SCORING` | Sibyl scoring — assigns `pAct` to each FeedRow | `EntityRankerConfiguration.getScoreBundleWithWorkflowHelper()` |
 | `MULTIPLIER_BOOST` | Calibration × intent × vertical boost weights (`≈ vAct`) | `BlendingUtil.blendBundle()` |
 | `DIVERSITY_RERANK` | Greedy rerank penalizing non-Rx density | `BlendingUtil.rerankEntitiesWithDiversity()` |
+| `POSITION_BOOSTING` | Deal carousel multiplier + boost-by-position enforcement + NV unpinning | `Boosting.kt` logic after blending |
 | `FIXED_PINNING` | MLE-configured position pins (not the hardcoded business fixups) | `BoostingBundle.boosted()` |
 
 ### Horizontal step types (Phase 1.5)
@@ -225,9 +222,10 @@ DV "ubp_hp_vertical_v3"   → "intent_model_v3"    (vertical)
 | Type | What it does | Replaces today |
 |---|---|---|
 | `MODEL_SCORING` | Score organic + ad stores together via Sibyl | `StoreCollectionScorer.regressionContext()` |
-| `MULTIPLIER_BOOST` | Strategic boost (NV, DashPass, campaign) | `getScoreModifierMap()` |
-| `BUSINESS_RULES_SORT` | Open/closed, priority biz, campaign pins | `modifyLiteStoreCollection()` when-chain |
-| `ORDER_HISTORY_RERANK` | S1/S2/S3 reranking by order history | `FavoritesCarousel.rerankDecoratedEntities()` |
+| `SCORE_MODIFIER` | Per-business/store score multipliers from runtime JSON | `getScoreModifierMap()` in `StoreCollectionScorer.kt` |
+| `CAMPAIGN_SORT` | Campaign-positioned stores + business sort order overrides | `StoreCarouselService.sortStoreEntitiesForCarousels()` |
+| `BUSINESS_RULES_SORT` | Open/closed sort + AlwaysOpen type + priority business/vertical IDs | `StoreCarouselService` comparator chain + `StoreStatusComparator` |
+| `ORDER_HISTORY_RERANK` | S1/S2/S3 reranking by order history | `WholeOrderReorderFilterUtil.getGoToOrders()` |
 
 ---
 
