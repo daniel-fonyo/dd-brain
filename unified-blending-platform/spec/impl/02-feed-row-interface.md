@@ -82,6 +82,10 @@ enum class RowType {
 `FIXED_PINNING` and `DIVERSITY_RERANK` steps use `RowType` to apply type-specific logic
 without casting the `FeedRow` itself.
 
+**Phase 1 scope notes:**
+- No `AD_CAROUSEL` — ads are not in `HomePageStoreLayoutOutputElements` and stay as post-ranking insertion (Phase 3+ vision)
+- No `NV_CAROUSEL` — NV stores appear within `StoreCarousel` and `ItemCarousel` types; there is no distinct NV domain type. NV-specific step behavior (e.g. NV-only pin or boost) requires either a partner-owned step (Phase 2+) or carousel ID matching in params.
+
 ## The 9 Adapters
 
 Each adapter follows the same structure. Shown once in full, then abbreviated for the rest.

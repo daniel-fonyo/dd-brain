@@ -36,7 +36,7 @@ type-switching glue.
 ```kotlin
 interface FeedRow {
     val id: String
-    val type: RowType          // STORE_CAROUSEL, ITEM_CAROUSEL, NV_CAROUSEL, AD_CAROUSEL, ...
+    val type: RowType          // STORE_CAROUSEL, ITEM_CAROUSEL, NV_CAROUSEL, ... (see RowType enum)
     var score: Double                // mutable — processors update this in-place
     val metadata: MutableMap<String, Any>
     fun recordTrace(stepId: String, value: Any)
@@ -44,8 +44,10 @@ interface FeedRow {
 }
 ```
 
-The engine operates on `MutableList<FeedRow>` throughout. Ads, organic, and merch
-carousels are in the same list from the start — not inserted after organic ranking completes.
+The engine operates on `MutableList<FeedRow>` throughout. In Phase 1, this list contains only
+**organic carousels** from `HomePageStoreLayoutOutputElements`. Ads remain a separate post-ranking
+insertion path and are not FeedRows in Phase 1. Phase 3+ vision: ads as `AD_CAROUSEL` FeedRow
+competing in the same list with organic.
 
 To participate in UBP ranking, a content type implements this interface and provides an adapter:
 

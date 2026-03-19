@@ -94,3 +94,51 @@ different implementations. Where a part applies to both phases, this is noted ex
 Parts 1, 2, 3, 4, 5, 6, 7 all apply to **vertical Phase 1**.
 Parts 2, 3, 4, 5, 6, 7 have direct **horizontal Phase 2** equivalents with the same structure
 but different concrete classes (`RowItem` instead of `FeedRow`, `RowItemRankingStep`, etc.).
+
+---
+
+## Phase 1 Scope Boundary — What UBP Does Not Handle
+
+UBP Phase 1 replaces **only** `rankAndMergeContent()` in `reOrderGlobalEntitiesV2()`. Everything
+listed below stays unchanged. Do not attempt to absorb these into UBP steps.
+
+### Post-ranking business rule fixups (stay in `NonRankableHomepageOrderingUtil`)
+
+These run AFTER the UBP engine returns. They are business constraints, not ranking experiments.
+They are not MLE-configurable and do not belong in experiment config JSON.
+
+| Fixup | Why it stays outside UBP |
+|---|---|
+| NV carousel pinning (`updateSortOrderOfNVCarousel`) | Context-driven at request time (post-checkout boosting state), not a static experiment param |
+| Member pricing priority (`updateSortOrderOfMemberPricing`) | Runtime feature flag reading a hardcoded carousel ID list from `DeserializedRuntimeCache` |
+| PAD / Taste of DashPass positioning (`updateSortOrderOfTasteOfDashPass`) | Controlled by its own separate DV (`pad_carousel_spotlight_v2`), independent of UBP config |
+| Color bleed reordering | Presentation constraint — adjacent same-brand color prevention, not ranking |
+| Immersive content spacing | Presentation constraint — gap rules between immersive content types, not ranking |
+
+**`FIXED_PINNING` step scope**: The `FIXED_PINNING` step in UBP is only for MLE-configured pins
+declared in experiment JSON (e.g. "for this diversity experiment, hold NV_CAROUSEL at position 0").
+It does NOT replace the hardcoded NV post-checkout pinning or PAD positioning above.
+
+### Ads (stay as post-ranking insertion)
+
+Ads are assembled by a separate code path (`PlacementProcessingUtil.rankAdsCandidates()`,
+`maybeAddSponsoredCarousel()`) that runs outside `rankAndMergeContent()`. They are not part of
+`HomePageStoreLayoutOutputElements` and therefore not in `toFeedRows()`.
+
+Phase 1 UBP has no `AD_CAROUSEL` FeedRow. Ads compete in a unified list in Phase 3+ only.
+
+### Value function — Phase 1 approximation
+
+```
+Full EV  = pImp(k) × pAct(c) × vAct(c)
+
+Phase 1  =    1.0  ×  MODEL_SCORING  ×  MULTIPLIER_BOOST
+```
+
+- `pImp(k)` (position decay) is **not implemented in Phase 1** — steps run before final position
+  is known
+- `MODEL_SCORING` computes `pAct(c)` — the Sibyl CTR/CVR/order probability
+- `MULTIPLIER_BOOST` approximates `vAct(c)` — boost weights encode business value differences
+  between content types at equal model score
+- Step order in config matters: `MODEL_SCORING` must precede `MULTIPLIER_BOOST`
+- Phase 3 introduces explicit `pImp` decay and explicit `vAct` weight config
