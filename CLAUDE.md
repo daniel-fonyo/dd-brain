@@ -35,6 +35,12 @@ Before any sandbox deploy/test, apply this local-only change (never commit):
 - In `HomepageRequestToContext.kt`, hardcode `getConsumerIdFromRequest` to `return 757606047L`
 - File: `pipelines/homepage/src/main/kotlin/com/doordash/consumer/pipelines/homepage/HomepageRequestToContext.kt`
 
+### Sandbox Browser Test Credentials
+- **Domain**: `https://www.doordashtest.com/` (never `doordash.com`)
+- **Email**: `tas-cx-doortest-egsn7vrtcl@doordash.com`
+- **Password**: `1XQlCDr8Qb`
+- Test account on doortest tenant. See `sandbox-e2e-testing/spec/00-browser-playbook.md` for full interaction sequence.
+
 ### General Rules
 - Always make a plan before starting work. Execute the plan step by step.
 - Always keep relevant brain documents up to date as you work. Create new documents when needed.

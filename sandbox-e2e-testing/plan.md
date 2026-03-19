@@ -9,14 +9,15 @@ Reference: `1-pager.md` (vision), `design.md` (architecture).
 
 ## Phases
 
-### Phase 0 — Browser POC (BLOCKER)
-Validate Playwright MCP can control IT-managed Chrome before building anything browser-dependent.
+### Phase 0 — Browser POC (COMPLETE)
+Playwright MCP + bundled Chromium validated on doordashtest.com.
 
 | Step | Deliverable | Spec | Status |
 |---|---|---|---|
-| 0.1 | Navigate doordash.com, scroll carousels, screenshot | `spec/00-browser-poc.md` | pending |
+| 0.1 | Navigate, login, scroll carousels, screenshot | `spec/00-browser-poc.md` | **done** |
+| 0.2 | Deterministic browser playbook | `spec/00-browser-playbook.md` | **done** |
 
-**Done when:** screenshots return visibly, carousel scroll works. Blockers + workarounds documented in spec.
+**Result:** All checks pass. Login, carousel scroll, screenshots all working. Debug Mode identified for ML score analysis (Phase 3 input).
 
 ---
 
@@ -75,4 +76,4 @@ Trigger the full pipeline from GitHub Actions on every PR.
 ---
 
 ## Current Focus
-**Phase 0** — browser POC. Everything else is blocked on this passing.
+**Phase 1** — Orchestrator + Audit Trail. Phase 0 POC passed 2026-03-19.
