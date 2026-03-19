@@ -9,7 +9,7 @@ Unified Blending Platform.
 
 | File | Purpose |
 |---|---|
-| `rfc.md` | Platform contracts (FeedRow/RowItem interfaces, Experiment Config JSON, Value Function, RankingStep, Trace Event) |
+| `rfc.md` | RFC: problem statement, goals, non-goals, high-level design, 5 contracts, phases, control.json baselines, experiment examples |
 | `impl/00-overview.md` | Implementation order, dependencies between parts, guiding principles, Phase 1 scope boundary |
 | `impl/01-shadow-infra.md` | Shadow traffic path for safe validation before any real traffic migrates |
 | `impl/02-feed-row-interface.md` | FeedRow interface + 9 adapters (Adapter pattern) |
@@ -48,3 +48,4 @@ Parts 2–7 each have a direct Phase 1.5 equivalent (not yet written — follow 
 | `context/design-patterns-and-contract.md` | Design patterns used + value function |
 | `context/current-system-deep-dive.md` | Deep dive into current feed-service code |
 | `context/Homepage Ads Blending.md` | Ads blending architecture — why ads blend as RowItems within carousels (Phase 1.5 motivation) |
+| `context/mle-experiment-guide.md` | MLE decision guide + all experiment cases (Cases 1–7) + feature sources + calibration reference |
