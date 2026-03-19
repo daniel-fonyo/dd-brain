@@ -57,12 +57,51 @@ REQUEST
 
 ---
 
+## What `reOrderGlobalEntitiesV2()` Actually Does
+
+Important: this method does more than vertical ranking. Phase 1 only replaces one part of it.
+
+```
+reOrderGlobalEntitiesV2()
+  ├── rankAndDedupeContent()              ← Phase 1 replaces THIS path for UBP requests
+  │     ├── rankAndMergeContent()
+  │     │     ├── split pinned vs rankable
+  │     │     └── score rankable via Sibyl → BlendingUtil → assign sortOrder
+  │     ├── ads scoring + blending        ← stays as-is (Phase 3)
+  │     └── deduplication                 ← stays as-is
+  │
+  ├── post-ranking fixups                 ← migrate to FIXED_PINNING steps in control.json
+  │     ├── updateSortOrderOfNVCarousel()
+  │     ├── updateSortOrderOfTasteOfDashPass()
+  │     └── updateSortOrderOfMemberPricing()
+  │
+  └── NonRankableHomepageOrderingUtil     ← stays as-is (Phase 1 out of scope)
+        .rankWithImmersivesV2()
+```
+
+Phase 1 UBP replaces `rankAndMergeContent()` for flagged requests. Everything else in the
+method is unchanged.
+
+---
+
+## Naming
+
+Types use `FeedRow` (vertical unit) and `RowItem` (horizontal unit). See `context/ubp-contracts.md`
+for the full interface definitions.
+
+Old names in existing code (renamed during implementation):
+- `VerticalComponent` → `FeedRow`
+- `HorizontalComponent` → `RowItem`
+- `VerticalProcessor` → `FeedRowRankingStep`
+- `VerticalRankingEngine` → `FeedRowRanker`
+
+---
+
 ## MLE Contract (The Foundation)
 
 The contract is what MLEs write. The implementation is what makes the contract executable.
 
-**Canonical contract doc:** `context/mle-vertical-contract.md`
-**Full Kotlin schema + engine spec:** `feed-service/ubp-experiment-contract.md`
+**Canonical contract doc:** `context/ubp-contracts.md`
 
 ### What MLEs write
 
@@ -72,7 +111,7 @@ One JSON file per experiment. Two modes:
 Inherit the full control pipeline, change one or more step params via `"extends": "control"` + `"step_params"`.
 
 **Mode 2 — full pipeline declaration:**
-Declare the entire `vertical_pipeline.steps` array when the step sequence itself changes.
+Declare the entire `row_pipeline.steps` array when the step sequence itself changes.
 
 ### Vertical step types (Phase 1)
 
@@ -118,7 +157,7 @@ Result: N × M valid cells, independent per layer.
 ## What the Current Code Gets Wrong (Root Causes)
 
 **Vertical layer (Layer 4):**
-1. No Component interface — 9+ typed carousel classes with no shared score interface
+1. No FeedRow interface — 9+ typed carousel classes with no shared score interface
 2. No step registry — 4 hardcoded private method calls in `EntityRankerConfiguration.rank()`
 3. Config fragmented across 10+ locations (3 runtime JSON files + 5+ DV keys + hardcoded constants)
 4. Post-ranking fixups outside the DAG — run silently after pipeline, no traceability
@@ -151,41 +190,41 @@ Result: N × M valid cells, independent per layer.
 
 ---
 
-### Step 2: `VerticalComponent` interface + adapters
+### Step 2: `FeedRow` interface + adapters
 
-**Goal:** Single interface wrapping all 9 carousel types so processors never branch on type.
+**Goal:** Single interface wrapping all 9 carousel types so steps never branch on type.
 
 **What to build:**
-- `interface VerticalComponent` with `id`, `type` (enum), `score` (mutable), `metadata`, `recordTrace()`
-- Adapters for all 9 types: `StoreCarouselComponent`, `ItemCarouselComponent`, `CollectionV2Component`, `DealCarouselComponent`, `StoreCollectionComponent`, `ItemCollectionComponent`, `MapCarouselComponent`, `ReelsCarouselComponent`, `StoreEntityComponent`
+- `interface FeedRow` with `id`, `type: RowType` (enum), `score` (mutable), `metadata`, `recordTrace()`
+- Adapters for all 9 types: `StoreCarouselRow`, `ItemCarouselRow`, `CollectionV2Row`, `DealCarouselRow`, `StoreCollectionRow`, `ItemCollectionRow`, `MapCarouselRow`, `ReelsCarouselRow`, `StoreEntityRow`
 - Extend existing `ScorableEntityStoreCarousel` + `ScorableEntityItemCarousel` prototypes
-- Each adapter: `toComponent()` extension + `applyBackTo(domainObject)` for writing score back
+- Each adapter: `toFeedRow()` extension + `applyBackTo()` for writing score back
 
 **Key files:**
 - Extend: `libraries/common/.../scoring/ScorableEntity*.kt`
-- New: `libraries/common/.../ubp/vertical/VerticalComponent.kt`
-- New: `libraries/common/.../ubp/vertical/ComponentType.kt`
+- New: `libraries/common/.../ubp/vertical/FeedRow.kt`
+- New: `libraries/common/.../ubp/vertical/RowType.kt`
 
 ---
 
-### Step 3: `VerticalProcessor` interface + 4 processor implementations
+### Step 3: `FeedRowRankingStep` interface + 4 step implementations
 
-**Goal:** 4 hardcoded steps become registered, independently-testable processors.
+**Goal:** 4 hardcoded stages become registered, independently-testable steps.
 
-| Processor class | Step type | Wraps |
+| Step class | Step type | Wraps |
 |---|---|---|
-| `ModelScoringProcessor` | `MODEL_SCORING` | `entityScorer.score()` + Sibyl RPC — reads `PredictorConfig` from params |
-| `MultiplierBoostProcessor` | `MULTIPLIER_BOOST` | `BlendingUtil.blendBundle()` — params injected, no internal DV reads |
-| `DiversityRerankProcessor` | `DIVERSITY_RERANK` | `BlendingUtil.rerankEntitiesWithDiversity()` |
-| `FixedPinningProcessor` | `FIXED_PINNING` | `BoostingBundle.boosted()` + all `NonRankableHomepageOrderingUtil` fixups |
+| `ModelScoringStep` | `MODEL_SCORING` | `entityScorer.score()` + Sibyl RPC — reads `PredictorConfig` from params |
+| `MultiplierBoostStep` | `MULTIPLIER_BOOST` | `BlendingUtil.blendBundle()` — params injected, no internal DV reads |
+| `DiversityRerankStep` | `DIVERSITY_RERANK` | `BlendingUtil.rerankEntitiesWithDiversity()` |
+| `FixedPinningStep` | `FIXED_PINNING` | `BoostingBundle.boosted()` + all `NonRankableHomepageOrderingUtil` fixups |
 
-**Critical design rule:** `params` injected from config at call time. Processors do NOT read DV keys internally.
+**Critical design rule:** `params` injected from config at call time. Steps do NOT read DV keys internally.
 
 ```kotlin
-interface VerticalProcessor {
+interface FeedRowRankingStep {
     val type: String
     suspend fun process(
-        components: MutableList<VerticalComponent>,
+        rows: MutableList<FeedRow>,
         context: RankingContext,
         params: Map<String, Any>,
     )
@@ -193,35 +232,35 @@ interface VerticalProcessor {
 ```
 
 **Key files:**
-- New: `libraries/common/.../ubp/vertical/VerticalProcessor.kt`
-- New: `libraries/common/.../ubp/vertical/processors/` (4 implementations)
+- New: `libraries/common/.../ubp/vertical/FeedRowRankingStep.kt`
+- New: `libraries/common/.../ubp/vertical/steps/` (4 implementations)
 
 ---
 
-### Step 4: `VerticalRankingEngine` with processor registry + auto-trace
+### Step 4: `FeedRowRanker` with step registry + auto-trace
 
 **Goal:** Config-driven orchestrator. Zero business logic. Pure dispatch.
 
 ```kotlin
-class VerticalRankingEngine(
-    private val processorRegistry: Map<String, VerticalProcessor>,
+class FeedRowRanker(
+    private val stepRegistry: Map<String, FeedRowRankingStep>,
     private val ubpRuntimeUtil: UbpRuntimeUtil,
 ) {
     suspend fun rank(
-        components: MutableList<VerticalComponent>,
+        rows: MutableList<FeedRow>,
         experimentId: String,
         context: RankingContext,
-    ): List<VerticalComponent>
+    ): List<FeedRow>
 }
 ```
 
 - Resolves config via `ubpRuntimeUtil.resolveConfig(experimentId, context.experimentMap)`
-- Loops steps, dispatches to `processorRegistry[step.type]`
+- Loops steps, dispatches to `stepRegistry[step.type]`
 - Unknown step type → skip + log warning (never crash)
-- Auto-trace: `component.recordTrace("${step.id}.score", score)` after each step when `emitTrace = true`
+- Auto-trace: `row.recordTrace("${step.id}.score", score)` after each step when `emitTrace = true`
 
 **Key files:**
-- New: `libraries/common/.../ubp/vertical/VerticalRankingEngine.kt`
+- New: `libraries/common/.../ubp/vertical/FeedRowRanker.kt`
 
 ---
 
@@ -229,19 +268,26 @@ class VerticalRankingEngine(
 
 **Goal:** Route requests with a `ubp_hp_vertical_*` DV to the new engine. Zero impact to non-UBP traffic.
 
-**What to build:**
-- In `reOrderGlobalEntitiesV2()`: check `experimentMap` for any active `ubp_hp_vertical_*` DV key
-- If UBP active:
-  1. Convert carousels → `VerticalComponent`s via adapters
-  2. Call `VerticalRankingEngine.rank(components, experimentId, context)`
-  3. Write sorted scores back via `applyBackTo()` → sets `sortOrder`
-  4. Skip existing `EntityRankerConfiguration.rank()` path for this request
-- If not: existing code path unchanged
-- Post-ranking fixups (Stage 7) → migrate to declared `FIXED_PINNING` steps in `control.json`
+**Incision point:** inside `reOrderGlobalEntitiesV2()`, before `rankAndDedupeContent()`:
+
+```kotlin
+val ubpExperimentId = context.experimentMap.keys
+    .firstOrNull { it.startsWith("ubp_hp_vertical_") }
+
+return if (ubpExperimentId != null) {
+    val rows = toFeedRows(layout)
+    val ranked = feedRowRanker.rank(rows, ubpExperimentId, context)
+    applyRankedRows(ranked, layout)
+} else {
+    rankAndDedupeContent(...)
+    NonRankableHomepageOrderingUtil.rankWithImmersivesV2(...)
+}
+```
+
+Post-ranking fixups (NV pin, PAD, member pricing) → declared `FIXED_PINNING` steps in `control.json`.
 
 **Key files:**
 - `pipelines/homepage/.../DefaultHomePagePostProcessor.kt`
-- `pipelines/homepage/.../HomePagePostProcessorV2.kt`
 
 ---
 
@@ -250,53 +296,133 @@ class VerticalRankingEngine(
 **Goal:** Every step auto-traces. Stage-wise score snapshots queryable in Snowflake.
 
 **What to build:**
-- Standard trace event: `{ component_id, step_id, score_before, score_after, request_id, experiment_id }`
+- Standard trace event: `{ row_id, step_id, score_before, score_after, request_id, experiment_id }`
 - Engine emits when `output_config.emit_trace = true`
-- Replaces manual `IguazuEventUtil` calls per processor
-- New proto: `ubp_vertical_ranking_trace.proto` in services-protobuf
+- Replaces manual `IguazuEventUtil` calls per step
+- New proto: `ubp_feed_row_ranking_trace.proto` in services-protobuf
 
 **Key files:**
-- New: `services-protobuf/protos/iguazu/events/ubp_vertical_ranking_trace.proto`
+- New: `services-protobuf/protos/iguazu/events/ubp_feed_row_ranking_trace.proto`
 - New: `libraries/common/.../ubp/trace/UbpTraceEmitter.kt`
 
 ---
 
 ## Migration Path
 
-```
-Phase 1: Deploy UBP engine alongside existing pipeline (feature-flagged via DV)
-  → Existing DVs → existing code path (unchanged)
-  → New ubp_* DVs → new engine path
-  → Validate: control arm produces same results as existing pipeline
+### Stage 0: Deploy engine (0% real traffic)
 
-Phase 2: Start first new experiment on new contract (not a migration of existing)
-  → MLE authors first UnifiedExperimentConfig JSON
-  → Iterate on treatments without code changes
+UBP code ships but no `ubp_*` DV key exists. 100% of traffic takes the old code path.
 
-Phase 3: Retire old DVs one by one
-  → Remove branches from regressionContext() when-chain
-  → Remove branches from modifyLiteStoreCollection() when-chain
-  → Each removal independently shippable
+### Stage 1: Shadow validation
+
+Run both paths on every request. Always return the OLD result to user. Zero user impact.
+
 ```
+shadow arm:
+  1. Run old path  → result_old
+  2. Run FeedRowRanker with control.json → result_new
+  3. Return result_old to user
+  4. Emit both sort orders to Snowflake
+  5. Query divergence: WHERE result_old != result_new
+```
+
+Iterate on `control.json` until divergence is below threshold (target: >99% match on sort order).
+
+**Seeding `control.json` from existing prod config — don't hand-author:**
+
+For vertical, most params already live in `hp_vertical_blending_config.json`. Bootstrap by reading
+it at init time:
+
+```kotlin
+fun buildControlConfig(): UnifiedExperimentConfig {
+    val blendingConfig = P13nRuntimeUtil.getVerticalBlendingConfig()
+    // calibration_entries, intent_scoring_config, boost_weights, diversity params
+    // come directly from the existing runtime file — no drift risk
+
+    return UnifiedExperimentConfig(
+        rowPipeline = PipelineConfig(steps = listOf(
+            StepConfig("score",     "MODEL_SCORING",    mapOf("predictor_ref" to "p_act")),
+            StepConfig("blend",     "MULTIPLIER_BOOST", blendingConfig.toMultiplierParams()),
+            StepConfig("diversity", "DIVERSITY_RERANK", blendingConfig.toDiversityParams()),
+            StepConfig("pin",       "FIXED_PINNING",    buildPinningRules()),
+        ))
+    )
+}
+
+// Hardcoded fixups — values are known and stable
+fun buildPinningRules() = mapOf("rules" to listOf(
+    mapOf("row_id" to "pad",            "position" to 3, "hard_pin" to true),
+    mapOf("row_id" to "member_pricing", "position" to 0, "hard_pin" to true),
+))
+```
+
+Shadow comparison catches anything the bootstrap misses.
+
+### Stage 2: First real traffic on UBP control arm
+
+Route a small % of real traffic to UBP control arm. Identical page layout to old path.
+Confirms no production issues.
+
+### Stage 3: First experiment on UBP
+
+MLE authors treatment JSON, no code change required. This is the payoff.
+
+### Stage 4: Retire old DVs
+
+When old experiments end naturally, don't rebuild them on old infra. Remove old code branches
+one by one — each independently shippable.
 
 ---
 
 ## Phase 2 (After Vertical is Live): Horizontal Blending Platform
 
-Same pattern applied to Layer 3:
-- `HorizontalComponent` interface (wraps `DiscoveryStore`, `StoreEntity`, `LiteStoreCollection`)
-- `HorizontalProcessor` interface with `carousel_overrides` support per `RankingType`
-- `HorizontalRankingEngine`
-- `BusinessRulesSortProcessor` replaces `modifyLiteStoreCollection()` when-chain
-- `OrderHistoryRerankProcessor` makes S1/S2/S3 observable for the first time
+Same pattern applied to Layer 3. Key difference from vertical: horizontal runs once per carousel
+per request (parallel `awaitAll()`), not once per request total.
+
+**Incision point:** `DefaultHomePageStoreRanker.rank()`, wrapping each `modifyLiteStoreCollection()` call:
+
+```kotlin
+return scoredCollections.map { collection ->
+    CoroutineScope(...).async {
+        val ubpExperimentId = context.experimentMap.keys
+            .firstOrNull { it.startsWith("ubp_hp_horizontal_") }
+
+        if (ubpExperimentId != null) {
+            rowItemRanker.rank(collection, ubpExperimentId, context)
+        } else {
+            modifyLiteStoreCollection(context, collection, storesById, metadata, ...)
+        }
+    }
+}.awaitAll()
+```
+
+**Seeding horizontal `control.json` — map the when-chain once:**
+
+No structured runtime JSON exists for horizontal. Map `modifyLiteStoreCollection()` when-chain
+to `row_overrides` once, then it's static:
+
+```
+RankingType.CAROUSEL, NEW_VERTICAL_CAROUSEL, ...  → default (MODEL_SCORING + BUSINESS_RULES_SORT)
+RankingType.PICKUP_STORE_FEED, MAP_CAROUSEL        → row_overrides: score.skip=true, rules.sort_by=DISTANCE
+RankingType.BOOKMARKS                              → row_overrides: score.skip=true, rules.sort_by=SAVELIST_ORDER
+RankingType.WHOLE_ORDER_REORDER                    → row_overrides: ORDER_HISTORY_RERANK.enabled=true
+RankingType.NOOP                                   → row_overrides: steps=[]
+```
+
+**What to build:**
+- `RowItem` interface (wraps `DiscoveryStore` / `StoreEntity`) with `id`, `score`, `applyBackTo()`
+- `RowItemRankingStep` interface
+- `RowItemRanker`
+- `BusinessRulesSortStep` replaces `modifyLiteStoreCollection()` when-chain
+- `OrderHistoryRerankStep` makes S1/S2/S3 observable for the first time
 
 ---
 
 ## Phase 3+: Value Function, Calibration, Ads Integration
 
-- `CalibrationService` (`PIECEWISE`, `ISOTONIC`) for cross-type score comparability
-- `ValueFunctionProcessor` (pImp × pAct × vAct)
-- `AdsStoreComponent` adapter + fair organic/ads competition on the same scale
+- `CalibrationStep` (`PIECEWISE`, `ISOTONIC`) for cross-type score comparability
+- `ValueFunctionStep` (pImp × pAct × vAct)
+- `AdsFeedRow` adapter + fair organic/ads competition on the same scale
 
 ---
 
@@ -304,14 +430,15 @@ Same pattern applied to Layer 3:
 
 | Layer | Key File | What it does |
 |---|---|---|
-| Vertical entry | `DefaultHomePagePostProcessor.kt` | `reOrderGlobalEntitiesV2()` — 7-stage pipeline |
-| Vertical scoring | `EntityRankerConfiguration.kt` | Calls Sibyl + blending (replaced by engine in UBP path) |
+| Vertical entry | `DefaultHomePagePostProcessor.kt` | `reOrderGlobalEntitiesV2()` — Phase 1 incision point |
+| Vertical scoring | `EntityRankerConfiguration.kt` | Calls Sibyl + blending (replaced by `FeedRowRanker` in UBP path) |
 | Vertical blending | `VerticalBlending.kt` | Calibration × intent × boost weight multipliers |
 | Vertical pinning | `Boosting.kt` | `enforceManualSortOrder` enforcement |
 | Pinned order config | `PinnedCarouselUtil.kt` | Reads `pinned_carousel_ranking_order.json` |
 | Post-ranking fixups | `NonRankableHomepageOrderingUtil.kt` | NV, PAD, gap rules |
-| Blending config | `VerticalBlendingConfig.kt` | Existing blending params (absorbed into `UnifiedExperimentConfig`) |
-| Horizontal entry | `DefaultHomePageStoreRanker.kt` | `modifyLiteStoreCollection()` per carousel |
+| Blending config | `VerticalBlendingConfig.kt` | Existing blending params — bootstraps `control.json` |
+| Horizontal entry | `DefaultHomePageStoreRanker.kt` | `rank()` — Phase 2 incision point |
+| Horizontal when-chain | `DefaultHomePageStoreRanker.kt` | `modifyLiteStoreCollection()` — maps to `row_overrides` |
 | Horizontal scoring | `StoreCollectionScorer.kt` | Sibyl RPC + feature construction |
 | Experiment manager | `DiscoveryExperimentManager.kt` | DV manifest |
 | Pipeline DAG | `DefaultHomePagePipeline.kt` | Job dependency graph |
@@ -322,19 +449,19 @@ Same pattern applied to Layer 3:
 
 **Phase 1: Vertical Blending**
 - [ ] Step 1: `UnifiedExperimentConfig` data classes + `UbpRuntimeUtil` (config loading + `extends` merge)
-- [ ] Step 2: `VerticalComponent` interface + adapters for all 9 carousel types
-- [ ] Step 3: `VerticalProcessor` interface + 4 processor implementations
-- [ ] Step 4: `VerticalRankingEngine` with processor registry + auto-trace
+- [ ] Step 2: `FeedRow` interface + adapters for all 9 carousel types
+- [ ] Step 3: `FeedRowRankingStep` interface + 4 step implementations
+- [ ] Step 4: `FeedRowRanker` with step registry + auto-trace
 - [ ] Step 5: Wire into `DefaultHomePagePostProcessor` (behind UBP DV)
-- [ ] Step 6: Standardized tracing / `ubp_vertical_ranking_trace.proto`
+- [ ] Step 6: Standardized tracing / `ubp_feed_row_ranking_trace.proto`
 
 **Phase 2: Horizontal Blending**
-- [ ] `HorizontalComponent` interface
-- [ ] `HorizontalProcessor` + `BusinessRulesSortProcessor` + `OrderHistoryRerankProcessor`
-- [ ] `HorizontalRankingEngine` with `carousel_overrides` dispatch
+- [ ] `RowItem` interface
+- [ ] `RowItemRankingStep` + `BusinessRulesSortStep` + `OrderHistoryRerankStep`
+- [ ] `RowItemRanker` with `row_overrides` dispatch
 - [ ] Wire into `DefaultHomePageStoreRanker`
 
 **Phase 3+: Value Function, Calibration, Ads**
-- [ ] `CalibrationService` (`PIECEWISE`, `ISOTONIC`)
-- [ ] `ValueFunctionProcessor` (pImp × pAct × vAct)
-- [ ] `AdsStoreComponent` adapter + fair ads/organic competition
+- [ ] `CalibrationStep` (`PIECEWISE`, `ISOTONIC`)
+- [ ] `ValueFunctionStep` (pImp × pAct × vAct)
+- [ ] `AdsFeedRow` adapter + fair ads/organic competition
