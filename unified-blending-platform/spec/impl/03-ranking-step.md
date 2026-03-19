@@ -340,6 +340,29 @@ fun `FixedPinningStep preserves ranked order for unpinned rows`() {
 }
 ```
 
+## Value Function Mapping
+
+These 4 steps implement the Phase 1 approximation of the UBP value function:
+
+```
+Full EV  = pImp(k)  ×   pAct(c)        ×   vAct(c)
+Phase 1  =   1.0    ×  MODEL_SCORING   ×  MULTIPLIER_BOOST
+```
+
+- **`MODEL_SCORING`** computes `pAct(c)` — probability of user action given they see this content, from Sibyl CTR/CVR model
+- **`MULTIPLIER_BOOST`** approximates `vAct(c)` — boost weights encode that "NV content at equal CTR is worth X× more to the business than organic"
+- **`pImp(k)`** (probability user sees position k, decays with position) is **not implemented in Phase 1** — steps have no knowledge of final position during scoring. Comes in Phase 3.
+- **Step order in config is load-bearing**: `MODEL_SCORING` must precede `MULTIPLIER_BOOST` since boost multiplies into the model score
+
+## Scope Notes
+
+**`FIXED_PINNING` is for MLE-configured experiment pins only.** It does NOT replace:
+- `NonRankableHomepageOrderingUtil.updateSortOrderOfNVCarousel()` — post-checkout NV boosting (stays as post-ranking fixup)
+- `updateSortOrderOfTasteOfDashPass()` — PAD=3 logic (stays, controlled by its own DV)
+- `updateSortOrderOfMemberPricing()` — member pricing priority (stays, runtime feature flag)
+
+**No ads in Phase 1.** `RowType` does not include `AD_CAROUSEL`. Ads remain post-ranking insertion via `maybeAddSponsoredCarousel()`. Phase 3+ vision only.
+
 ## Prerequisites
 
 Part 2 (FeedRow interface + RowType enum) must be complete. `EntityScorer` is an existing interface — `ModelScoringStep` takes it by constructor injection. No new dependencies introduced.
