@@ -67,8 +67,10 @@ Part 7: Tracing
      (can be built in parallel with 3/4, but completes after 6)
 ```
 
-Part 1 (shadow) is deliberately first. It gives you the comparison harness before any engine
-code exists. You build the rest knowing that the shadow will validate correctness continuously.
+Part 1 (shadow + contract assembler) is deliberately first. The assembler can run immediately —
+even before the engine exists — and start logging what the UBP contract looks like for real
+traffic. This gives visual feedback on the contract shape before writing a single engine line.
+You build Parts 2–7 knowing the contract shape is already validated from real prod behavior.
 
 ---
 
@@ -76,7 +78,7 @@ code exists. You build the rest knowing that the shadow will validate correctnes
 
 | Part | Deliverable | Tests |
 |---|---|---|
-| 1 | Shadow branch in post-processor and store-ranker, Snowflake comparison query | Integration test: shadow produces same output as control |
+| 1 | Shadow branch + `UbpContractAssembler` — assembles equivalent UBP JSON per request from prod decisions, logs it, compares sort orders | Integration test: assembled contract parses; shadow produces same output |
 | 2 | `FeedRow` interface, `RowType` enum, 9 adapter classes | Unit tests per adapter: `toFeedRow()` + `applyBackTo()` roundtrip |
 | 3 | `FeedRowRankingStep` interface, 4 step classes | Unit tests per step with injected params, no DV reads |
 | 4 | `FeedRowRanker`, `stepRegistry` wiring | Unit test: known steps execute in order; unknown step skipped |
