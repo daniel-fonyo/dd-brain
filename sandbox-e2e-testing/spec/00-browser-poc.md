@@ -90,10 +90,13 @@ Workaround: use doordashtest.com (not doordash.com) — test creds only work on 
 | Carousels found | Multiple: "Under $1 delivery fee", "Slam dunk savings", "Fastest near you" |
 | Scroll works | "Next button of carousel" click shifts content, Previous enables |
 | Login flow | Two-step: email → Continue → password confirm → Sign In |
-| Debug Mode | Bottom-right button exposes ML scores (not yet tested) |
+| Debug Mode | Toggle activated, ML ranking scores visible on all cards |
+| Video recording | `--save-video=1280x720` outputs .webm on `browser_close` |
 
 ---
 
 ## Implementation Dependency
 
 `sandbox-run` and `sandbox-test` browser steps are **unblocked** — POC passed.
+
+**Recording**: All future runs use session video (`.webm`) instead of individual screenshots. Config in `~/.claude/mcp.json`.

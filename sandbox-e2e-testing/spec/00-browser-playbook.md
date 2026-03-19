@@ -11,6 +11,39 @@ Deterministic step sequence for sandbox-test browser interactions. Follow this k
 
 ---
 
+## Video Recording
+
+The entire browser session is recorded automatically — no manual screenshot steps needed.
+
+**Config** (`~/.claude/mcp.json`):
+```json
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--viewport-size=1280x720",
+        "--save-video=1280x720",
+        "--output-dir=/tmp/playwright-mcp-output"
+      ]
+    }
+  }
+}
+```
+
+- **Format**: `.webm` (VP8) — GitHub-compatible for upload to PRs/issues
+- **Resolution**: 1280x720 — readable and compact
+- **Output**: `/tmp/playwright-mcp-output/` (staging) — move to audit trail after session
+- Video is written when the browser context closes (`browser_close` or session end)
+
+**Post-session**: copy video to audit trail:
+```
+cp /tmp/playwright-mcp-output/*.webm <runDir>/session.webm
+```
+
+---
+
 ## Step Sequence
 
 ### 1. Navigate
@@ -45,16 +78,13 @@ click → "Got It" button (dialog: "How Fees Work")
 ```
 - This modal appears on first visit after login. If not present, skip.
 
-### 4. Screenshot homepage
-```
-browser_take_screenshot → homepage.png
-```
-- Verify: carousels visible ("Under $1 delivery fee", "Slam dunk savings", etc.)
+### 4. Verify homepage
+- Confirm carousels visible ("Under $1 delivery fee", "Slam dunk savings", etc.)
+- All interactions are captured in the session video automatically.
 
 ### 5. Scroll carousel
 ```
 click → "Next button of carousel" (first instance)
-browser_take_screenshot → carousel-scrolled.png
 ```
 - Verify: new stores appear, "Previous" button becomes enabled.
 
@@ -65,7 +95,6 @@ The Debug Mode toggle is a checkbox inside a styled component, not a regular but
 ```
 evaluate → document.querySelector('.ToggleContainer-sc-ba2scp-0 input[type="checkbox"]').click()
   ↓ debug overlays appear on all page components
-browser_take_screenshot → debug-mode-on.png
 ```
 
 - **Toggle selector**: `.ToggleContainer-sc-ba2scp-0 input[type="checkbox"]` (bottom-right corner)
@@ -94,11 +123,7 @@ Once Debug Mode is ON, the page shows:
 - **Ranking Second Pass Score**: float (e.g., `0.0060`, `0.0265`) — aggregate page-level re-ranking score
 - **ML Debugging Information** link
 
-```
-browser_take_screenshot → debug-store-cards.png   (capture ranking scores)
-scroll down → capture more carousels
-browser_take_screenshot → debug-more-carousels.png
-```
+Scroll through carousels to capture all visible scores in the video.
 
 ### 8. Store Debug Tools (per-store deep dive)
 
@@ -119,6 +144,13 @@ click → "Store Debug Tools" button on a store card
 ```
 click → "Close" button to dismiss modal
 ```
+
+### 9. Close browser (finalize video)
+```
+browser_close
+```
+- Video file is written to `/tmp/playwright-mcp-output/` on context close.
+- Copy to audit trail: `cp /tmp/playwright-mcp-output/*.webm <runDir>/session.webm`
 
 ---
 
@@ -149,3 +181,5 @@ click → "Close" button to dismiss modal
 | Debug overlays not appearing | Toggle may not have fired — verify checkbox `checked` state via evaluate |
 | Store Debug Tools modal stuck | Click "Close" button or press Escape |
 | Page shows blank/spinner | Wait longer (10s), then retry navigate |
+| Video not saved | Ensure `browser_close` is called — video writes on context close, not mid-session |
+| Video too large | Reduce viewport: `--save-video=800x600` in mcp.json |

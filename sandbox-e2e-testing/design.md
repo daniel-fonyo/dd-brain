@@ -90,13 +90,12 @@ feed-service/.claude/sandbox/
       meta.json          ← run metadata (branch, sandbox, status, check results)
       steps.jsonl        ← append-only step log (one JSON per line)
       feed-service.log   ← raw kubectl pod logs
-      screenshots/
-        01-homepage.png
-        02-carousel-stores.png
-        ...
+      session.webm       ← full browser session video (1280x720, VP8)
       report.md          ← human-readable summary
   latest/                ← symlink → most recent run dir
 ```
+
+> **Video recording**: Playwright MCP records the entire browser session as `.webm` (VP8, 1280x720). Video is written on `browser_close`. Staging dir: `/tmp/playwright-mcp-output/`. Copied to `session.webm` in the run dir after each session. Format is GitHub-compatible for upload to PRs/issues.
 
 **meta.json:**
 ```json
@@ -137,7 +136,7 @@ feed-service/.claude/sandbox/
 
 Extend to accept a `runDir` parameter (path to current audit run directory):
 - Write pod logs to `<runDir>/feed-service.log` instead of `/tmp/sandbox-logs.txt`
-- Save screenshots to `<runDir>/screenshots/`
+- Copy session video to `<runDir>/session.webm` (after `browser_close`)
 - Append steps to `<runDir>/steps.jsonl`
 - Return structured result JSON for `sandbox-run` to write into `meta.json`
 
@@ -152,7 +151,7 @@ Extend to accept a `runDir` parameter (path to current audit run directory):
 | Composable skills | Each skill works standalone; sandbox-run composes them |
 | Background tasks | kubectl log stream runs in background while browser interacts |
 | Fail fast | Pod liveness check before attempting test |
-| Evidence capture | Screenshots + raw logs stored per-run, never overwritten |
+| Evidence capture | Session video (.webm) + raw logs stored per-run, never overwritten |
 | Human-readable output | `report.md` alongside structured `meta.json` |
 | Natural language trigger | "test this change" → sandbox-run figures out what's needed |
 
