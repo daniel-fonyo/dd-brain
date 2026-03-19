@@ -30,7 +30,7 @@ REQUEST
                        │
                        ▼
 ┌──────────────────────────────────────────────────────────┐
-│  LAYER 3: HORIZONTAL RANKING  ← Phase 2                  │
+│  LAYER 3: HORIZONTAL RANKING  ← Phase 1.5                │
 │  DefaultHomePageStoreRanker.rank()                       │
 │  Ranks stores/items WITHIN each carousel by score        │
 │  Currently: per-RankingType when-chain in                │
@@ -67,15 +67,15 @@ reOrderGlobalEntitiesV2()
   │     ├── rankAndMergeContent()
   │     │     ├── split pinned vs rankable
   │     │     └── score rankable via Sibyl → BlendingUtil → assign sortOrder
-  │     ├── ads scoring + blending        ← stays as-is (Phase 3)
+  │     ├── ads scoring + blending        ← ads blend as RowItems in Phase 1.5 (horizontal)
   │     └── deduplication                 ← stays as-is
   │
-  ├── post-ranking fixups                 ← migrate to FIXED_PINNING steps in control.json
-  │     ├── updateSortOrderOfNVCarousel()
-  │     ├── updateSortOrderOfTasteOfDashPass()
-  │     └── updateSortOrderOfMemberPricing()
+  ├── post-ranking fixups                 ← stay as-is (business rules, not MLE experiments)
+  │     ├── updateSortOrderOfNVCarousel()      NV post-checkout pin — context-driven, not config
+  │     ├── updateSortOrderOfTasteOfDashPass() PAD=3 — owned by its own DV
+  │     └── updateSortOrderOfMemberPricing()   feature flag, runtime ID list
   │
-  └── NonRankableHomepageOrderingUtil     ← stays as-is (Phase 1 out of scope)
+  └── NonRankableHomepageOrderingUtil     ← stays as-is (color bleed, spacing, presentation)
         .rankWithImmersivesV2()
 ```
 
@@ -374,7 +374,15 @@ one by one — each independently shippable.
 
 ---
 
-## Phase 2 (After Vertical is Live): Horizontal Blending Platform
+## Phase 1.5: Horizontal Blending Platform (immediately after Phase 1)
+
+Phase 1 (vertical) + Phase 1.5 (horizontal) together are the "aha moment": both layers of the
+feed are config-driven, and ads blend natively within carousels as RowItems.
+
+**Why horizontal is the ads story:** Ads blend at the Store Ranker level, not the vertical level.
+Ad candidates and organic stores compete as `RowItem` objects within the same carousel ranking
+step. The `MODEL_SCORING` step scores both together; the ranked list is the blended result.
+There is no separate ads insertion pass. See `context/Homepage Ads Blending.md` for full context.
 
 Same pattern applied to Layer 3. Key difference from vertical: horizontal runs once per carousel
 per request (parallel `awaitAll()`), not once per request total.

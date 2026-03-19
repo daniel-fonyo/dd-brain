@@ -44,10 +44,10 @@ interface FeedRow {
 }
 ```
 
-The engine operates on `MutableList<FeedRow>` throughout. In Phase 1, this list contains only
-**organic carousels** from `HomePageStoreLayoutOutputElements`. Ads remain a separate post-ranking
-insertion path and are not FeedRows in Phase 1. Phase 3+ vision: ads as `AD_CAROUSEL` FeedRow
-competing in the same list with organic.
+The engine operates on `MutableList<FeedRow>` throughout. This list contains organic carousels
+from `HomePageStoreLayoutOutputElements`. Ads are not FeedRows — they blend at the store ranker
+level as `RowItem` objects within each carousel (Phase 1.5 horizontal ranking). There is no
+`AD_CAROUSEL` FeedRow.
 
 To participate in UBP ranking, a content type implements this interface and provides an adapter:
 

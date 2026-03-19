@@ -88,12 +88,12 @@ code exists. You build the rest knowing that the shadow will validate correctnes
 
 ## Horizontal vs Vertical Scope Per Part
 
-Most parts address vertical (Phase 1). Horizontal (Phase 2) reuses the same interfaces with
-different implementations. Where a part applies to both phases, this is noted explicitly.
+Parts 1–7 cover **vertical Phase 1**. Horizontal **Phase 1.5** follows immediately after and
+reuses the same interfaces with different implementations — `RowItem` instead of `FeedRow`,
+`RowItemRankingStep` instead of `FeedRowRankingStep`, `RowItemRanker` instead of `FeedRowRanker`.
 
-Parts 1, 2, 3, 4, 5, 6, 7 all apply to **vertical Phase 1**.
-Parts 2, 3, 4, 5, 6, 7 have direct **horizontal Phase 2** equivalents with the same structure
-but different concrete classes (`RowItem` instead of `FeedRow`, `RowItemRankingStep`, etc.).
+Phase 1 + Phase 1.5 together are the "aha moment": both ranking layers are config-driven,
+and ads blend natively within carousels as `RowItem` objects (no separate insertion pass).
 
 ---
 
@@ -119,13 +119,15 @@ They are not MLE-configurable and do not belong in experiment config JSON.
 declared in experiment JSON (e.g. "for this diversity experiment, hold NV_CAROUSEL at position 0").
 It does NOT replace the hardcoded NV post-checkout pinning or PAD positioning above.
 
-### Ads (stay as post-ranking insertion)
+### Ads — blend as RowItems in Phase 1.5, not as vertical FeedRows
 
-Ads are assembled by a separate code path (`PlacementProcessingUtil.rankAdsCandidates()`,
-`maybeAddSponsoredCarousel()`) that runs outside `rankAndMergeContent()`. They are not part of
-`HomePageStoreLayoutOutputElements` and therefore not in `toFeedRows()`.
+Ads are not vertical-level rows. They blend at the **store ranker level** — ad candidates compete
+with organic stores as `RowItem` objects within each carousel's `MODEL_SCORING` step. There is no
+`AD_CAROUSEL` FeedRow at any phase. Do not add it.
 
-Phase 1 UBP has no `AD_CAROUSEL` FeedRow. Ads compete in a unified list in Phase 3+ only.
+Phase 1 vertical ranking does not touch ads. Ads blending (Phase 1.5) is a horizontal concern:
+`RowItemRanker` receives both organic and ad store candidates for a carousel and ranks them
+together. See `context/Homepage Ads Blending.md`.
 
 ### Value function — Phase 1 approximation
 

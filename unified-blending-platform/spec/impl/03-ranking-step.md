@@ -361,7 +361,7 @@ Phase 1  =   1.0    ×  MODEL_SCORING   ×  MULTIPLIER_BOOST
 - `updateSortOrderOfTasteOfDashPass()` — PAD=3 logic (stays, controlled by its own DV)
 - `updateSortOrderOfMemberPricing()` — member pricing priority (stays, runtime feature flag)
 
-**No ads in Phase 1.** `RowType` does not include `AD_CAROUSEL`. Ads remain post-ranking insertion via `maybeAddSponsoredCarousel()`. Phase 3+ vision only.
+**No ads at the FeedRow level, ever.** `RowType` does not include `AD_CAROUSEL`. Ads blend as `RowItem` objects within carousels at the horizontal ranking layer (Phase 1.5). See `context/Homepage Ads Blending.md`.
 
 ## Prerequisites
 
