@@ -18,14 +18,14 @@ These five contracts establish the boundary:
 | # | Contract | Counterparty | Root cause addressed |
 |---|---|---|---|
 | 1 | Experiment Config (JSON) | MLEs, partner teams | No API boundary — config hell |
-| 2 | Component Interface | Any team whose content gets ranked | No common unit in the pipeline |
+| 2 | FeedRow / RowItem Interface | Any team whose content gets ranked | No common unit in the pipeline |
 | 3 | Value Function / Score | Model teams (UR, Ads, VP ranker) | No common scoring scale |
-| 4 | Processor Interface | Domain teams (NV, Ads, Merch) | No extension point without HP involvement |
+| 4 | RankingStep Interface | Domain teams (NV, Ads, Merch) | No extension point without HP involvement |
 | 5 | Trace Event | Analytics / data science | No stage-wise observability |
 
 ---
 
-## Contract 2: Component Interface
+## Contract 2: FeedRow / RowItem Interface
 
 **Counterparty: Any team whose content wants to be ranked**
 
@@ -34,9 +34,9 @@ Today there are 9+ separate typed carousel classes with no shared interface. Eve
 type-switching glue.
 
 ```kotlin
-interface VerticalComponent {
+interface FeedRow {
     val id: String
-    val type: ComponentType          // STORE_CAROUSEL, ITEM_CAROUSEL, NV_CAROUSEL, AD_CAROUSEL, ...
+    val type: RowType          // STORE_CAROUSEL, ITEM_CAROUSEL, NV_CAROUSEL, AD_CAROUSEL, ...
     var score: Double                // mutable — processors update this in-place
     val metadata: MutableMap<String, Any>
     fun recordTrace(stepId: String, value: Any)
@@ -44,15 +44,15 @@ interface VerticalComponent {
 }
 ```
 
-The engine operates on `MutableList<VerticalComponent>` throughout. Ads, organic, and merch
+The engine operates on `MutableList<FeedRow>` throughout. Ads, organic, and merch
 carousels are in the same list from the start — not inserted after organic ranking completes.
 
 To participate in UBP ranking, a content type implements this interface and provides an adapter:
 
 ```kotlin
-class StoreCarouselComponent(val carousel: StoreCarousel) : VerticalComponent {
+class StoreCarouselRow(val carousel: StoreCarousel) : FeedRow {
     override val id = carousel.id
-    override val type = ComponentType.STORE_CAROUSEL
+    override val type = RowType.STORE_CAROUSEL
     override var score: Double = carousel.predictionScore ?: 0.0
     override fun applyBackTo() { carousel.sortOrder = score.toInt() }
 }
@@ -106,18 +106,18 @@ Calibration types a model team declares in their experiment config:
 
 ---
 
-## Contract 4: Processor Interface
+## Contract 4: RankingStep Interface
 
 **Counterparty: Domain teams that need custom ranking logic**
 
 HP owns the engine and registry. Partner teams own their processors.
 
 ```kotlin
-interface VerticalProcessor {
+interface FeedRowRankingStep {
     val type: String   // registered key referenced in experiment JSON steps
 
     suspend fun process(
-        components: MutableList<VerticalComponent>,
+        components: MutableList<FeedRow>,
         context: RankingContext,
         params: Map<String, Any>,   // injected from config at call time — no internal DV reads
     )
@@ -129,26 +129,26 @@ internally is not a UBP processor — it defeats the entire point. All tunable b
 through `params`.
 
 Adding a new step type:
-1. Team implements `VerticalProcessor`
-2. HP registers it in the processor registry (one line)
+1. Team implements `FeedRowRankingStep`
+2. HP registers it in the step registry (one line)
 3. Any experiment can use it via config immediately
 
-**Example:** NV team wants custom trial-ramp logic. They implement `NvTrialBoostProcessor`,
+**Example:** NV team wants custom trial-ramp logic. They implement `NvTrialBoostStep`,
 HP registers it. From then on NV configures it via JSON — HP never understands NV business logic.
 
 ```kotlin
-class NvTrialBoostProcessor : VerticalProcessor {
+class NvTrialBoostStep : FeedRowRankingStep {
     override val type = "NV_TRIAL_BOOST"
 
     override suspend fun process(
-        components: MutableList<VerticalComponent>,
+        components: MutableList<FeedRow>,
         context: RankingContext,
         params: Map<String, Any>,
     ) {
         val boostMultiplier = params["boost_multiplier"] as Double
         val maxPosition = params["max_position"] as Int
         components
-            .filter { it.type == ComponentType.NV_CAROUSEL }
+            .filter { it.type == RowType.NV_CAROUSEL }
             .take(maxPosition)
             .forEach { it.score *= boostMultiplier }
     }
@@ -156,7 +156,7 @@ class NvTrialBoostProcessor : VerticalProcessor {
 ```
 
 **Pain points addressed:** 3.2 (ownership ambiguity — clear boundary: HP owns engine, partners own
-processors), 3.3 (Merch can own `MerchPlacementProcessor`), 3.4 (domain expertise bottleneck gone)
+processors), 3.3 (Merch can own `MerchPlacementStep`), 3.4 (domain expertise bottleneck gone)
 
 ---
 
@@ -172,8 +172,8 @@ message UbpVerticalRankingTrace {
   string experiment_id  = 2;
   string treatment      = 3;
   string step_id        = 4;
-  string component_id   = 5;
-  string component_type = 6;
+  string row_id   = 5;
+  string row_type = 6;
   double score_before   = 7;
   double score_after    = 8;
   int64  timestamp_ms   = 9;
@@ -345,8 +345,8 @@ experiments start here.
           "type": "FIXED_PINNING",
           "params": {
             "rules": [
-              { "component_id": "pad",            "position": 3, "hard_pin": true },
-              { "component_id": "member_pricing", "position": 0, "hard_pin": true }
+              { "row_id": "pad",            "position": 3, "hard_pin": true },
+              { "row_id": "member_pricing", "position": 0, "hard_pin": true }
             ]
           }
         }
@@ -354,7 +354,7 @@ experiments start here.
     },
     "output_config": {
       "emit_trace": false,
-      "max_vertical_components": 20
+      "max_feed_rows": 20
     }
   }
 }
@@ -541,19 +541,19 @@ fixups. This makes today's silent post-ranking overrides declared, visible, and 
   "params": {
     "rules": [
       {
-        "component_id": "pad",
+        "row_id": "pad",
         "position": 3,
         "hard_pin": true,
         "condition": "component_present"
       },
       {
-        "component_id": "member_pricing",
+        "row_id": "member_pricing",
         "position": 0,
         "hard_pin": true,
         "condition": "component_present"
       },
       {
-        "component_id": "nv_trial",
+        "row_id": "nv_trial",
         "position": 2,
         "hard_pin": false,
         "condition": "is_post_checkout_nv_boosting"
@@ -567,9 +567,9 @@ Multiple rules in one step. Order of declaration determines precedence on confli
 `hard_pin: true` = unconditional. `hard_pin: false` = conditional on `condition` evaluating true.
 
 Today's fixups that become declared `FIXED_PINNING` rules:
-- `updateSortOrderOfNVCarousel()` → `component_id: "nv_trial", condition: "is_post_checkout_nv_boosting"`
-- `updateSortOrderOfTasteOfDashPass()` → `component_id: "pad", position: 3`
-- `updateSortOrderOfMemberPricing()` → `component_id: "member_pricing", position: 0`
+- `updateSortOrderOfNVCarousel()` → `row_id: "nv_trial", condition: "is_post_checkout_nv_boosting"`
+- `updateSortOrderOfTasteOfDashPass()` → `row_id: "pad", position: 3`
+- `updateSortOrderOfMemberPricing()` → `row_id: "member_pricing", position: 0`
 
 ---
 
@@ -617,7 +617,7 @@ Or isotonic:
 ```json
 "output_config": {
   "emit_trace": true,
-  "max_vertical_components": 20
+  "max_feed_rows": 20
 }
 ```
 
@@ -628,7 +628,7 @@ Cost: ~2x Iguazu event volume. Use in treatment arms; leave `false` in control.
 
 ### Horizontal Pipeline Contract (Phase 2)
 
-Same schema, applied to store/item ordering within each carousel. Key addition: `carousel_overrides`
+Same schema, applied to store/item ordering within each carousel. Key addition: `row_overrides`
 lets specific carousels opt in/out of steps that don't apply globally.
 
 **Horizontal step types:**
@@ -663,7 +663,7 @@ lets specific carousels opt in/out of steps that don't apply globally.
         { "id": "rules",        "type": "BUSINESS_RULES_SORT", "params": { "apply_open_closed": true } },
         { "id": "order_rerank", "type": "ORDER_HISTORY_RERANK","params": { "enabled": false } }
       ],
-      "carousel_overrides": {
+      "row_overrides": {
         "FAVORITES": {
           "order_rerank": { "enabled": true, "tiers": ["S1", "S2", "S3"], "lookback_days": 10 }
         },
@@ -684,7 +684,7 @@ lets specific carousels opt in/out of steps that don't apply globally.
 }
 ```
 
-`carousel_overrides` semantics: engine applies default config, then shallow-merges the carousel-
+`row_overrides` semantics: engine applies default config, then shallow-merges the carousel-
 specific override for that carousel type. `skip: true` on a step skips it for that carousel only.
 
 `ORDER_HISTORY_RERANK` is notable: today it runs silently *after* Iguazu fires (S1/S2/S3
@@ -924,8 +924,8 @@ First, make the heuristic explicit and traced. Then remove it in a treatment.
     "step_params": {
       "pin": {
         "rules": [
-          { "component_id": "pad",            "position": 3, "hard_pin": true },
-          { "component_id": "member_pricing", "position": 0, "hard_pin": true }
+          { "row_id": "pad",            "position": 3, "hard_pin": true },
+          { "row_id": "member_pricing", "position": 0, "hard_pin": true }
         ]
       }
     }
