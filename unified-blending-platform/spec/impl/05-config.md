@@ -56,6 +56,31 @@ data class UnifiedExperimentConfig(
 ```
 
 ```kotlin
+// libraries/common/.../ubp/vertical/config/StepConfig.kt
+
+package com.doordash.ubp.vertical.config
+
+import com.fasterxml.jackson.annotation.JsonProperty
+
+/**
+ * A single ranked step in the pipeline.
+ *
+ * JSON shape:
+ * { "id": "score", "type": "MODEL_SCORING", "params": { "model_name": "store_ranking_v1_1" } }
+ */
+data class StepConfig(
+    @JsonProperty("id")
+    val id: String,
+
+    @JsonProperty("type")
+    val type: String,
+
+    @JsonProperty("params")
+    val params: Map<String, Any> = emptyMap(),
+)
+```
+
+```kotlin
 // libraries/common/.../ubp/vertical/config/TreatmentConfig.kt
 
 package com.doordash.ubp.vertical.config
@@ -309,11 +334,24 @@ Result: a 4-step pipeline. The `diversity` step is inserted between `blend` and 
 
 ---
 
-## JSON → Kotlin Deserialization Note
+## JSON → Kotlin Deserialization
 
 Config files are hot-reloaded via `DeserializedRuntimeCache` (existing infrastructure). The cache holds `Map<String, UnifiedExperimentConfig>` keyed by experiment ID. TTL: 5 minutes. No pod restart needed for param changes during a running experiment.
 
-Deserialization follows the existing Jackson convention in the codebase: snake_case JSON fields map to camelCase Kotlin fields via `@JsonProperty` annotations on each field (as shown in the data classes above). Alternatively, a Jackson `PropertyNamingStrategies.SNAKE_CASE` naming strategy configured on the `ObjectMapper` eliminates the need for per-field annotations.
+Deserialization uses Jackson directly — no manual map lookups or brittle key parsing:
+
+```kotlin
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
+
+private val mapper = jacksonObjectMapper()
+
+// Called by cache loader — raw JSON string → typed config
+fun parseConfig(json: String): UnifiedExperimentConfig =
+    mapper.readValue<UnifiedExperimentConfig>(json)
+```
+
+Snake_case JSON fields map to camelCase Kotlin fields via `@JsonProperty` annotations on each field (as shown in the data classes above). Alternatively, a Jackson `PropertyNamingStrategies.SNAKE_CASE` naming strategy configured on the `ObjectMapper` eliminates the need for per-field annotations. Either approach yields the same typed result — no manual `map["key"]` lookups.
 
 ---
 
