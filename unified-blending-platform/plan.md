@@ -172,13 +172,15 @@ Result: N × M valid cells, independent per layer.
 
 ## Phase 1: Vertical Blending Platform — Implementation Steps
 
-### Step 1: `UnifiedExperimentConfig` data classes + `UbpRuntimeUtil`
+### Step 1: Config data classes + `UbpRuntimeUtil` + `UbpContractAssembler`
 
-**Goal:** Load the MLE contract from Runtime JSON and resolve the active config.
+**Goal:** Load the MLE contract from Runtime JSON, resolve the active config, and dynamically assemble equivalent UBP contracts from prod behavior during shadow.
 
 **What to build:**
-- Data classes: `UnifiedExperimentConfig`, `ValueFunctionConfig`, `PredictorConfig`, `FeatureSpec`, `PipelineConfig`, `StepConfig`, `CalibrationSpec`, `ConstraintConfig`, `OutputConfig`
-- `UbpRuntimeUtil.resolveConfig(experimentId, experimentMap)` — reads Runtime JSON, falls back to `"control"` on missing key or parse error
+- Data classes: `UnifiedExperimentConfig`, `TreatmentConfig`, `PredictorConfig`, `FeatureSpec`, `PipelineConfig`, `StepConfig`, `CalibrationSpec`, `OutputConfig`, `StepParams` sealed interface
+- `UbpContractAssembler` — observes prod per-request decisions, assembles equivalent UBP contract JSON (see Part 1)
+- `UbpRuntimeUtil.resolve(experimentId, treatment)` — reads Runtime JSON, falls back to `"control"` on missing key or parse error
+- `UbpRuntimeUtil.resolveFromConfig(config, treatment)` — resolves from in-memory config (used by contract assembler)
 - Support `"extends": "control"` + `"step_params"` shallow merge in the resolver
 - Hot-reloadable via `DeserializedRuntimeCache` (5-minute TTL)
 - Convention: DV label = `"ubp_{experiment_id}"`, JSON = `"ubp/experiments/{experiment_id}.json"`
@@ -222,11 +224,12 @@ Result: N × M valid cells, independent per layer.
 
 ```kotlin
 interface FeedRowRankingStep {
-    val type: String
+    val stepType: String
+    val paramsClass: Class<out StepParams>
     suspend fun process(
         rows: MutableList<FeedRow>,
         context: RankingContext,
-        params: Map<String, Any>,
+        params: StepParams,
     )
 }
 ```
@@ -243,19 +246,17 @@ interface FeedRowRankingStep {
 
 ```kotlin
 class FeedRowRanker(
-    private val stepRegistry: Map<String, FeedRowRankingStep>,
-    private val ubpRuntimeUtil: UbpRuntimeUtil,
+    private val stepRegistry: StepRegistry,
+    private val runtimeUtil: UbpRuntimeUtil,
+    private val traceEmitter: UbpTraceEmitter? = null,
 ) {
-    suspend fun rank(
-        rows: MutableList<FeedRow>,
-        experimentId: String,
-        context: RankingContext,
-    ): List<FeedRow>
+    suspend fun rank(rows: MutableList<FeedRow>, experimentId: String, treatment: String, context: RankingContext): List<FeedRow>
+    suspend fun rank(rows: MutableList<FeedRow>, resolved: ResolvedPipeline, context: RankingContext): List<FeedRow>
 }
 ```
 
-- Resolves config via `ubpRuntimeUtil.resolveConfig(experimentId, context.experimentMap)`
-- Loops steps, dispatches to `stepRegistry[step.type]`
+- Resolves config via `runtimeUtil.resolve(experimentId, treatment)` or accepts pre-resolved pipeline
+- Loops steps, dispatches to `stepRegistry[stepConfig.type]`
 - Unknown step type → skip + log warning (never crash)
 - Auto-trace: `row.recordTrace("${step.id}.score", score)` after each step when `emitTrace = true`
 

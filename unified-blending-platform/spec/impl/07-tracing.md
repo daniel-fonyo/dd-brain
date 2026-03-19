@@ -85,7 +85,9 @@ for (stepConfig in steps) {
         rows.associate { it.id to it.score }
     } else null
 
-    step.process(rows, context, stepConfig.params)
+    val resolvedParams = resolveParams(stepConfig.rawParams, resolved.predictors)
+    val typedParams: StepParams = OBJECT_MAPPER_RELAX.treeToValue(resolvedParams, step.paramsClass)
+    step.process(rows, context, typedParams)
 
     if (traceEmitter != null && scoresBefore != null) {
         traceEmitter.recordStep(rows, stepConfig.id, experimentId, treatment, context.requestId, scoresBefore)
@@ -93,7 +95,7 @@ for (stepConfig in steps) {
 }
 ```
 
-`emitTrace` is resolved from the experiment config output config via `UbpRuntimeUtil.resolveEmitTrace()`.
+`emitTrace` is a field on `ResolvedPipeline` returned by `UbpRuntimeUtil.resolve()`.
 
 ---
 
@@ -104,13 +106,15 @@ Add `output_config` to `TreatmentConfig` (from Part 5):
 ```kotlin
 data class TreatmentConfig(
     val extends: String? = null,
+    val predictors: Map<String, PredictorConfig>? = null,
     val verticalPipeline: PipelineConfig? = null,
-    val stepParams: Map<String, Map<String, Any>>? = null,
-    val outputConfig: OutputConfig? = null,  // NEW
+    val stepParams: Map<String, ObjectNode>? = null,
+    val outputConfig: OutputConfig? = null,
 )
 
 data class OutputConfig(
-    val emitTrace: Boolean = false,
+    @JsonProperty("emit_trace")    val emitTrace: Boolean = false,
+    @JsonProperty("max_feed_rows") val maxFeedRows: Int = 20,
 )
 ```
 
@@ -128,7 +132,7 @@ In experiment JSON:
 
 Control has `emit_trace: false` (default). Only trace-enabled treatments pay the log volume cost.
 
-`UbpRuntimeUtil.resolveEmitTrace(experimentId, treatment): Boolean` reads this field after merging.
+`ResolvedPipeline.emitTrace` carries this field after `UbpRuntimeUtil.resolve()` merges configs.
 
 ---
 

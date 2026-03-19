@@ -12,7 +12,7 @@ engineers shared vocabulary for review and onboarding.
 | **Strategy** (Behavioral) | Each `FeedRowRankingStep` is a swappable algorithm |
 | **Chain of Responsibility** (Behavioral) | Steps execute in sequence, each passing the list to the next |
 | **Facade** (Structural) | `FeedRowRanker.rank()` hides registry, config resolution, and tracing |
-| **Factory Method** (Creational) | `UbpRuntimeUtil.resolveConfig()` produces the right config for an experiment |
+| **Factory Method** (Creational) | `UbpRuntimeUtil.resolve()` produces the right `ResolvedPipeline` for an experiment |
 | **Prototype** (Creational) | `extends: "control"` shallow-merges a copy of control config |
 | **Proxy** (Structural) | Shadow infrastructure intercepts ranking calls for comparison |
 | **Observer** (Behavioral) | Engine auto-traces after each step without step code knowing |

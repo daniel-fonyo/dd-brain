@@ -75,14 +75,26 @@ class FeedRowRanker(
     private val runtimeUtil: UbpRuntimeUtil,
     private val traceEmitter: UbpTraceEmitter? = null,   // null until Part 7
 ) {
+    /** Path 1: resolves from cache (normal path after control.json is frozen) */
     suspend fun rank(
         rows: MutableList<FeedRow>,
         experimentId: String,
         treatment: String,
         context: RankingContext,
-    ): List<FeedRow> {
-        val resolved = runtimeUtil.resolve(experimentId, treatment)
+    ): List<FeedRow> = rankInternal(rows, runtimeUtil.resolve(experimentId, treatment), context)
 
+    /** Path 2: accepts pre-resolved pipeline (used during shadow assembly) */
+    suspend fun rank(
+        rows: MutableList<FeedRow>,
+        resolved: ResolvedPipeline,
+        context: RankingContext,
+    ): List<FeedRow> = rankInternal(rows, resolved, context)
+
+    private suspend fun rankInternal(
+        rows: MutableList<FeedRow>,
+        resolved: ResolvedPipeline,
+        context: RankingContext,
+    ): List<FeedRow> {
         for (stepConfig in resolved.steps) {
             val step = stepRegistry[stepConfig.type]
             if (step == null) {

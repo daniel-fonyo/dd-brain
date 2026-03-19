@@ -414,6 +414,20 @@ class UbpRuntimeUtil(
         step.copy(rawParams = merged)
     }
 
+    /**
+     * Resolves a ResolvedPipeline from an in-memory config (not from cache).
+     * Used by UbpContractAssembler during shadow assembly (Part 1).
+     */
+    fun resolveFromConfig(config: UnifiedExperimentConfig, treatment: String): ResolvedPipeline {
+        val treatmentConfig = config.treatments[treatment]
+            ?: throw IllegalArgumentException("Treatment '$treatment' not in config")
+        return ResolvedPipeline(
+            steps      = treatmentConfig.verticalPipeline?.steps ?: emptyList(),
+            predictors = treatmentConfig.predictors ?: emptyMap(),
+            emitTrace  = treatmentConfig.outputConfig?.emitTrace ?: false,
+        )
+    }
+
     private fun mergePredictors(
         base: Map<String, PredictorConfig>,
         overrides: Map<String, PredictorConfig>,
