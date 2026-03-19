@@ -9,8 +9,9 @@ Unified Blending Platform.
 
 | File | Purpose |
 |---|---|
-| `rfc.md` | RFC: problem statement, goals, non-goals, high-level design, 5 contracts, phases, control.json baselines, experiment examples |
+| `rfc.md` | RFC: problem statement, goals, non-goals, high-level design, contracts (0-5), phases, control.json baselines, experiment examples |
 | `impl/00-overview.md` | Implementation order, dependencies between parts, guiding principles, Phase 1 scope boundary |
+| `impl/00a-safe-refactoring.md` | Safe refactoring strategy: characterization tests, seams, strangler fig, Cover and Modify discipline |
 | `impl/01-shadow-infra.md` | Shadow traffic path for safe validation before any real traffic migrates |
 | `impl/02-feed-row-interface.md` | FeedRow interface + 9 adapters (Adapter pattern) |
 | `impl/03-ranking-step.md` | FeedRowRankingStep interface + 4 step implementations (Strategy pattern) |
@@ -47,3 +48,6 @@ Parts 2–7 each have a direct Phase 1.5 equivalent (not yet written — follow 
 | `context/current-system-deep-dive.md` | Deep dive into current feed-service code |
 | `context/Homepage Ads Blending.md` | Ads blending architecture — post-POC context |
 | `context/mle-experiment-guide.md` | MLE decision guide + all experiment cases (Cases 1–7) + feature sources + calibration reference |
+| `context/pivot-analysis.md` | March 2026 pivot: YZ + Dipali transcript synthesis, impact on POC direction |
+| `context/rfc-feedback.md` | Stakeholder pain points (YZ, Dipali, Frank) with synthesis |
+| `context/experiment-traffic-industry-research.md` | Industry research on per-layer experiment traffic allocation |
