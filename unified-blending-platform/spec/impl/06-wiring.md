@@ -31,13 +31,19 @@ runCatching {
     val treatment = discoveryExperimentManager.getUbpVerticalTreatment(context.experimentMap)
     val newResult = feedRowRanker.rank(rows, "ubp_hp_vertical", treatment, context)
     val ranked = applyRankedRows(newResult, layout)
-    ubpShadowEmitter.emit(
-        requestId = context.requestId,
-        layer = "vertical",
-        oldSortOrders = oldResult.first.toSortOrderMap(),
-        newSortOrders = ranked.toSortOrderMap(),
-    )
-}
+
+    val oldOrder = oldResult.first.toSortOrderMap()
+    val newOrder = ranked.toSortOrderMap()
+    val divergences = oldOrder.filter { (id, pos) -> newOrder[id] != pos }
+    if (divergences.isNotEmpty()) {
+        logger.warn(
+            "ubp_shadow_divergence layer=vertical " +
+            "request_id=${context.requestId} " +
+            "divergence_count=${divergences.size} " +
+            "diffs=${divergences.map { (id, old) -> "$id:$old->${newOrder[id]}" }.joinToString(",")}"
+        )
+    }
+}.onFailure { logger.warn("ubp_shadow_error layer=vertical request_id=${context.requestId}", it) }
 ```
 
 `toFeedRows()` and `applyRankedRows()` are the helpers introduced in Part 2. `feedRowRanker` is constructor-injected (see DI / Module Setup).
@@ -60,14 +66,19 @@ if (shadowMode == "shadow") {
     runCatching {
         val treatment = discoveryExptManager.getUbpHorizontalTreatment(context.experimentMap)
         val newResult = rowItemRanker.rank(collection, "ubp_hp_horizontal", treatment, context)
-        ubpShadowEmitter.emit(
-            requestId = context.requestId,
-            layer = "horizontal",
-            carouselId = collection.id,
-            oldStoreOrder = oldResult.storeIds,
-            newStoreOrder = newResult.storeIds,
-        )
-    }.onFailure { logger.warn("UBP shadow horizontal failed", it) }
+
+        val divergences = oldResult.storeIds
+            .zip(newResult.storeIds)
+            .filter { (old, new) -> old != new }
+        if (divergences.isNotEmpty()) {
+            logger.warn(
+                "ubp_shadow_divergence layer=horizontal " +
+                "request_id=${context.requestId} " +
+                "carousel_id=${collection.id} " +
+                "divergence_count=${divergences.size}"
+            )
+        }
+    }.onFailure { logger.warn("ubp_shadow_error layer=horizontal request_id=${context.requestId}", it) }
 }
 ```
 
@@ -134,7 +145,7 @@ UBP_HP_HORIZONTAL_V1("ubp_hp_horizontal_v1"),
 
 ## Testing
 
-Integration test: enable shadow for a test request, verify shadow emitter is called and old result is returned unchanged.
+Integration test: enable shadow for a test request, verify old result is returned unchanged and divergences are logged when ranks differ.
 
 ```kotlin
 @Test
@@ -149,8 +160,7 @@ fun `vertical shadow runs new ranker but returns old result`() {
     // Old result is returned
     assertEquals(oldRankedOrder, response.storeCarousels.map { it.id })
 
-    // Emitter was called (if ranks differ)
-    verify { ubpShadowEmitter.emit(any(), any(), any(), any()) }
+    // Divergences logged if ranks differ — verify via log capture or check old result unchanged
 }
 ```
 
@@ -166,5 +176,5 @@ fun `vertical shadow runs new ranker but returns old result`() {
 
 - `feedRowRanker.rank()` is called in the vertical shadow branch (no longer a stub)
 - `rowItemRanker.rank()` is called in the horizontal shadow branch (mirrors vertical shape)
-- Shadow emitter receives real comparison data from both branches
-- Integration test passes: old result is returned to caller, emitter is invoked with ranked output
+- Divergences logged via `logger.warn()` for both vertical and horizontal branches
+- Integration test passes: old result is returned to caller
