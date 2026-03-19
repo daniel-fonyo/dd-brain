@@ -309,65 +309,58 @@ Post-ranking fixups (NV pin, PAD, member pricing) → declared `FIXED_PINNING` s
 
 ## Migration Path
 
-### Stage 0: Deploy engine (0% real traffic)
+### Stage 0: Contract Assembly (0% real traffic to UBP engine)
 
-UBP code ships but no `ubp_*` DV key exists. 100% of traffic takes the old code path.
-
-### Stage 1: Shadow validation
-
-Run both paths on every request. Always return the OLD result to user. Zero user impact.
+Deploy `UbpContractAssembler` in shadow mode. For each shadow request, the assembler observes
+what the old path actually did and constructs the equivalent UBP contract JSON dynamically.
+The engine does NOT need to exist yet — the assembler runs independently.
 
 ```
 shadow arm:
-  1. Run old path  → result_old
-  2. Run FeedRowRanker with control.json → result_new
-  3. Return result_old to user
-  4. Emit both sort orders to Snowflake
-  5. Query divergence: WHERE result_old != result_new
+  1. Run old path → result_old (returned to user)
+  2. UbpContractAssembler.assemble(context) → assembled UBP JSON
+  3. Log assembled contract (ubp_assembled_contract structured log)
+  4. (later, once engine exists) Run FeedRowRanker with assembled contract → result_new
+  5. Compare result_old vs result_new → log divergences
 ```
 
-Iterate on `control.json` until divergence is below threshold (target: >99% match on sort order).
+**Why assembly first (not static control.json):** The old path makes dynamic decisions per
+request — predictor selection varies by experiment, blending config values come from runtime
+JSON, pinning order is context-dependent. Trying to hand-author a static control.json from
+specs introduces ambiguity. Instead, the assembler reads the same sources the old path reads
+and constructs the equivalent UBP JSON. You can grep any `request_id` and see the exact
+contract for that request.
 
-**Seeding `control.json` from existing prod config — don't hand-author:**
+This is the fast path to visual feedback — you see the contract shape for real traffic before
+writing engine code.
 
-For vertical, most params already live in `hp_vertical_blending_config.json`. Bootstrap by reading
-it at init time:
+### Stage 1: Visual Inspection + Contract Shape Stabilization
 
-```kotlin
-fun buildControlConfig(): UnifiedExperimentConfig {
-    val blendingConfig = P13nRuntimeUtil.getVerticalBlendingConfig()
-    // calibration_entries, intent_scoring_config, boost_weights, diversity params
-    // come directly from the existing runtime file — no drift risk
+Inspect assembled contract JSONs across 1000+ requests. Look for:
+- Does the vertical contract always have 4 steps? Any edge cases?
+- What predictor names appear? Just one default, or multiple per experiments?
+- What do the horizontal per-carousel contracts look like for each RankingType?
+- Are the boost weight / calibration values stable or do they vary per request?
 
-    return UnifiedExperimentConfig(
-        rowPipeline = PipelineConfig(steps = listOf(
-            StepConfig("score",     "MODEL_SCORING",    mapOf("predictor_ref" to "p_act")),
-            StepConfig("blend",     "MULTIPLIER_BOOST", blendingConfig.toMultiplierParams()),
-            StepConfig("diversity", "DIVERSITY_RERANK", blendingConfig.toDiversityParams()),
-            StepConfig("pin",       "FIXED_PINNING",    buildPinningRules()),
-        ))
-    )
-}
+Once the shape stabilizes → take a representative assembled contract and freeze it as the
+static `control.json`. At this point, switch the shadow from assembled contracts to the static
+file.
 
-// Hardcoded fixups — values are known and stable
-fun buildPinningRules() = mapOf("rules" to listOf(
-    mapOf("row_id" to "pad",            "position" to 3, "hard_pin" to true),
-    mapOf("row_id" to "member_pricing", "position" to 0, "hard_pin" to true),
-))
-```
+### Stage 2: Shadow Validation with Static control.json
 
-Shadow comparison catches anything the bootstrap misses.
+Shadow with static `control.json`. Target: `divergence_count = 0`. Any divergence = the
+static contract drifted from what the assembler would have produced.
 
-### Stage 2: First real traffic on UBP control arm
+### Stage 3: First real traffic on UBP control arm
 
 Route a small % of real traffic to UBP control arm. Identical page layout to old path.
 Confirms no production issues.
 
-### Stage 3: First experiment on UBP
+### Stage 4: First experiment on UBP
 
 MLE authors treatment JSON, no code change required. This is the payoff.
 
-### Stage 4: Retire old DVs
+### Stage 5: Retire old DVs
 
 When old experiments end naturally, don't rebuild them on old infra. Remove old code branches
 one by one — each independently shippable.
