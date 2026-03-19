@@ -3,14 +3,37 @@
 ## Status
 **MUST COMPLETE BEFORE PHASE 1 IMPLEMENTATION.**
 
-IT dept manages Chrome — need to confirm Playwright MCP can control it before building any browser-dependent skills.
+IT dept manages Chrome — need to confirm Playwright MCP can control it before building any browser-dependent skills. Uses bundled Chromium (not IT-managed Chrome) — no policy restrictions expected.
+
+---
+
+## Setup
+
+Playwright MCP is configured machine-level in `feed-service/.mcp.json` (gitignored). It does **not** live in brain or any checked-in location.
+
+**Pre-requisites:**
+1. Install Node: `brew install node`
+2. `feed-service/.mcp.json` already created with:
+   ```json
+   {
+     "mcpServers": {
+       "playwright": {
+         "command": "npx",
+         "args": ["@playwright/mcp@latest"]
+       }
+     }
+   }
+   ```
+3. Open a **Claude Code session from `feed-service/`** — Playwright MCP will be available as a tool after approving it on first use.
+
+> **Note:** Playwright MCP uses bundled Chromium by default, not the IT-managed Chrome binary. This avoids managed browser policy restrictions.
 
 ---
 
 ## Goal
 
 Prove that Playwright MCP can:
-1. Launch / connect to Chrome
+1. Launch bundled Chromium
 2. Navigate to a URL
 3. Scroll carousel elements
 4. Take and return screenshots
@@ -19,7 +42,7 @@ Prove that Playwright MCP can:
 
 ## POC Steps
 
-Run these manually via Playwright MCP in a Claude session:
+Run in a Claude Code session from `feed-service/`:
 
 1. Navigate to `https://www.doordash.com/`
 2. Wait for page to fully load (network idle)
@@ -43,10 +66,10 @@ Run these manually via Playwright MCP in a Claude session:
 
 ## Failure Modes to Investigate
 
-- **Chrome not found**: Playwright can't locate IT-managed Chrome binary → need to pass explicit `executablePath`
-- **SSO wall**: doordash.com redirects to login → use doordashtest.com instead (sandbox routing already handles this)
-- **Managed browser restrictions**: Chrome policies blocking automation flags → may need `--remote-debugging-port` workaround or to use a non-managed browser profile
-- **Playwright MCP not configured**: Check `~/.claude/settings.json` for Playwright MCP server entry
+- **npx not found**: Node not installed → `brew install node`
+- **Playwright MCP not loading**: Restart Claude Code session from feed-service after creating `.mcp.json`
+- **SSO wall**: doordash.com redirects to login → switch to `doordashtest.com` (sandbox routing handles this for real tests)
+- **Bundled Chromium download blocked**: Corporate network blocks Chromium download → may need to manually install via `npx playwright install chromium`
 
 ---
 
@@ -56,8 +79,7 @@ Document results here after running POC:
 
 ```
 Date:
-Chrome binary path:
-Playwright MCP config:
+Node version:
 Result: pass / fail
 Blockers found:
 Workaround applied:
