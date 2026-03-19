@@ -7,7 +7,8 @@
       "Bash(head:*)",
       "Bash(git commit:*)",
       "Bash(git restore:*)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Bash(code:*)"
     ]
   }
 }

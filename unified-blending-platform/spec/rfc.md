@@ -55,13 +55,21 @@ engineer involvement, and logic that accumulates permanently. MLEs cannot ship e
 
 **POC must prove:**
 
-1. **Vertical ranking is config-driven.** An MLE drops a JSON file — no HP code change, no pod
-   restart. Shadow comparison shows `control.json` replicates prod at >99% sort-order match.
+1. **Per-layer experiment traffic management without DV waterfall.** An MLE declares an experiment
+   (layer + model + traffic %) and UBP allocates traffic within that layer. No dummy DVs, no
+   priority lists, no reserve segments, no manual waterfall configuration. This is the #1 pain
+   point and the #1 deliverable.
 
-2. **Horizontal ranking is config-driven.** An MLE can run a store-within-carousel ranking
-   experiment by dropping a JSON file, the same way as vertical.
+2. **Vertical ranking is config-driven.** The engine reads an internal `control.json` maintained
+   by HP. Shadow comparison shows it replicates prod at >99% sort-order match.
 
-Together: the engine is generic, experiments are config. Both ranking layers proven.
+3. **Horizontal ranking is config-driven.** Same engine architecture applied to store-within-carousel
+   ranking.
+
+4. **Simple MLE experiment interface.** An MLE provides: experiment name, layer, model name,
+   traffic %. No step pipeline authoring. No HP code change.
+
+Together: traffic allocation is declarative, the engine is generic, and MLEs self-serve experiments.
 
 ---
 
@@ -102,15 +110,20 @@ REQUEST
      NonRankableHomepageOrderingUtil (NV pin, PAD, member pricing, color bleed, spacing)
 ```
 
-### Five Contracts at a Glance
+### Contracts at a Glance
 
-| # | Contract | Counterparty | Problem solved |
-|---|---|---|---|
-| 1 | Experiment Config (JSON) | MLEs, partner teams | Config fragmented across 10+ locations |
-| 2 | FeedRow / RowItem interfaces | Any team whose content gets ranked | 9+ typed classes with no shared interface |
-| 3 | Value Function / Score | Model teams | Incomparable scoring scales across content types |
-| 4 | RankingStep interface | Domain teams (NV, Ads, Merch) | No extension point without HP involvement |
-| 5 | Trace Event | Analytics / data science | No stage-wise score observability |
+| # | Contract | Facing | Counterparty | Problem solved |
+|---|---|---|---|---|
+| 0 | **Experiment Declaration** | MLE-facing | MLEs, partner teams | DV waterfall hell — per-layer traffic management |
+| 1 | Experiment Config (JSON) | Internal | HP team | Config fragmented across 10+ locations |
+| 2 | FeedRow / RowItem interfaces | Internal | Any team whose content gets ranked | 9+ typed classes with no shared interface |
+| 3 | Value Function / Score | Internal | Model teams | Incomparable scoring scales across content types |
+| 4 | RankingStep interface | Internal | Domain teams (NV, Ads, Merch) | No extension point without HP involvement |
+| 5 | Trace Event | Both | Analytics / data science | No stage-wise score observability |
+
+**Key distinction:** Contract 0 is the MLE-facing surface — what MLEs interact with. Contracts
+1–4 are internal engine architecture that HP owns and maintains. MLEs never author pipeline
+configs or step sequences.
 
 ### Engine Architecture
 
@@ -137,74 +150,105 @@ FeedRowRanker.rank(rows, experimentId, treatment, context)
 
 ---
 
-## Contract 1: Experiment Config (JSON)
+## Contract 0: Experiment Declaration (MLE-facing)
 
 **Counterparty: MLEs and partner teams**
 
-One JSON file per experiment. One DV per experiment. No HP code change to run a new experiment.
+This is the only contract MLEs interact with. An MLE declares an experiment — UBP handles
+traffic allocation, engine configuration, and execution.
 
-### File layout
-
-```
-ubp/experiments/control.json           ← HP owns; all treatments inherit from this
-ubp/experiments/{experiment_id}.json   ← MLE owns
-```
-
-DV label: `ubp_{experiment_id}`. DV value: treatment name (e.g. `"treatment_fw_v4"`).
-Unknown treatment → engine silently uses `"control"`.
-
-```kotlin
-// One line in DiscoveryExperimentManager.Manifest:
-UBP_HP_VERTICAL_FW_V4("ubp_hp_vertical_fw_v4"),
-```
-
-Config hot-reloaded via `DeserializedRuntimeCache` (5-min TTL). No pod restart.
-
-### Two modes
-
-**Mode 1 — Param override** (most experiments)
-
-Inherit the full control pipeline; change one or more step params.
+### What an MLE provides
 
 ```json
 {
-  "treatment_fw_v4": {
-    "extends": "control",
-    "step_params": {
-      "score": { "model_name": "store_ranker_fw_v4" }
+  "experiment_id": "nv_boost_v2",
+  "layer": "vertical",
+  "model_name": "vertical_intent_model_v3",
+  "predictor_name": "FEED_RANKING_FW_SIBYL_PREDICTOR_NAME",
+  "traffic_pct": 5,
+  "params": {
+    "vertical_boost_weights": {
+      "boosting_multipliers": [{ "vertical_ids": [10], "multiplier": 1.5 }]
     }
   }
 }
 ```
 
-Merge: each key in `step_params[stepId]` shallow-merges into that step's params. Treatment wins
-on collision. Keys not mentioned are preserved from control.
+| Field | Required | Description |
+|---|---|---|
+| `experiment_id` | Yes | Unique experiment name |
+| `layer` | Yes | `"vertical"` or `"horizontal"` |
+| `model_name` | Yes | Sibyl model to use |
+| `predictor_name` | No | Defaults to layer's default predictor |
+| `traffic_pct` | Yes | Percentage of traffic for this experiment (within the layer) |
+| `params` | No | Step-level param overrides (optional — empty = model swap only) |
 
-**Mode 2 — Full pipeline declaration** (step sequence changes)
+### What UBP handles (MLE never touches)
 
-```json
-{
-  "treatment_diversity_v1": {
-    "vertical_pipeline": {
-      "steps": [
-        { "id": "score",     "type": "MODEL_SCORING",    "params": { ... } },
-        { "id": "blend",     "type": "MULTIPLIER_BOOST", "params": { ... } },
-        { "id": "diversity", "type": "DIVERSITY_RERANK", "params": { "enabled": true, "diversity_scoring_params": { "weight": 0.4 } } },
-        { "id": "pin",       "type": "FIXED_PINNING",    "params": { ... } }
-      ]
-    }
-  }
-}
+- **Traffic allocation**: UBP assigns users to experiments within a layer. No dummy DVs, no
+  priority lists, no reserve segments, no waterfall.
+- **Pipeline execution**: UBP reads internal `control.json`, applies MLE overrides, runs the
+  engine.
+- **Control protection**: Control config is HP-owned. MLEs cannot modify it. Separate runtime
+  configs for treatment params.
+- **Tracing**: Automatic per-step score snapshots when enabled.
+
+### Per-layer traffic management
+
+**The current pain (DV waterfall):**
+```
+4 consumer cohorts → priority list → dummy DV for traffic splitting
+→ reserve segment → waterfall to next experiment
+→ change one experiment in the middle → all downstream experiments break
+```
+
+**UBP target state:**
+```
+MLE says: "I want 5% traffic on vertical layer for my experiment"
+UBP allocates it. Done.
+
+Two vertical experiments + one horizontal experiment running simultaneously?
+Vertical experiments are mutually exclusive within vertical layer.
+Horizontal experiment is orthogonal — no interference.
 ```
 
 ### N × M experiment model
 
-Horizontal and vertical DVs are independent. A user is assigned to one of each simultaneously.
+Experiments are mutually exclusive WITHIN a layer, orthogonal ACROSS layers.
 
 ```
-DV "ubp_hp_horizontal_v2" → "treatment_fw"       (horizontal)
-DV "ubp_hp_vertical_v3"   → "intent_model_v3"    (vertical)
-→ N × M valid cells, no interference between layers
+Layer: vertical    → Experiment A (5%), Experiment B (10%), Control (85%)
+Layer: horizontal  → Experiment C (3%), Control (97%)
+→ Any (vertical, horizontal) combination is valid
+```
+
+UBP owns the traffic router per layer. Each user gets exactly one assignment per layer.
+
+---
+
+## Contract 1: Engine Config (Internal — HP-owned)
+
+**Counterparty: HP team only (not MLE-facing)**
+
+Internal JSON defining the ranking pipeline. HP maintains `control.json` as the canonical
+production behavior. MLE experiment declarations are resolved against this config at runtime.
+
+### File layout
+
+```
+ubp/config/control.json           ← HP owns; canonical production behavior
+ubp/config/overrides/             ← Generated from MLE experiment declarations
+```
+
+Config hot-reloaded via `DeserializedRuntimeCache` (5-min TTL). No pod restart.
+
+### Resolution flow
+
+```
+1. UBP traffic router assigns user to experiment per layer
+2. Engine reads control.json (base pipeline)
+3. Engine applies MLE experiment overrides (model name, params)
+4. Engine executes resolved pipeline
 ```
 
 ### Vertical step types (Phase 1)
@@ -382,10 +426,30 @@ treatment arms only; leave off in control to manage volume.
 
 ## Phases
 
-### Phase 1 — Vertical Ranking
+### Phase 0 — Per-Layer Traffic Management (NEW — #1 Priority)
+
+**The #1 pain point.** Replaces the DV waterfall with declarative per-layer experiment allocation.
+
+**What to build:**
+1. **Experiment registry** — runtime JSON listing active experiments per layer, each with
+   `experiment_id`, `model_name`, `traffic_pct`, `params` overrides.
+2. **Traffic router** — given a request, assigns user to exactly one experiment per layer based
+   on declared traffic percentages. Deterministic (hash-based on consumer ID + layer).
+3. **Control protection** — control config is a separate, team-owned runtime JSON. Treatment
+   configs are in a separate namespace. No cross-contamination.
+
+**Design constraint:** Must work with or without the ranking engine. Phase 0 can route traffic
+to experiments that still use the old ranking code path — the engine is not a prerequisite.
+
+**Open questions (to resolve before April 13 — YZ pat leave):**
+- UBP-owned composite DV per layer vs. traffic router reading experiment registry?
+- How does this interact with the existing 4-cohort system?
+- Gradual migration: can old experiments coexist with UBP-managed experiments?
+
+### Phase 1 — Vertical Ranking Engine
 
 **Incision point:** `DefaultHomePagePostProcessor.reOrderGlobalEntitiesV2()`, replacing
-`rankAndMergeContent()` for requests with a UBP DV.
+`rankAndMergeContent()` for requests routed by Phase 0's traffic router.
 
 **Migration (5 stages):**
 1. **Contract assembly** — `UbpContractAssembler` runs in shadow mode, observes prod per-request
@@ -395,20 +459,21 @@ treatment arms only; leave off in control to manage volume.
    representative assembled contract into static `control.json`. Shadow with static file. Target:
    `divergence_count = 0`.
 3. **Control arm** — small % real traffic to UBP control. Identical result to old path.
-4. **First experiment** — MLE drops a JSON file. No code change. This is the payoff.
+4. **First experiment** — MLE declares experiment via Contract 0. No code change. This is the payoff.
 5. **Retire** — as old experiments end, remove old code paths one by one.
 
 **Stays unchanged:** All `NonRankableHomepageOrderingUtil` fixups (NV post-checkout pin, PAD=3,
 member pricing), color bleed reordering, immersive spacing.
 
-### Phase 1.5 — Horizontal Ranking
+### Phase 1.5 — Horizontal Ranking Engine
 
 **Incision point:** `DefaultHomePageStoreRanker.rank()`, replacing each
 `modifyLiteStoreCollection()` call.
 
 Same 5-stage migration path as Phase 1.
 
-Phase 1 + Phase 1.5 together prove the core claim: both ranking layers are config-driven.
+Phase 0 + Phase 1 + Phase 1.5 together prove the full claim: traffic allocation is declarative,
+both ranking layers are config-driven, and MLEs self-serve experiments.
 
 ---
 
@@ -515,33 +580,19 @@ shallow-merges on top. `"skip": true` on a step skips it for that carousel only.
 
 ---
 
-## Appendix B: Experiment Examples
+## Appendix B: MLE Experiment Examples (Contract 0)
 
-See `context/mle-experiment-guide.md` for the full decision guide and all experiment cases.
+These show what MLEs write — the simplified experiment declaration, not internal pipeline configs.
 
-### New model version
+### New model version (most common)
 
 ```json
 {
-  "treatment_fw_v4": {
-    "extends": "control",
-    "predictors": {
-      "p_act": {
-        "predictor_name": "FEED_RANKING_FW_SIBYL_PREDICTOR_NAME",
-        "model_name": "store_ranker_fw_v4",
-        "use_case": "USE_CASE_HOME_PAGE_VERTICAL_RANKING",
-        "output_semantics": "PROBABILITY",
-        "features": [
-          { "name": "STORE_ID",         "source": "STORE" },
-          { "name": "CONSUMER_ID",      "source": "CONSUMER" },
-          { "name": "STORE_ETA",        "source": "STORE" },
-          { "name": "DAY_OF_WEEK",      "source": "CONTEXT" },
-          { "name": "IS_DASHPASS_USER", "source": "CONSUMER" }
-        ],
-        "calibration": { "type": "NONE" }
-      }
-    }
-  }
+  "experiment_id": "vertical_fw_v4",
+  "layer": "vertical",
+  "model_name": "store_ranker_fw_v4",
+  "predictor_name": "FEED_RANKING_FW_SIBYL_PREDICTOR_NAME",
+  "traffic_pct": 5
 }
 ```
 
@@ -549,17 +600,30 @@ See `context/mle-experiment-guide.md` for the full decision guide and all experi
 
 ```json
 {
-  "treatment_nv_1_5x": {
-    "extends": "control",
-    "step_params": {
-      "blend": {
-        "vertical_boost_weights": {
-          "boosting_multipliers": [{ "vertical_ids": [10], "multiplier": 1.5 }],
-          "default_multiplier": 1.0
-        }
-      }
+  "experiment_id": "nv_boost_1_5x",
+  "layer": "vertical",
+  "model_name": "store_ranking_v1_1",
+  "traffic_pct": 3,
+  "params": {
+    "vertical_boost_weights": {
+      "boosting_multipliers": [{ "vertical_ids": [10], "multiplier": 1.5 }],
+      "default_multiplier": 1.0
     }
   }
+}
+```
+
+### Multiple treatments in one experiment
+
+```json
+{
+  "experiment_id": "nv_boost_sweep",
+  "layer": "vertical",
+  "model_name": "store_ranking_v1_1",
+  "treatments": [
+    { "name": "nv_1_5x", "traffic_pct": 2, "params": { "vertical_boost_weights": { "boosting_multipliers": [{ "vertical_ids": [10], "multiplier": 1.5 }] } } },
+    { "name": "nv_2x",   "traffic_pct": 2, "params": { "vertical_boost_weights": { "boosting_multipliers": [{ "vertical_ids": [10], "multiplier": 2.0 }] } } }
+  ]
 }
 ```
 
@@ -567,92 +631,34 @@ See `context/mle-experiment-guide.md` for the full decision guide and all experi
 
 ```json
 {
-  "treatment_diversity_v1": {
-    "extends": "control",
-    "step_params": {
-      "diversity": {
-        "enabled": true,
-        "diversity_scoring_params": {
-          "weight": 0.4,
-          "coefficient_for_non_rx": 0.6,
-          "local_window_size_for_non_rx": 3,
-          "local_coefficient_for_non_rx": 0.3
-        }
-      }
-    }
+  "experiment_id": "diversity_v1",
+  "layer": "vertical",
+  "model_name": "store_ranking_v1_1",
+  "traffic_pct": 5,
+  "params": {
+    "diversity": { "enabled": true, "weight": 0.4 }
   }
 }
 ```
 
-### Measure opportunity cost of a pin
-
-Remove a pin in a treatment. Trace events show `score_before` at the `FIXED_PINNING` step —
-the organic value that was being displaced becomes measurable for the first time.
+### Partner team experiment (NV gives model + predictor)
 
 ```json
 {
-  "treatment_no_pad_pin": {
-    "extends": "control",
-    "step_params": {
-      "pin": { "rules": [] }
-    }
-  }
+  "experiment_id": "nv_split_predictor_v1",
+  "layer": "vertical",
+  "model_name": "nv_vertical_model_v1",
+  "predictor_name": "NV_SPLIT_PREDICTOR",
+  "traffic_pct": 3
 }
 ```
 
-### New intent model with calibration
+Note: NV team provides model + predictor. UBP allocates traffic. No DV waterfall setup required.
 
-```json
-{
-  "treatment_intent_v3": {
-    "extends": "control",
-    "predictors": {
-      "p_act": {
-        "predictor_name": "FEED_RANKING_FW_SIBYL_PREDICTOR_NAME",
-        "model_name": "vertical_intent_model_v3",
-        "use_case": "USE_CASE_HOME_PAGE_VERTICAL_RANKING",
-        "output_semantics": "PROBABILITY",
-        "features": [
-          { "name": "STORE_ID",            "source": "STORE" },
-          { "name": "DAY_OF_WEEK",         "source": "CONTEXT" },
-          { "name": "IS_DASHPASS_USER",    "source": "CONSUMER" },
-          { "name": "NV_LIFESTAGE_COHORT", "source": "CONSUMER" }
-        ],
-        "calibration": {
-          "type": "PIECEWISE",
-          "params": {
-            "calibration_entries": [
-              {
-                "vertical_ids": [2],
-                "piecewise_multipliers": [
-                  { "min_score": 0.0, "max_score": 0.3, "multiplier": 1.2 },
-                  { "min_score": 0.3, "max_score": 1.0, "multiplier": 1.0 }
-                ]
-              }
-            ],
-            "default_multiplier": 1.0
-          }
-        }
-      }
-    },
-    "step_params": {
-      "blend": {
-        "intent_scoring_config": {
-          "feature_configs": [
-            { "feature_name": "day_of_week", "transform_fn": [{ "input": [1,7], "output": "weekend" }] },
-            { "feature_name": "is_dashpass",  "transform_fn": [] }
-          ],
-          "score_lookup_entries": [
-            {
-              "feature_names": ["day_of_week", "is_dashpass"],
-              "entries": { "weekend|1": 1.15, "weekday|1": 1.05 },
-              "default_score": 1.0
-            }
-          ],
-          "default_score": 1.0
-        }
-      }
-    }
-  }
-}
-```
+---
+
+## Appendix C: Internal Engine Config Examples (Contract 1 — HP-owned)
+
+These are maintained by HP, not authored by MLEs. Included for reference.
+
+See `context/mle-experiment-guide.md` for the full internal config format and all legacy cases.
