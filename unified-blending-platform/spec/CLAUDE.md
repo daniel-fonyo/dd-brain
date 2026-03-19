@@ -19,11 +19,9 @@ Unified Blending Platform.
 | `impl/06-wiring.md` | Wire engine into DefaultHomePagePostProcessor and DefaultHomePageStoreRanker |
 | `impl/07-tracing.md` | Auto-trace infrastructure + ubp_feed_row_ranking_trace.proto (Observer pattern) |
 
-### Phase 1.5 — Horizontal Ranking (ads blending as RowItems)
+### Phase 1.5 — Horizontal Ranking
 
-Phase 1.5 mirrors Phase 1 exactly with `RowItem` replacing `FeedRow`. The key new capability:
-ad candidates and organic stores both wrap as `RowItem` objects and score together in
-`MODEL_SCORING` — no separate insertion pass. See `context/Homepage Ads Blending.md`.
+Phase 1.5 mirrors Phase 1 exactly with `RowItem` replacing `FeedRow`.
 
 Parts 2–7 each have a direct Phase 1.5 equivalent (not yet written — follow same pattern):
 
@@ -47,5 +45,5 @@ Parts 2–7 each have a direct Phase 1.5 equivalent (not yet written — follow 
 | `context/experiment-config-contract.md` | Experiment config JSON examples |
 | `context/design-patterns-and-contract.md` | Design patterns used + value function |
 | `context/current-system-deep-dive.md` | Deep dive into current feed-service code |
-| `context/Homepage Ads Blending.md` | Ads blending architecture — why ads blend as RowItems within carousels (Phase 1.5 motivation) |
+| `context/Homepage Ads Blending.md` | Ads blending architecture — post-POC context |
 | `context/mle-experiment-guide.md` | MLE decision guide + all experiment cases (Cases 1–7) + feature sources + calibration reference |

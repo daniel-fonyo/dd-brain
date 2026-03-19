@@ -1,8 +1,8 @@
-# RFC: Unified Blending Platform (UBP)
+# RFC: Unified Blending Platform (UBP) — POC
 
-> **POC scope.** This RFC covers vertical ranking (Phase 1) and horizontal ranking with ads
-> blending (Phase 1.5). Multi-vertical cross-scoring, explicit position decay, and value function
-> weight config are post-POC.
+> **POC RFC.** This document covers the proof-of-concept scope only: vertical ranking (Phase 1)
+> and horizontal ranking (Phase 1.5). Ads blending, multi-vertical cross-scoring, explicit
+> position decay, and value function weight config are all post-POC.
 
 ---
 
@@ -62,10 +62,10 @@ HP. Partner teams cannot add custom logic without modifying the core pipeline.
 1. **Vertical ranking is config-driven.** An MLE drops a JSON file — no HP code change, no pod
    restart. Shadow comparison shows `control.json` replicates prod at >99% sort-order match.
 
-2. **Horizontal ranking unifies ads and organic.** Ad candidates and organic stores compete as
-   `RowItem` objects in the same ranked list. No separate insertion pass.
+2. **Horizontal ranking is config-driven.** An MLE can run a store-within-carousel ranking
+   experiment by dropping a JSON file, the same way as vertical.
 
-Together: the engine is generic, experiments are config.
+Together: the engine is generic, experiments are config. Both ranking layers proven.
 
 ---
 
@@ -73,7 +73,8 @@ Together: the engine is generic, experiments are config.
 
 | Out of scope | Reason |
 |---|---|
-| Multi-vertical cross-scoring (Rx vs NV vs Ads in one score space) | Requires isotonic calibration + shared value function — post-POC |
+| Ads blending (ad candidates competing with organic stores) | Post-POC — requires shared scoring scale and unified value function |
+| Multi-vertical cross-scoring (Rx vs NV in one score space) | Requires isotonic calibration + shared value function — post-POC |
 | Explicit `pImp` position decay | Steps are position-unaware during scoring |
 | Explicit `vAct` weights (`gov_w`, `fiv_w`, `strategic_w`) | `MULTIPLIER_BOOST` approximates vAct in POC; explicit config is post-POC |
 | Partner-owned custom steps | Engine must prove stable first |
@@ -97,7 +98,6 @@ REQUEST
   │
   ▼  Layer 3: Horizontal Ranking  ← Phase 1.5  (RowItemRanker)
   │  Ranks stores/items WITHIN each carousel
-  │  Ads blend here — ad candidates score alongside organic stores as RowItems
   │
   ▼  Layer 4: Vertical Ranking    ← Phase 1    (FeedRowRanker)
   │  Ranks carousels for their vertical page position
@@ -247,7 +247,7 @@ interface FeedRow {
 
 interface RowItem {
     val id: String
-    val type: RowItemType                      // ORGANIC_STORE, AD_STORE, etc.
+    val type: RowItemType
     var score: Double
     val metadata: MutableMap<String, Any>
     fun applyBackTo()
@@ -267,8 +267,7 @@ class StoreCarouselRow(private val carousel: StoreCarousel) : FeedRow {
 fun StoreCarousel.toFeedRow(): FeedRow = StoreCarouselRow(this)
 ```
 
-**Ads are RowItems, not FeedRows.** Ad candidates blend within carousels at the horizontal layer.
-There is no `AD_CAROUSEL` FeedRow at any phase. See `context/Homepage Ads Blending.md`.
+There is no `AD_CAROUSEL` FeedRow. Ads are post-POC scope.
 
 ### RowType enum
 
@@ -389,21 +388,16 @@ treatment arms only; leave off in control to manage volume.
 4. **Retire** — as old experiments end, remove old code paths one by one.
 
 **Stays unchanged:** All `NonRankableHomepageOrderingUtil` fixups (NV post-checkout pin, PAD=3,
-member pricing), ads insertion, color bleed reordering, immersive spacing.
+member pricing), color bleed reordering, immersive spacing.
 
-### Phase 1.5 — Horizontal Ranking + Ads Blending
+### Phase 1.5 — Horizontal Ranking
 
 **Incision point:** `DefaultHomePageStoreRanker.rank()`, replacing each
 `modifyLiteStoreCollection()` call.
 
-**The ads story:** Ad candidates and organic stores both become `RowItem` objects in the same
-`MutableList<RowItem>`. `MODEL_SCORING` scores them together. The output is the blended order.
-No separate post-ranking insertion pass. See `context/Homepage Ads Blending.md`.
-
 Same shadow → control arm → experiment migration path as Phase 1.
 
-Phase 1 + Phase 1.5 together are the "aha moment": both layers are config-driven and ads blend
-natively without a separate system.
+Phase 1 + Phase 1.5 together prove the core claim: both ranking layers are config-driven.
 
 ---
 
