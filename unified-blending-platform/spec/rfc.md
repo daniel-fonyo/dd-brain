@@ -121,15 +121,17 @@ REQUEST
 ```
 FeedRowRanker.rank(rows, experimentId, treatment, context)
   │
-  ├── 1. UbpRuntimeUtil.resolveSteps(experimentId, treatment)
-  │        → List<StepConfig(id, type, params)>
+  ├── 1. UbpRuntimeUtil.resolve(experimentId, treatment)
+  │        → ResolvedPipeline(steps, predictors, emitTrace)
   │        → unknown treatment? → fall back to "control" (Null Object)
-  │        → "extends: control"? → shallow-merge params (Prototype)
+  │        → "extends: control"? → shallow-merge params + predictors (Prototype)
   │
   ├── 2. for each StepConfig:
   │        step = stepRegistry[config.type] ?: skip + warn
-  │        snapshot scores (for trace)
-  │        step.process(rows, context, config.params)   ← Chain of Responsibility
+  │        resolvedParams = resolveParams(config.rawParams, predictors)
+  │        typedParams = OBJECT_MAPPER_RELAX.treeToValue(resolvedParams, step.paramsClass)
+  │        snapshot scores (if tracing)
+  │        step.process(rows, context, typedParams)     ← Chain of Responsibility
   │        traceEmitter?.recordStep(...)                ← Observer (when emit_trace=true)
   │
   └── 3. return rows sorted by score descending
@@ -191,7 +193,7 @@ on collision. Keys not mentioned are preserved from control.
       "steps": [
         { "id": "score",     "type": "MODEL_SCORING",    "params": { ... } },
         { "id": "blend",     "type": "MULTIPLIER_BOOST", "params": { ... } },
-        { "id": "diversity", "type": "DIVERSITY_RERANK", "params": { "weight": 0.4 } },
+        { "id": "diversity", "type": "DIVERSITY_RERANK", "params": { "enabled": true, "diversity_scoring_params": { "weight": 0.4 } } },
         { "id": "pin",       "type": "FIXED_PINNING",    "params": { ... } }
       ]
     }
@@ -319,15 +321,21 @@ HP owns the engine and registry. Partner teams implement and own their steps.
 
 ```kotlin
 interface FeedRowRankingStep {
-    val stepType: String  // key in experiment config "type" field
+    val stepType: String                         // key in experiment config "type" field
+    val paramsClass: Class<out StepParams>       // engine uses this to deserialize rawParams
 
     suspend fun process(
         rows: MutableList<FeedRow>,
         context: RankingContext,
-        params: Map<String, Any>,  // injected from config — NO internal DV reads
+        params: StepParams,                      // typed — deserialized by engine before this call
     )
 }
 ```
+
+`params` is `StepParams` (sealed interface), not `Map<String, Any>`. The engine calls
+`OBJECT_MAPPER_RELAX.treeToValue(rawParams, step.paramsClass)` before each `step.process()`.
+Steps do a single safe cast — guaranteed correct because the engine used `paramsClass`
+to deserialize.
 
 **The `params` constraint is absolute.** A step that reads its own DV keys internally is not a
 UBP step — it defeats the purpose. All tunable behavior flows through `params`.
@@ -381,11 +389,16 @@ treatment arms only; leave off in control to manage volume.
 **Incision point:** `DefaultHomePagePostProcessor.reOrderGlobalEntitiesV2()`, replacing
 `rankAndMergeContent()` for requests with a UBP DV.
 
-**Migration:**
-1. **Shadow** — run both paths, return old result, compare in Snowflake. Target: >99% sort-order match.
-2. **Control arm** — small % real traffic to UBP control. Identical result to old path.
-3. **First experiment** — MLE drops a JSON file. No code change. This is the payoff.
-4. **Retire** — as old experiments end, remove old code paths one by one.
+**Migration (5 stages):**
+1. **Contract assembly** — `UbpContractAssembler` runs in shadow mode, observes prod per-request
+   decisions, assembles equivalent UBP contract JSON, logs it for visual inspection. Engine not
+   required yet — the assembler runs independently. Fast path to seeing the contract shape.
+2. **Freeze + shadow validate** — once contract shape stabilizes across 1000+ requests, freeze a
+   representative assembled contract into static `control.json`. Shadow with static file. Target:
+   `divergence_count = 0`.
+3. **Control arm** — small % real traffic to UBP control. Identical result to old path.
+4. **First experiment** — MLE drops a JSON file. No code change. This is the payoff.
+5. **Retire** — as old experiments end, remove old code paths one by one.
 
 **Stays unchanged:** All `NonRankableHomepageOrderingUtil` fixups (NV post-checkout pin, PAD=3,
 member pricing), color bleed reordering, immersive spacing.
@@ -395,7 +408,7 @@ member pricing), color bleed reordering, immersive spacing.
 **Incision point:** `DefaultHomePageStoreRanker.rank()`, replacing each
 `modifyLiteStoreCollection()` call.
 
-Same shadow → control arm → experiment migration path as Phase 1.
+Same 5-stage migration path as Phase 1.
 
 Phase 1 + Phase 1.5 together prove the core claim: both ranking layers are config-driven.
 
@@ -408,19 +421,21 @@ Phase 1 + Phase 1.5 together prove the core claim: both ranking layers are confi
 ```json
 {
   "control": {
-    "p_act": {
-      "predictor_name": "FEED_RANKING_SIBYL_PREDICTOR_NAME",
-      "model_name": "store_ranking_v1_1",
-      "use_case": "USE_CASE_HOME_PAGE_VERTICAL_RANKING",
-      "output_semantics": "PROBABILITY",
-      "features": [
-        { "name": "STORE_ID",         "source": "STORE" },
-        { "name": "CONSUMER_ID",      "source": "CONSUMER" },
-        { "name": "DAY_OF_WEEK",      "source": "CONTEXT" },
-        { "name": "IS_DASHPASS_USER", "source": "CONSUMER" },
-        { "name": "STORE_ETA",        "source": "STORE" }
-      ],
-      "calibration": { "type": "NONE" }
+    "predictors": {
+      "p_act": {
+        "predictor_name": "FEED_RANKING_SIBYL_PREDICTOR_NAME",
+        "model_name": "store_ranking_v1_1",
+        "use_case": "USE_CASE_HOME_PAGE_VERTICAL_RANKING",
+        "output_semantics": "PROBABILITY",
+        "features": [
+          { "name": "STORE_ID",         "source": "STORE" },
+          { "name": "CONSUMER_ID",      "source": "CONSUMER" },
+          { "name": "DAY_OF_WEEK",      "source": "CONTEXT" },
+          { "name": "IS_DASHPASS_USER", "source": "CONSUMER" },
+          { "name": "STORE_ETA",        "source": "STORE" }
+        ],
+        "calibration": { "type": "NONE" }
+      }
     },
     "vertical_pipeline": {
       "steps": [
@@ -435,13 +450,16 @@ Phase 1 + Phase 1.5 together prove the core claim: both ranking layers are confi
           "params": {
             "calibration_config":     { "calibration_entries": [], "default_multiplier": 1.0 },
             "intent_scoring_config":  { "feature_configs": [], "score_lookup_entries": [], "default_score": 1.0 },
-            "vertical_boost_weights": { "boosting_multipliers": [], "default_multiplier": 1.0 }
+            "vertical_boost_weights": {
+              "boosting_multipliers": [], "default_multiplier": 1.0,
+              "item_carousel_boosting_multipliers": [], "item_carousel_default_multiplier": 1.0
+            }
           }
         },
         {
           "id": "diversity",
           "type": "DIVERSITY_RERANK",
-          "params": { "enabled": false, "weight": 0.0 }
+          "params": { "enabled": false, "diversity_scoring_params": { "weight": 0.0 } }
         },
         {
           "id": "pin",
@@ -460,17 +478,19 @@ Phase 1 + Phase 1.5 together prove the core claim: both ranking layers are confi
 ```json
 {
   "control": {
-    "p_act": {
-      "predictor_name": "FEED_RANKING_SIBYL_PREDICTOR_NAME",
-      "model_name": "store_ranker_v1",
-      "features": [
-        { "name": "STORE_ID",         "source": "STORE" },
-        { "name": "CONSUMER_ID",      "source": "CONSUMER" },
-        { "name": "STORE_ETA",        "source": "STORE" },
-        { "name": "DAY_OF_WEEK",      "source": "CONTEXT" },
-        { "name": "IS_DASHPASS_USER", "source": "CONSUMER" }
-      ],
-      "calibration": { "type": "NONE" }
+    "predictors": {
+      "p_act": {
+        "predictor_name": "FEED_RANKING_SIBYL_PREDICTOR_NAME",
+        "model_name": "store_ranker_v1",
+        "features": [
+          { "name": "STORE_ID",         "source": "STORE" },
+          { "name": "CONSUMER_ID",      "source": "CONSUMER" },
+          { "name": "STORE_ETA",        "source": "STORE" },
+          { "name": "DAY_OF_WEEK",      "source": "CONTEXT" },
+          { "name": "IS_DASHPASS_USER", "source": "CONSUMER" }
+        ],
+        "calibration": { "type": "NONE" }
+      }
     },
     "horizontal_pipeline": {
       "steps": [
@@ -507,19 +527,21 @@ See `context/mle-experiment-guide.md` for the full decision guide and all experi
 {
   "treatment_fw_v4": {
     "extends": "control",
-    "p_act": {
-      "predictor_name": "FEED_RANKING_FW_SIBYL_PREDICTOR_NAME",
-      "model_name": "store_ranker_fw_v4",
-      "use_case": "USE_CASE_HOME_PAGE_VERTICAL_RANKING",
-      "output_semantics": "PROBABILITY",
-      "features": [
-        { "name": "STORE_ID",         "source": "STORE" },
-        { "name": "CONSUMER_ID",      "source": "CONSUMER" },
-        { "name": "STORE_ETA",        "source": "STORE" },
-        { "name": "DAY_OF_WEEK",      "source": "CONTEXT" },
-        { "name": "IS_DASHPASS_USER", "source": "CONSUMER" }
-      ],
-      "calibration": { "type": "NONE" }
+    "predictors": {
+      "p_act": {
+        "predictor_name": "FEED_RANKING_FW_SIBYL_PREDICTOR_NAME",
+        "model_name": "store_ranker_fw_v4",
+        "use_case": "USE_CASE_HOME_PAGE_VERTICAL_RANKING",
+        "output_semantics": "PROBABILITY",
+        "features": [
+          { "name": "STORE_ID",         "source": "STORE" },
+          { "name": "CONSUMER_ID",      "source": "CONSUMER" },
+          { "name": "STORE_ETA",        "source": "STORE" },
+          { "name": "DAY_OF_WEEK",      "source": "CONTEXT" },
+          { "name": "IS_DASHPASS_USER", "source": "CONSUMER" }
+        ],
+        "calibration": { "type": "NONE" }
+      }
     }
   }
 }
@@ -552,10 +574,12 @@ See `context/mle-experiment-guide.md` for the full decision guide and all experi
     "step_params": {
       "diversity": {
         "enabled": true,
-        "weight": 0.4,
-        "coefficient_for_non_rx": 0.6,
-        "local_window_size_for_non_rx": 3,
-        "local_coefficient_for_non_rx": 0.3
+        "diversity_scoring_params": {
+          "weight": 0.4,
+          "coefficient_for_non_rx": 0.6,
+          "local_window_size_for_non_rx": 3,
+          "local_coefficient_for_non_rx": 0.3
+        }
       }
     }
   }
@@ -584,30 +608,32 @@ the organic value that was being displaced becomes measurable for the first time
 {
   "treatment_intent_v3": {
     "extends": "control",
-    "p_act": {
-      "predictor_name": "FEED_RANKING_FW_SIBYL_PREDICTOR_NAME",
-      "model_name": "vertical_intent_model_v3",
-      "use_case": "USE_CASE_HOME_PAGE_VERTICAL_RANKING",
-      "output_semantics": "PROBABILITY",
-      "features": [
-        { "name": "STORE_ID",            "source": "STORE" },
-        { "name": "DAY_OF_WEEK",         "source": "CONTEXT" },
-        { "name": "IS_DASHPASS_USER",    "source": "CONSUMER" },
-        { "name": "NV_LIFESTAGE_COHORT", "source": "CONSUMER" }
-      ],
-      "calibration": {
-        "type": "PIECEWISE",
-        "params": {
-          "calibration_entries": [
-            {
-              "vertical_ids": [2],
-              "piecewise_multipliers": [
-                { "min_score": 0.0, "max_score": 0.3, "multiplier": 1.2 },
-                { "min_score": 0.3, "max_score": 1.0, "multiplier": 1.0 }
-              ]
-            }
-          ],
-          "default_multiplier": 1.0
+    "predictors": {
+      "p_act": {
+        "predictor_name": "FEED_RANKING_FW_SIBYL_PREDICTOR_NAME",
+        "model_name": "vertical_intent_model_v3",
+        "use_case": "USE_CASE_HOME_PAGE_VERTICAL_RANKING",
+        "output_semantics": "PROBABILITY",
+        "features": [
+          { "name": "STORE_ID",            "source": "STORE" },
+          { "name": "DAY_OF_WEEK",         "source": "CONTEXT" },
+          { "name": "IS_DASHPASS_USER",    "source": "CONSUMER" },
+          { "name": "NV_LIFESTAGE_COHORT", "source": "CONSUMER" }
+        ],
+        "calibration": {
+          "type": "PIECEWISE",
+          "params": {
+            "calibration_entries": [
+              {
+                "vertical_ids": [2],
+                "piecewise_multipliers": [
+                  { "min_score": 0.0, "max_score": 0.3, "multiplier": 1.2 },
+                  { "min_score": 0.3, "max_score": 1.0, "multiplier": 1.0 }
+                ]
+              }
+            ],
+            "default_multiplier": 1.0
+          }
         }
       }
     },
