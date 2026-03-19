@@ -46,13 +46,24 @@ cp /tmp/playwright-mcp-output/*.webm <runDir>/session.webm
 
 ## Step Sequence
 
-### 1. Navigate
+### 1. Navigate with Latency Measurement
+
 ```
+browser_evaluate → (() => { window.__navStart = Date.now(); })()
 browser_navigate → https://www.doordashtest.com/
+browser_evaluate → (() => { return Date.now() - window.__navStart; })()
 ```
-- Landing page loads with "Sign In" / "Sign Up" buttons.
+
+Record result as `homepageLoadMs`. Fallback if variable lost (page reload clears it):
+```
+browser_evaluate → (() => {
+  const nav = performance.getEntriesByType('navigation')[0];
+  return nav ? Math.round(nav.loadEventEnd - nav.startTime) : null;
+})()
+```
 
 ### 2. Sign In (conditional — only if not authenticated)
+
 Check: if page shows "Sign In" link → proceed with login. If already on `/home` with carousels → skip to step 3.
 
 ```
@@ -73,24 +84,15 @@ wait → 5 seconds for homepage to fully render
 **Key gotcha**: The login is two-step. After entering email+password and clicking "Continue to Sign In", the form transitions to a password-only confirmation. The password field may be cleared during this transition — always verify it's filled before clicking the final "Sign In".
 
 ### 3. Dismiss "How Fees Work" modal
+
 ```
 click → "Got It" button (dialog: "How Fees Work")
 ```
 - This modal appears on first visit after login. If not present, skip.
 
-### 4. Verify homepage
-- Confirm carousels visible ("Under $1 delivery fee", "Slam dunk savings", etc.)
-- All interactions are captured in the session video automatically.
+### 4. Enable Debug Mode
 
-### 5. Scroll carousel
-```
-click → "Next button of carousel" (first instance)
-```
-- Verify: new stores appear, "Previous" button becomes enabled.
-
-### 6. Enable Debug Mode (for ML score analysis)
-
-The Debug Mode toggle is a checkbox inside a styled component, not a regular button.
+Activate the debug overlay **before** analyzing carousels — this exposes carousel IDs and ML ranking scores.
 
 ```
 evaluate → document.querySelector('.ToggleContainer-sc-ba2scp-0 input[type="checkbox"]').click()
@@ -99,73 +101,67 @@ evaluate → document.querySelector('.ToggleContainer-sc-ba2scp-0 input[type="ch
 
 - **Toggle selector**: `.ToggleContainer-sc-ba2scp-0 input[type="checkbox"]` (bottom-right corner)
 - **Fallback**: If class name changes, look for a checkbox near "Debug Mode" text at bottom-right of page
-- Clicking again disables debug overlays
+- Verify: `PAGE LEVEL LOG` text appears in snapshot
 
-### 7. Analyze Debug Overlays
+### 5. Enumerate and Analyze Every Carousel
 
-Once Debug Mode is ON, the page shows:
+Starting from the top of the page, work through **every** store carousel.
 
-**Page-level overlay (top):**
-- `PAGE LEVEL LOG` header
-- Component IDs for every element: banners, carousels, cards, containers
+**For each carousel:**
 
-**Per-carousel labels:**
-- Format: `carousel.standard:store_carousel:<carousel_id>`
-- Examples: `under_1_delivery`, `slam_dunk_savings`, `eat`, `fastest_near_you`
+1. **Read metadata** from snapshot + debug overlay:
+   - Carousel name (heading text, e.g., "Under $1 delivery fee")
+   - Carousel ID from overlay: `carousel.standard:store_carousel:<id>`
 
-**Per-store-card overlays:**
-- Format: `card.store:store:<store_id>` (e.g., `card.store:store:297366`)
-- **Store Ranking Score**: float (e.g., `0.0006`, `0.0005`) — per-card ML ranking score
-- **Store Debug Tools** button on each card
+2. **Read bottom bar** (persistent, updates per carousel section):
+   - Ranking First Pass Score (usually `N/A` on homepage)
+   - Ranking Second Pass Score (float)
 
-**Bottom bar (persistent):**
-- **Ranking First Pass Score**: usually `N/A` on homepage (first pass is search-specific)
-- **Ranking Second Pass Score**: float (e.g., `0.0060`, `0.0265`) — aggregate page-level re-ranking score
-- **ML Debugging Information** link
+3. **Scroll through all pages** of the carousel:
+   - On each visible page, read every store card:
+     - Store name
+     - Store ID from overlay: `card.store:store:<id>`
+     - Store Ranking Score (float from overlay)
+     - Rating, delivery fee, delivery time if visible
+   - Click "Next button of carousel" to advance
+   - Repeat until Next is disabled (end of carousel)
 
-Scroll through carousels to capture all visible scores in the video.
+4. **Stop condition**: Stop when reaching content that is NOT a store carousel — individual store tiles/grid, footer, or end of page.
 
-### 8. Store Debug Tools (per-store deep dive)
-
-Click "Store Debug Tools" on any store card to open a modal with:
-
-```
-click → "Store Debug Tools" button on a store card
-  ↓ modal opens: "<Store Name>-<store_id>"
-```
-
-| Tool | Purpose |
-|---|---|
-| MX Tools | Merchant Details Page |
-| MX Portal | Merchant Portal Page |
-| Search Diagnostic Tools | Debug why store doesn't appear in search results |
-| Search Evaluation Tools | Debug store ranking |
+### 6. Console Errors
 
 ```
-click → "Close" button to dismiss modal
+browser_console_messages → level: error
 ```
 
-### 9. Close browser (finalize video)
+Record count and content of any JS errors.
+
+### 7. Close Browser
+
 ```
 browser_close
 ```
-- Video file is written to `/tmp/playwright-mcp-output/` on context close.
+- Finalizes session video to `/tmp/playwright-mcp-output/`
 - Copy to audit trail: `cp /tmp/playwright-mcp-output/*.webm <runDir>/session.webm`
 
 ---
 
-## Debug Mode — ML Score Reference
+## Debug Overlay Reference
 
-| Score | Location | Meaning |
+| Element | Overlay Format | Example |
 |---|---|---|
-| Store Ranking Score | Per store card | Individual store relevance score from ranking model |
-| Ranking First Pass Score | Bottom bar | Initial candidate retrieval score (N/A on homepage, used in search) |
-| Ranking Second Pass Score | Bottom bar | Re-ranking score after applying all ranking features |
+| Carousel | `carousel.standard:store_carousel:<id>` | `carousel.standard:store_carousel:under_1_delivery` |
+| Store card | `card.store:store:<store_id>` | `card.store:store:297366` |
+| Banner | `banner:<type>-<id>` | `banner:dashpass-FTBanner-02` |
+| Container | `container:<name>` | `container:doordash_reminder` |
 
-**Observed score ranges (sandbox, consumer 757606047):**
-- Store Ranking Scores: `0.0004` – `0.0006` (narrow range, similar relevance)
-- Ranking Second Pass Score: `0.0060` (Under $1 delivery carousel), `0.0265` (Get breakfast carousel)
-- Ranking First Pass Score: `N/A` on all homepage carousels
+**Per-store-card data:**
+- **Store Ranking Score**: float (e.g., `0.0006`) — individual store relevance
+- **Store Debug Tools** button — links to MX Tools, Search Diagnostic/Evaluation Tools
+
+**Bottom bar (persistent):**
+- **Ranking First Pass Score**: initial retrieval score (N/A on homepage, used in search)
+- **Ranking Second Pass Score**: re-ranking score after all features applied
 
 ---
 
@@ -176,10 +172,10 @@ browser_close
 | "Sign In" not found | Page may already be authenticated — check URL for `/home` |
 | Login returns error | Re-check password field is filled on second step |
 | "How Fees Work" not found | Skip — only appears on first visit |
-| Carousel Next disabled | Carousel may be at end — try a different carousel |
+| Carousel Next disabled | End of carousel — move to next one |
 | Debug Mode toggle not found | Class name may have changed — search for `input[type="checkbox"]` near bottom-right |
 | Debug overlays not appearing | Toggle may not have fired — verify checkbox `checked` state via evaluate |
-| Store Debug Tools modal stuck | Click "Close" button or press Escape |
 | Page shows blank/spinner | Wait longer (10s), then retry navigate |
-| Video not saved | Ensure `browser_close` is called — video writes on context close, not mid-session |
+| Video not saved | Ensure `browser_close` is called — video writes on context close |
 | Video too large | Reduce viewport: `--save-video=800x600` in mcp.json |
+| Latency measurement returns null | Use `performance.getEntriesByType('navigation')` fallback |

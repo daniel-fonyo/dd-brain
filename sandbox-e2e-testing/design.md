@@ -109,12 +109,38 @@ feed-service/.claude/sandbox/
   "completedAt": "2026-03-19T14:35:12Z",
   "status": "pass",
   "checks": {
-    "homepageLoaded": true,
-    "carouselsFound": 4,
+    "homepageLoadMs": 2340,
+    "carouselCount": 4,
+    "totalStoresObserved": 28,
     "jsErrors": 0,
     "logErrors": 0,
     "logWarnings": 2
   }
+}
+```
+
+**result.json** (written by sandbox-test, read by sandbox-run):
+```json
+{
+  "homepageLoadMs": 2340,
+  "carouselCount": 4,
+  "totalStoresObserved": 28,
+  "carousels": [
+    {
+      "name": "Under $1 delivery fee",
+      "carouselId": "carousel.standard:store_carousel:under_1_delivery",
+      "rankingSecondPassScore": 0.0060,
+      "stores": [
+        { "name": "Lucca Delicatessen", "storeId": "297366", "rankingScore": 0.0006 }
+      ]
+    }
+  ],
+  "jsErrors": 0,
+  "logLines": 452,
+  "logErrors": 0,
+  "logWarnings": 2,
+  "video": "session.webm",
+  "status": "pass"
 }
 ```
 
@@ -125,7 +151,11 @@ feed-service/.claude/sandbox/
 {"ts":"...","step":"branch-verify","result":"feat/dfonyo-vertical-ranking-debug-logs"}
 {"ts":"...","step":"devbox-run","result":"service ready at 14:30:45"}
 {"ts":"...","step":"log-capture-start","result":"kubectl streaming to feed-service.log"}
-{"ts":"...","step":"browser-navigate","result":"homepage loaded, 4 carousels found"}
+{"ts":"...","step":"browser-navigate","result":"homepage loaded in 2340ms"}
+{"ts":"...","step":"browser-debug-mode-on","result":"debug overlays active"}
+{"ts":"...","step":"browser-carousel","result":"Under $1 delivery fee: 8 stores, second_pass=0.0060"}
+{"ts":"...","step":"browser-carousel","result":"Slam dunk savings: 6 stores, second_pass=0.0045"}
+{"ts":"...","step":"browser-close","result":"video finalized"}
 {"ts":"...","step":"log-capture-stop","result":"452 lines captured, 0 errors, 2 warnings"}
 {"ts":"...","step":"report","result":"pass"}
 ```
