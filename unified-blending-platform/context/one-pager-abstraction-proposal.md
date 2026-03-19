@@ -178,6 +178,112 @@ path is untouched.
 
 ---
 
+## Impact Assessment: Latency, Compute, and Surface Safety
+
+This change touches the DoorDash homepage — the front page of every mobile app and web session.
+Every surface that could be affected is assessed below.
+
+### Surfaces assessed
+
+| Surface | Affected? | Why |
+|---|---|---|
+| **Homepage mobile app (iOS/Android)** | No | No client-side changes. The API response shape is identical — `sortOrder` values are set the same way. |
+| **Homepage web** | No | Same as mobile — no response schema change. |
+| **Vertical ranking (Layer 4)** | Yes — this is the target | Shadow path runs alongside; rollout path replaces. Both produce identical sort orders (proven by shadow). |
+| **Horizontal ranking (Layer 3)** | No | `DefaultHomePageStoreRanker` and `modifyLiteStoreCollection()` are not touched. |
+| **Ads blending** | No | `HomepageAdsBlender` runs in a parallel branch to post-processing. UBP changes are inside `rankAndDedupeContent()`, which completes before ads blending merges. The ads pipeline is untouched. |
+| **Retrieval (Layer 1)** | No | `DefaultHomePageStoreContentFetching.fetch()` runs upstream. UBP changes are downstream in Layer 4. |
+| **Grouping (Layer 2)** | No | `DefaultHomePageStoreContentGrouper.group()` runs upstream. UBP changes are downstream in Layer 4. |
+| **Post-ranking fixups** | No | `NonRankableHomepageOrderingUtil.rankWithImmersivesV2()` runs AFTER the ranking path returns. It operates on the same `sortOrder` values regardless of which path produced them. NV pinning, PAD positioning, member pricing, color bleed, and immersive spacing are all unaffected. |
+| **Serialization** | No | The serializer reads `sortOrder` from carousel objects. Both old and new paths write to the same objects via `applyBackTo()` / direct assignment. |
+| **Analytics / Iguazu logging** | No | Iguazu events fire from the same callsites. The new path writes scores to the same domain objects the old path does, so logged positions are identical. |
+| **Experiment infrastructure (DVs)** | Minimal | Two new DVs added (shadow enable, rollout enable). No existing DVs modified or removed. |
+| **Sibyl ML scoring service** | See below | Depends on shadow vs rollout mode. |
+| **Runtime config caches** | No | Both paths read from `DeserializedRuntimeCache` / `P13nRuntimeCacheManager` — local in-memory caches with 5-minute TTL. No additional network calls. No additional cache pressure. |
+
+### Latency and compute: Shadow mode
+
+In shadow mode, the old path **always runs and always returns the result to the user**. The shadow
+path runs after the old path completes.
+
+**What the old path does (the only network call in the ranking pipeline):**
+
+| Operation | Type | Latency |
+|---|---|---|
+| Sibyl gRPC scoring | Network (gRPC, chunked + parallel) | ~50-200ms |
+| Runtime config reads | Local in-memory cache | <1ms total |
+| Blending / diversity rerank | In-memory computation | ~5-20ms |
+| Boosting / pinning / sort | In-memory computation | ~5-10ms |
+| Post-ranking fixups | In-memory computation | ~5-10ms |
+
+**What the shadow path adds:**
+
+The key question is whether the UBP engine path makes **additional Sibyl calls**. The answer
+depends on implementation:
+
+- **Option A: Reuse old-path scores.** The shadow path reads scores already computed by the old
+  path (from the `ScorableEntity` objects). `ModelScoringStep` in the shadow engine skips the
+  Sibyl RPC and uses cached scores. **No additional network calls. Overhead: ~5-15ms** (adapter
+  conversion + step dispatch + sort order comparison + logging).
+
+- **Option B: Independent Sibyl call.** The shadow path makes its own Sibyl gRPC call to verify
+  scoring independently. **One additional Sibyl call: +50-200ms.** This doubles the most
+  expensive operation in the pipeline but only for shadow-enabled traffic.
+
+**Recommendation:** Start with Option A (reuse scores) to minimize impact. Option B is only
+needed if we want to validate that the UBP engine's feature construction produces identical Sibyl
+inputs — this can be done on a small traffic slice with explicit latency budget approval.
+
+**Shadow mode latency impact summary:**
+- Option A: +5-15ms per request (~5-10% overhead on ranking)
+- Option B: +50-200ms per request (~50-100% overhead on ranking, shadow traffic only)
+- In both cases, the user-facing response is unaffected — shadow results are discarded.
+
+### Latency and compute: Rollout mode
+
+In rollout mode, the UBP engine **replaces** the old path for DV-enabled traffic. It executes the
+same operations — but through step wrappers instead of inline method calls.
+
+| Step | What it calls | Same method as old path? | Additional network calls? |
+|---|---|---|---|
+| `ModelScoringStep` | `EntityScorer.score()` → Sibyl gRPC | Yes — same Sibyl RPC, same model, same features | No |
+| `MultiplierBoostStep` | `BlendingUtil.blendBundle()` | Yes — same in-memory computation | No |
+| `DiversityRerankStep` | `BlendingUtil.rerankEntitiesWithDiversity()` | Yes — same in-memory computation | No |
+| `FixedPinningStep` | `BoostingBundle.boosted()` + `RankingBundle.ranked()` | Yes — same in-memory computation | No |
+
+**Each step literally calls the same existing method.** The wrapper adds:
+- One `StepParams` deserialization per step (~0.1ms)
+- One step registry lookup per step (~0.01ms)
+- One trace emission per step when tracing enabled (~0.5ms)
+- `FeedRow` adapter conversion at entry/exit (~1-2ms for ~20 carousels)
+
+**Rollout mode latency impact summary:**
+- Additional overhead: ~3-5ms per request (adapter conversion + step dispatch + param deser)
+- No additional network calls — same single Sibyl gRPC call
+- No additional cache reads — same local runtime config reads
+- Trace emission (when enabled): ~2-3ms for ~60 trace events (20 rows × 3 traced steps)
+- **Total: <10ms additional latency vs old path**
+
+### Compute and memory
+
+- **CPU:** Negligible additional compute. Step wrappers are thin delegation layers. The
+  computationally expensive operations (Sibyl feature extraction, blending math, diversity
+  rerank) are identical.
+- **Memory:** ~1-5KB additional per request for `FeedRow` adapter objects (20 carousels × ~50-250
+  bytes per adapter wrapper). Trace events add ~2-4KB when enabled. GC impact is negligible.
+- **No new threads or coroutines** in rollout mode. The UBP engine uses the same coroutine
+  context as the old path.
+
+### What we monitor at each stage
+
+| Stage | Key metrics |
+|---|---|
+| **Shadow (DV-enabled subset)** | `ubp_shadow_duration_ms` (p50, p95, p99), `ubp_shadow_divergence_count`, `sibyl_grpc_call_count` (confirm no doubling), error rate on shadow path |
+| **Rollout 1%** | `ubp_engine_duration_ms`, homepage p99 latency, homepage error rate, ranking quality metrics (CTR, CVR on rollout vs control), Sibyl call count |
+| **Rollout 5-100%** | Same as 1% + `ubp_trace_emission_duration_ms`, memory/GC metrics, experiment-level ranking quality |
+
+---
+
 ## What These Abstractions Unlock
 
 ### Immediate value
