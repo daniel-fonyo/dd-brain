@@ -54,6 +54,8 @@ Fields written at end: `completedAt`, `status`, `checks`
 
 ## steps.jsonl
 
+**Purpose:** Claude's structured run memory. When a user asks "what happened last time?" or "why did the last test fail?", Claude reads `steps.jsonl` from the latest run dir to reconstruct the sequence of events without re-running anything. Also enables cross-run queries like "which step keeps failing?" by scanning multiple run dirs. Keep this file — it is the primary mechanism for Claude to reason about past runs.
+
 Append-only. One JSON object per line. Written by any skill participating in the run.
 
 Schema per line:

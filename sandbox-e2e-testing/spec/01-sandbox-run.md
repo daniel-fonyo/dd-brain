@@ -67,20 +67,31 @@ Append to steps.jsonl: `{"step":"pod-check","result":"Running | <error>"}`
 
 ---
 
-### 5. Sync Changes (devbox run)
+### 5. Sync Decision
 
-From `/Users/daniel.fonyo/Projects/feed-service`, run in background:
+**Skip this step entirely if running in CI** — CI always syncs on commit via its own pipeline.
+
+Check whether a sync is needed:
+
+```bash
+cd /Users/daniel.fonyo/Projects/feed-service && git status --porcelain
+```
+
+Sync if **either**:
+- User request contains "resync", "retest", "sync", or "latest changes"
+- `git status --porcelain` has any output (local changes present)
+
+If no sync needed → append `{"step":"devbox-run","result":"skipped — no local changes"}` → proceed to Step 6.
+
+If syncing → from `/Users/daniel.fonyo/Projects/feed-service`, run:
 ```bash
 devbox run web-group1-remote
 ```
+Wait for `======== Service is ready now ========`. Update `~/.claude/sandbox-state.json` and `meta.json` if pod/url changed.
 
-Wait for `======== Service is ready now ========` in stdout before proceeding.
+Append: `{"step":"devbox-run-ready","result":"service ready | skipped"}`
 
-If pod or homepageUrl in output differs from state, update `~/.claude/sandbox-state.json` and `meta.json`.
-
-Append: `{"step":"devbox-run-ready","result":"service ready"}`
-
-Report: `"Sandbox synced and ready"`
+Report: `"Sandbox synced and ready"` or `"Sandbox already up-to-date — skipping sync"`
 
 ---
 

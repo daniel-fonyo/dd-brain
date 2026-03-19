@@ -9,7 +9,18 @@ Reference: `1-pager.md` (vision), `design.md` (architecture).
 
 ## Phases
 
-### Phase 1 — Orchestrator + Audit Trail (NOW)
+### Phase 0 — Browser POC (BLOCKER)
+Validate Playwright MCP can control IT-managed Chrome before building anything browser-dependent.
+
+| Step | Deliverable | Spec | Status |
+|---|---|---|---|
+| 0.1 | Navigate doordash.com, scroll carousels, screenshot | `spec/00-browser-poc.md` | pending |
+
+**Done when:** screenshots return visibly, carousel scroll works. Blockers + workarounds documented in spec.
+
+---
+
+### Phase 1 — Orchestrator + Audit Trail (after Phase 0)
 Get the core loop working end-to-end with audit persistence.
 
 | Step | Deliverable | Spec | Status |
@@ -64,4 +75,4 @@ Trigger the full pipeline from GitHub Actions on every PR.
 ---
 
 ## Current Focus
-**Phase 1** — implement `sandbox-run`, update `sandbox-test`, scaffold audit trail.
+**Phase 0** — browser POC. Everything else is blocked on this passing.
