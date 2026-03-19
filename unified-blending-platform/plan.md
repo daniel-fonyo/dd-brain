@@ -1,5 +1,29 @@
 # Unified Blending Platform — Plan
 
+## TODO
+
+- [ ] **Rewrite `spec/rfc.md` as a proper RFC.** Structure: Context/Abbreviations, Problem Statement (use the verbatim text below), Goals (POC scope), Non-Goals, High Level Design, Contracts 1–5 (concise), Phases, Appendix A (control.json baselines), Appendix B (experiment examples). Move MLE decision guide + exhaustive experiment cases to a new `context/mle-experiment-guide.md`. Note RFC is scoped to POC only. See conversation for full draft content ready to paste in.
+
+### Problem Statement (verbatim — use in RFC)
+
+> The DoorDash homepage started as a single-vertical product (just Restaurants). Over time it grew
+> to serve multiple content types on the same page: Rx stores, NV (grocery/convenience) stores,
+> item carousels, ads, deals, DashPass merchandising. Each of these was built independently by
+> different teams with their own ranking logic.
+>
+> The result: **there is no single system deciding what goes where on the page**. Instead there are
+> 4–5 separate systems each doing their own thing, stitched together with heuristics:
+>
+> - Organic stores ranked by one Sibyl model
+> - Ads inserted after organic ranking by a separate blender
+> - NV stores boosted by hardcoded multipliers
+> - Merchandising carousels pinned by campaign rules
+> - Post-ranking fixups (NV position, PAD position, member pricing) that silently override everything before them
+>
+> Nobody can answer: "Is this NV carousel worth more to the user than this Rx carousel at position 3?" — because the scores are on completely different scales and computed by different systems.
+
+---
+
 ## Status: Phase 1 — Vertical Blending (Active)
 
 ---
