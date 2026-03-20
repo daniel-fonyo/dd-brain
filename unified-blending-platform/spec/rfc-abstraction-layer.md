@@ -152,25 +152,29 @@ We introduce three interfaces that create clean boundaries at these seams. The e
 
 The strategy is simple: **adapt once, rank uniformly, apply back**.
 
+<!-- Diagram: Adapt → Rank → Apply Back funnel
+     Reason: Readers need to see how 9 heterogeneous types converge to one uniform pipeline
+     Aha: The adapter boundary is the only place type-awareness exists — everything downstream is type-agnostic -->
+
 ```mermaid
 flowchart LR
     subgraph sources["9 Carousel Types"]
         direction TB
-        T1["StoreCarousel"]
-        T2["ItemCarousel"]
-        T3["DealCarousel"]
-        T4["StoreCollection"]
-        T5["CollectionV2"]
-        T6["ItemCollection"]
-        T7["MapCarousel"]
-        T8["ReelsCarousel"]
-        T9["StoreEntity"]
+        T1["StoreCarousel"]:::domain
+        T2["ItemCarousel"]:::domain
+        T3["DealCarousel"]:::domain
+        T4["StoreCollection"]:::domain
+        T5["CollectionV2"]:::domain
+        T6["ItemCollection"]:::domain
+        T7["MapCarousel"]:::domain
+        T8["ReelsCarousel"]:::domain
+        T9["StoreEntity"]:::domain
     end
 
     subgraph adapt["Adapt"]
         direction TB
         A["toFeedRow()
-        1 adapter per type"]
+        1 adapter per type"]:::hero
     end
 
     T1 --> A
@@ -185,11 +189,11 @@ flowchart LR
 
     subgraph pipeline["Uniform FeedRow Pipeline"]
         direction TB
-        STEP1["MODEL_SCORING"]
-        STEP2["MULTIPLIER_BOOST"]
-        STEP3["DIVERSITY_RERANK"]
-        STEP4["POSITION_BOOSTING"]
-        STEP5["FIXED_PINNING"]
+        STEP1["MODEL_SCORING"]:::step
+        STEP2["MULTIPLIER_BOOST"]:::step
+        STEP3["DIVERSITY_RERANK"]:::step
+        STEP4["POSITION_BOOSTING"]:::step
+        STEP5["FIXED_PINNING"]:::step
         STEP1 --> STEP2 --> STEP3 --> STEP4 --> STEP5
     end
 
@@ -197,17 +201,17 @@ flowchart LR
 
     subgraph writeback["Apply Back"]
         direction TB
-        WB["applyBackTo()"]
+        WB["applyBackTo()"]:::hero
     end
 
     STEP5 --> WB
 
     subgraph outputs["Original Domain Objects"]
         direction TB
-        O1["StoreCarousel"]
-        O2["ItemCarousel"]
-        O3["DealCarousel"]
-        O4["..."]
+        O1["StoreCarousel"]:::domain
+        O2["ItemCarousel"]:::domain
+        O3["DealCarousel"]:::domain
+        O4["..."]:::domain
     end
 
     WB --> O1
@@ -215,11 +219,15 @@ flowchart LR
     WB --> O3
     WB --> O4
 
-    style sources fill:#fff3f3,stroke:#cc0000
-    style adapt fill:#ffffcc,stroke:#aaaa00
-    style pipeline fill:#e6f0ff,stroke:#0055cc
-    style writeback fill:#ffffcc,stroke:#aaaa00
-    style outputs fill:#f3fff3,stroke:#00aa00
+    classDef domain fill:#FFFFFF,stroke:#681109,color:#4C0C3A,stroke-width:1.5px
+    classDef hero fill:#FF3008,stroke:#CC2606,color:#FFFFFF,stroke-width:2px,font-weight:bold
+    classDef step fill:#80D8FF,stroke:#4A9AC7,color:#191919,stroke-width:1.5px
+
+    style sources fill:#FEF5F4,stroke:#681109,stroke-width:1px,color:#681109
+    style adapt fill:#FFF0EB,stroke:#FF3008,stroke-width:2px,color:#FF3008
+    style pipeline fill:#EFF8FF,stroke:#80D8FF,stroke-width:2px,color:#191919
+    style writeback fill:#FFF0EB,stroke:#FF3008,stroke-width:2px,color:#FF3008
+    style outputs fill:#FEF5F4,stroke:#681109,stroke-width:1px,color:#681109
 ```
 
 ## Architecture
