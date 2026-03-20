@@ -87,7 +87,7 @@ None of this is possible without clean interfaces. You cannot make ranking confi
 ## Goals
 
 1. **Introduce vertical interfaces** — `FeedRow` + 9 adapters, `FeedRowRankingStep` + 5 step wrappers, `FeedRowRanker` engine.
-2. **Introduce horizontal interfaces** — `RowItem` + adapters, `RowItemRankingStep` + 5 step wrappers, `RowItemRanker` engine.
+2. **Introduce horizontal interfaces** — `RowItem` + adapters, `RowItemRankingStep` + 2 step wrappers, `RowItemRanker` engine.
 3. **Align on these as the stable contract** — these interfaces and their typed params are the API surface all future UBP work builds on. They must be right.
 4. **Shadow validate both layers** — prove each new path produces identical results to the old path before any traffic migrates.
 5. **Preserve all existing behavior** — steps wrap existing methods, not replace them. The old code path remains unchanged.
@@ -121,7 +121,7 @@ None of this is possible without clean interfaces. You cannot make ranking confi
 | :---- | :---- | :---- |
 | **0. Characterization tests** | Lock down current vertical + horizontal ranking behavior with golden master tests | 1 week |
 | **1. Vertical interfaces** | `FeedRow`, `FeedRowRankingStep`, 5 step wrappers, `FeedRowRanker` engine — all pure additions | 2 weeks |
-| **2. Horizontal interfaces** | `RowItem`, `RowItemRankingStep`, 5 step wrappers, `RowItemRanker` engine — mirrors vertical | 1-2 weeks |
+| **2. Horizontal interfaces** | `RowItem`, `RowItemRankingStep`, 2 step wrappers, `RowItemRanker` engine — mirrors vertical | 1-2 weeks |
 | **3. Shadow validation** | Wire shadow paths in `PostProcessor` (vertical) and `StoreRanker` (horizontal). Run both paths, compare sort orders, log divergences. Target: `divergence_count = 0` | 2 weeks |
 | **4. Rollout** | DV-gated gradual migration per layer: 1% → 5% → 25% → 50% → 100% | 2-3 weeks |
 
@@ -293,13 +293,14 @@ interface RowItemRankingStep {
 }
 ```
 
+The horizontal pipeline is structurally different from vertical. Vertical has 5 distinct phases that can be separated into individual steps. Horizontal has two atomic phases that cannot be decomposed further without rearchitecting existing sort logic:
+
 | Step | Type | Wraps (existing method) | Params |
 | :---- | :---- | :---- | :---- |
-| `ModelScoringStep` | `MODEL_SCORING` | `StoreCollectionScorer.regressionContext()` → Sibyl gRPC | `ModelScoringParams(predictorRef, predictorName, modelName)` |
-| `ScoreModifierStep` | `SCORE_MODIFIER` | `getScoreModifierMap()` in `StoreCollectionScorer` | `ScoreModifierParams(boostEnabled, businessMultipliers, storeMultipliers)` |
-| `CampaignSortStep` | `CAMPAIGN_SORT` | `StoreCarouselService.sortStoreEntitiesForCarousels()` | `CampaignSortParams(campaignStoreOrder, businessSortOverrides)` |
-| `BusinessRulesSortStep` | `BUSINESS_RULES_SORT` | `StoreCarouselService` comparator chain | `BusinessRulesSortParams(applyOpenClosed, sortBy, alwaysOpenType, priorityBusinessIds, priorityVerticalIds)` |
-| `OrderHistoryRerankStep` | `ORDER_HISTORY_RERANK` | `WholeOrderReorderFilterUtil.getGoToOrders()` | `OrderHistoryRerankParams(enabled)` |
+| `ModelScoringStep` | `MODEL_SCORING` | `StoreCollectionScorer.scoredCollections()` — Sibyl gRPC scoring + score modifiers (one atomic call) | `ModelScoringParams(predictorRef, predictorName, modelName)` |
+| `RankingSortStep` | `RANKING_SORT` | `modifyLiteStoreCollection()` — the `when(rankingType)` dispatch that applies the appropriate sort for each carousel (comparator chains, campaign sort, order history rerank, etc.) | `RankingSortParams(rankingType)` |
+
+**Why only 2 steps?** The code analysis shows that horizontal sort logic is an atomic `when(rankingType)` dispatch — each ranking type path (30+ variants) applies a composed `sortedWith()` comparator chain that cannot be separated into sequential steps without changing behavior. Score modifiers are computed inside `computeRegressionScores()` and cannot be cleanly extracted from scoring. This is fine — the interface still provides the same benefits (testability, config-driven dispatch, uniform data type). Finer decomposition of horizontal steps is a future iteration once these interfaces are proven.
 
 `ModelScoringParams` is shared between vertical and horizontal — same struct, same predictor ref semantics.
 
@@ -729,8 +730,8 @@ The interfaces don't commit to a value function. They make it possible to add on
 | Blending config (vertical) | `VerticalBlendingConfig.kt` | Source of truth for `MultiplierBoostParams` field names |
 | Step params (already in prod) | `StepParams.kt` | Production data classes — `ModelScoringParams`, `MultiplierBoostParams`, etc. |
 | Horizontal ranking entry point | `DefaultHomePageStoreRanker.rank()` | Incision point for `RowItemRanker` |
-| Horizontal sort logic | `StoreCarouselService.sortDiscoveryStoresWithBizRules()` | 5-level comparator wrapped by `BusinessRulesSortStep` |
-| Horizontal score modifiers | `StoreCollectionScorer.getScoreModifierMap()` | Wrapped by `ScoreModifierStep` |
+| Horizontal sort dispatch | `DefaultHomePageStoreRanker.modifyLiteStoreCollection()` | `when(rankingType)` dispatch wrapped by `RankingSortStep` |
+| Horizontal comparator chain | `StoreCarouselService.sortDiscoveryStoresWithBizRules()` | Atomic 5-level comparator — called within `RankingSortStep` |
 | Post-ranking fixups (NOT changing) | `NonRankableHomepageOrderingUtil` | NV pin, PAD=3, member pricing — stays as-is |
 
 ---
