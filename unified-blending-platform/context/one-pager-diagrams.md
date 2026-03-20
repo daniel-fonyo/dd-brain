@@ -443,16 +443,10 @@ flowchart LR
         H_STEP["RowItemRankingStep
         (interface)"]
         H_IMPL["ModelScoringStep
-        ScoreModifierStep
-        CampaignSortStep
-        BusinessRulesSortStep
-        OrderHistoryRerankStep"]
+        RankingSortStep"]
         H_TYPES["Step Types:
         MODEL_SCORING
-        SCORE_MODIFIER
-        CAMPAIGN_SORT
-        BUSINESS_RULES_SORT
-        ORDER_HISTORY_RERANK"]
+        RANKING_SORT"]
         H_ENG["RowItemRanker
         (engine)"]
         H_ENTRY["Incision:
@@ -516,15 +510,10 @@ flowchart LR
     subgraph pipeline["Uniform RowItem Pipeline"]
         direction TB
         STEP1["MODEL_SCORING
-        ScoreModifierParams"]
-        STEP2["SCORE_MODIFIER
-        ScoreModifierParams"]
-        STEP3["CAMPAIGN_SORT
-        CampaignSortParams"]
-        STEP4["BUSINESS_RULES_SORT
-        BusinessRulesSortParams"]
-        STEP5["ORDER_HISTORY_RERANK"]
-        STEP1 --> STEP2 --> STEP3 --> STEP4 --> STEP5
+        ModelScoringParams"]
+        STEP2["RANKING_SORT
+        RankingSortParams"]
+        STEP1 --> STEP2
     end
 
     A --> STEP1
@@ -535,7 +524,7 @@ flowchart LR
         Scores → original store objects"]
     end
 
-    STEP5 --> WB
+    STEP2 --> WB
 
     subgraph outputs["Original Store Objects"]
         direction TB
