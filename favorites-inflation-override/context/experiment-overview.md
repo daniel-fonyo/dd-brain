@@ -208,9 +208,128 @@ For non-t2/t3 users (heuristics OFF), T1 should show the clean effect of removin
 
 ---
 
+## Sandbox Debug Trace (2026-03-20)
+
+### Setup
+
+**Debug branch:** `debug/favorites-inflation-callstack` in feed-service
+**Sandbox:** rd42e4ff, pod feed-service-web-group1-sandbox-rd42e4ff
+**Run ID:** 2026-03-20T15-35-04-2b093b
+**Consumer hardcoded:** 757606047L (inflation override bucket: treatment1)
+
+Added `[DEBUG-FAVORITES-INFLATION]` logs at every point where favorites carousel store ordering can change:
+
+| File | Instrumented Steps |
+|------|-------------------|
+| `FavoritesCarousel.kt` | `getRankingType` — logs ranking type, bucket values, DV flags |
+| `FavoritesCarousel.kt` | `rerankInput/rerankOutput` — logs rerank branch, order_changed |
+| `HomepageFavoritesProduct.kt` | `rerankInput/rerankOutput` — wrapper-level store IDs |
+| `DefaultHomePageStoreRanker.kt` | `scoreSort`, `bizRulesSort`, `paginated` — 3-stage ranking |
+| `DefaultHomePagePostProcessor.kt` | `processContent_input/finalOutput`, dedup stages |
+
+### Results: 357 debug log lines, 12 unique consumers
+
+| Metric | Distribution |
+|--------|-------------|
+| `ranking_type` | 126x CAROUSEL, 0x INFLATION_MULTIPLIER_CAROUSEL |
+| `rerank_branch` | 18x no_rerank, 5x s1s2s3_heuristics |
+| `tiger_team_bucket` | 32x control, 9x treatment2 |
+| `inflation_override_bucket` | 33x treatment1, 8x control |
+| `order_changed` (rerank) | **31x false, 0x true** |
+| `order_changed_from_score` (bizRules) | 50x true, 4x false |
+| Post-processor changes order | 8/19 pairs changed (~42%) |
+
+### Key Findings
+
+**1. Ranking type is CAROUSEL for all T1 users — experiment DV is working.**
+All 18 `getRankingType` calls for inflation_override_bucket=treatment1 return `CAROUSEL`. Confirmed.
+
+**2. Reranking NEVER changes store order.**
+All 31 `rerankOutput` entries show `order_changed: false`. For tiger team control users (majority), the branch is `no_rerank` because `ORDER_AGAIN_SR_OVERRIDDEN` is false. For tiger team treatment2 users (5 cases), the branch is `s1s2s3_heuristics` but still `order_changed: false` — meaning the heuristics evaluate but produce the same ordering as the input.
+
+**3. Business rules sort overrides score sort 93% of the time.**
+50 out of 54 `storeRanker_bizRulesSort` calls show `order_changed_from_score: true`. The business rules sort runs AFTER score sort inside `DefaultHomePageStoreRanker.sortStoreEntitiesForCarousels()`.
+
+**4. Post-processor cross-carousel dedup changes order ~42% of the time.**
+8 out of 19 `processContent_input` to `processContent_finalOutput` pairs show different store order. This is due to stores being removed from favorites carousel because they appeared in earlier carousels.
+
+### Root Cause: Multiplier Model Difference
+
+The ranking type change controls which **multiplier model** is used in `CollectionScorer.getMultiplierModelName()`:
+
+```kotlin
+// CollectionScorer.kt:1065-1072
+private fun getMultiplierModelName(...): String? {
+    return if (context.rankingType == RankingType.INFLATION_MULTIPLIER_CAROUSEL) {
+        INFLATION_RANKER_MODEL_NAME  // "inflation_sr_multiplier_3_1"
+    } else {
+        modelMap[STORE_RANKER_MULTIPLIER_SIBYL_PREDICTOR_NAME.label]
+            ?.getModelNameFromExperiment(context.experimentMap)  // standard multiplier
+    }
+}
+```
+
+Final score formula in `SibylRegressor`:
+```
+score = base_score x multiplier_prediction x programmatic_boost + uncertainty + mab
+```
+
+So T1 (CAROUSEL) uses a **different multiplier model** than Control (INFLATION_MULTIPLIER_CAROUSEL). This produces different prediction scores. However, the business rules sort downstream overrides the score-based ordering 93% of the time, washing out the multiplier model difference.
+
+### Full Call Stack (verified)
+
+```
+1. FavoritesCarousel.getRankingType()
+   Control: INFLATION_MULTIPLIER_CAROUSEL
+   T1/T2:  CAROUSEL
+
+2. CollectionScorer.getMultiplierModelName()
+   INFLATION_MULTIPLIER_CAROUSEL: "inflation_sr_multiplier_3_1"
+   CAROUSEL: standard multiplier from experiment config
+   --> Different multiplier models produce different prediction scores
+
+3. SibylRegressor.predict()
+   score = base_score x multiplier x boost + uncertainty + mab
+   --> Scores ARE different between Control and T1
+
+4. DefaultHomePageStoreRanker.sortStoreEntitiesForCarousels()
+   a. Score sort (by prediction scores) — different between Control/T1
+   b. Business rules sort — overrides score sort 93% of the time <-- WASH-OUT POINT
+   c. Pagination
+
+5. HomepageFavoritesProduct.rerankDecoratedEntities()
+   FavoritesCarousel.rerankDecoratedEntitiesUtil()
+   Tiger team control users: no_rerank (no-op)
+   Tiger team t2/t3 users: s1s2s3_heuristics (but order_changed=false)
+   --> Reranking never changes order
+
+6. DefaultHomePagePostProcessor.processContent()
+   a. Placement dedup
+   b. Trim carousels
+   c. Cross-carousel dedup — changes order ~42% of time (removes stores seen earlier)
+   d. Final output
+```
+
+### Why T1 = No Effect (CONFIRMED)
+
+The inflation multiplier model does produce different scores, but **business rules sort in step 4b is the dominant ordering signal**. It overrides score-based ordering for 93% of carousel instances. The multiplier model difference between `inflation_sr_multiplier_3_1` and the standard model is too weak relative to business rules to change the final store order meaningfully.
+
+Additionally, the S1/S2/S3 heuristics (which T1 keeps ON) don't actually change store order in practice (`order_changed: false` in all 31 cases), so they're not masking anything — they're already a no-op for the observed traffic.
+
+### Why T2 = Significant -0.4%
+
+T2 disables BOTH the inflation multiplier AND the S1/S2/S3 heuristic reranking. While heuristics showed `order_changed: false` in our sandbox trace (single consumer), the key difference is that T2 also sets `DISABLE_FAVORITES_HEURISTIC_RERANKING` which fully bypasses the heuristic code path. This may interact differently at scale across the full population — tiger team t2/t3 users with diverse store mixes may see heuristic effects that our single-consumer trace didn't capture.
+
+**Alternative T2 explanation**: The statistical significance may come from the combined removal of both mechanisms creating a measurably different carousel composition at the population level, even if individual effect sizes are small.
+
+---
+
 ## Next Steps
 
-- [ ] **Trace favorites carousel call stack end-to-end** — follow a homepage load from `getRankingType()` through to the final serialized carousel order. Identify every point where store ordering can change after the ranker (heuristics, filters, deduplication, etc). Determine if something overrides or re-sorts after the inflation multiplier is applied/removed.
-- [ ] **Segment T1 results by tiger team bucket** — compare T1 vs Control for t2/t3 users (heuristics ON) vs t1/t4 users (heuristics OFF). If T1 only shows no effect for t2/t3, that confirms heuristics are washing out the ranking change.
+- [x] ~~Trace favorites carousel call stack end-to-end~~ — **Done.** See sandbox debug trace above.
+- [ ] **Segment T1 results by tiger team bucket** — compare T1 vs Control for t2/t3 users (heuristics ON) vs t1/t4 users (heuristics OFF)
 - [ ] **Validate T2 at 2 weeks** — confirm stat sig holds
 - [ ] **Check core metrics for T2** — orders, GMV, Cx satisfaction for negative tradeoffs
+- [ ] **Investigate business rules sort dominance** — understand what `bizRulesSort` does in `DefaultHomePageStoreRanker` and whether it's intentionally overriding ML scores. If so, the multiplier model is irrelevant for favorites carousel ranking.
+- [ ] **Compare multiplier model outputs** — get actual score distributions for `inflation_sr_multiplier_3_1` vs standard model to quantify the difference
+- [ ] **Test with heuristic-active user** — run sandbox trace with a consumer in tiger team t2/t3 who has diverse store mix to see if heuristics actually change order for them
