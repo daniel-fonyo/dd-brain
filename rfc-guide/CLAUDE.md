@@ -26,15 +26,7 @@ Every mermaid diagram MUST include a comment block above it:
      Aha: [The one insight the reader gets] -->
 ```
 
-Example:
-```markdown
-<!-- Diagram: Cache lookup flow
-     Reason: The fallback chain on cache miss is non-obvious and has latency implications
-     Aha: Cache misses only add ~30ms because we precompute on the fly and update async -->
-```
-
 ### Diagram Selection Guide
-Pick the right diagram type for the insight:
 
 | Insight type | Diagram type | When to use |
 |---|---|---|
@@ -45,75 +37,53 @@ Pick the right diagram type for the insight:
 | Decision logic with branches | `flowchart` with diamond nodes | Routing logic, feature branching, error handling |
 | Class/data relationships | `classDiagram` | Domain models, schema relationships |
 
+---
+
 ### Styling Guidelines
+
+#### Core Principle: Color Earns Its Place
+
+Do not color anything for the sake of doing it. Every color in a diagram must express something. If you can't say *why* a node is colored, it should be gray.
+
+**The process:**
+1. Start with the diagram's meaning — what is the story?
+2. Identify 2-3 semantic roles that need visual distinction (max)
+3. Assign colors from the brand palette to those roles
+4. Everything else is gray — data, context, plumbing
+5. Verify: if you removed a color, would you lose information? If no, remove it.
+
+#### Visual Hierarchy: Groupings vs Nodes
+
+Subgraphs (groupings) and nodes (boxes) must look different. Subgraphs are labels — they organize. Nodes are the actual things.
+
+**Nodes (the things):**
+- Solid borders, opaque fills
+- Darker text — primary reading priority
+- Rounded shape `("text")` — softer, more approachable than sharp rectangles
+- This is what the reader should look at first
+
+**Subgraphs (the labels):**
+- Dashed borders (`stroke-dasharray:6 4`) — reads as annotation, not container
+- Transparent fill (`fill:transparent`) — doesn't compete with node fills
+- Light gray text (`color:#A0A0A8`) — recedes behind node labels
+- Padded label strings (`"  Label Text  "`) — breathing room between text and border
+
+```
+%% Subgraph styling template
+style mySubgraph fill:transparent,stroke:#C8C8D0,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
+```
+
+#### Node Shapes
+- Rounded `("text")` — default for all nodes. Softer, approachable.
+- Diamonds `{"text"}` — decision points only
+- Cylinders `[("text")]` — data stores, databases (when needed)
+
+Avoid sharp rectangles `["text"]` — they make diagrams look mechanical. Use rounded by default.
 
 #### Layout
 - **Direction**: Use `TB` (top-to-bottom) for hierarchical flows, `LR` (left-to-right) for sequential/timeline flows.
 - **Simplicity**: Max 12-15 nodes per diagram. If you need more, split into multiple diagrams with clear scope.
 - **Grouping**: Use `subgraph` to cluster related components. Label subgraphs with the bounded context or team boundary.
-
-#### Node Shapes
-- Rectangles `[text]` — services, components
-- Rounded `(text)` — data stores, databases
-- Diamonds `{text}` — decision points
-- Stadium `([text])` — external systems, third-party APIs
-
-#### Color Palette — DoorDash Spark Brand Colors
-Source: [Spark Learning Experience Design Guide](https://coda.io/d/Spark-Learning-Experience-Design-Guide_dSexISkBOCq/Color-Brand_su6akA4x#_luEgXFbT) and `rfc-guide/dd-brand-guidelines.pdf`.
-
-**Brand palette reference:**
-
-| Name | Hex | RGB | Role in brand |
-|---|---|---|---|
-| Delivery Red (Hero Red) | `#FF3008` | 255, 048, 008 | Primary brand color. Must appear in every DoorDash visual. |
-| Detergent | `#80D8FF` | 128, 216, 255 | Light pairing — cool, calming complement to Hero Red |
-| Bouquet | `#FFC4FC` | 255, 196, 252 | Light pairing — warm, soft complement to Hero Red |
-| Yolk | `#F2D531` | 242, 213, 049 | Light pairing — energetic, attention-grabbing |
-| Motor Oil | `#681109` | 104, 017, 009 | Dark pairing — grounding, contrast provider |
-| Pinot Noir | `#4C0C3A` | 076, 012, 058 | Dark pairing — grounding, contrast provider |
-
-**Brand rules (from guide):**
-- Hero Red is the primary brand differentiator. It MUST appear in every diagram.
-- Supporting colors pair WITH Hero Red, never with each other alone.
-- Yolk, Bouquet, and Detergent are lighter pairings to Hero Red.
-- Pinot Noir and Motor Oil are darker pairings for contrast.
-- Use lighter tints (from the Color Spectrum in the guide) for subgraph backgrounds where full saturation is too heavy.
-
-**Mermaid classDef definitions — copy-paste into diagrams:**
-
-```
-%% DoorDash Spark Colors — Semantic mapping for RFC diagrams
-%% Source: dd-brand-guidelines.pdf
-
-classDef hero fill:#FF3008,stroke:#CC2606,color:#FFFFFF
-classDef existing fill:#681109,stroke:#4A0C06,color:#FFFFFF
-classDef proposed fill:#80D8FF,stroke:#5AB8E0,color:#191919
-classDef happy fill:#F2D531,stroke:#C9B028,color:#191919
-classDef degraded fill:#FFC4FC,stroke:#E0A8DC,color:#191919
-classDef external fill:#4C0C3A,stroke:#36082A,color:#FFFFFF
-classDef aha fill:#FFF0EB,stroke:#FF3008,color:#FF3008,stroke-width:3px
-```
-
-**Semantic color mapping:**
-
-| classDef | Spark Color | Use for |
-|---|---|---|
-| `hero` | Delivery Red | The main service/component this RFC proposes. Always present. |
-| `existing` | Motor Oil | Existing infrastructure that is NOT changing |
-| `proposed` | Detergent | New components or services being introduced |
-| `happy` | Yolk | Happy path, desired outcome, success states |
-| `degraded` | Bouquet | Degraded path, fallback behavior, warnings |
-| `external` | Pinot Noir | External systems, third-party APIs, out-of-scope services |
-| `aha` | Red-tinted highlight | The "aha" element — the node or edge that IS the insight. Uses a light red fill with a thick red border to draw the eye. |
-
-**Why this mapping:**
-- **Delivery Red = hero**: The RFC exists because of this component. It's the protagonist.
-- **Motor Oil = existing**: Dark, stable, already in the ground. Not the focus.
-- **Detergent = proposed**: Light blue stands out against the warm palette — it's new and fresh.
-- **Yolk = happy path**: Yellow = go, sunshine, success. Naturally reads as positive.
-- **Bouquet = degraded**: Soft pink = caution without alarm. Not an error, just not ideal.
-- **Pinot Noir = external**: Dark purple = outside our domain. Distant, separate.
-- **aha = highlighted red border**: Thin red-tinted node with thick red stroke. This is the node the reader's eye should land on.
 
 #### Edge Labels
 - Always label edges that aren't self-explanatory.
@@ -124,36 +94,153 @@ classDef aha fill:#FFF0EB,stroke:#FF3008,color:#FF3008,stroke-width:3px
 - Node labels: 2-4 words max. Use full names, not abbreviations (unless universally known like "API", "DB").
 - Subgraph titles: Team or domain name, e.g., `subgraph Routing Platform`.
 
+---
+
+### Color System
+
+#### DoorDash Spark Brand Palette
+Source: [Spark Learning Experience Design Guide](https://coda.io/d/Spark-Learning-Experience-Design-Guide_dSexISkBOCq/Color-Brand_su6akA4x#_luEgXFbT) and `rfc-guide/dd-brand-guidelines.pdf`.
+
+| Name | Hex | RGB | Role in brand |
+|---|---|---|---|
+| Delivery Red (Hero Red) | `#FF3008` | 255, 048, 008 | Primary brand color. Must appear in every DoorDash visual. |
+| Detergent | `#80D8FF` | 128, 216, 255 | Light pairing — cool, calming complement to Hero Red |
+| Bouquet | `#FFC4FC` | 255, 196, 252 | Light pairing — warm, soft complement to Hero Red |
+| Yolk | `#F2D531` | 242, 213, 049 | Light pairing — energetic, attention-grabbing |
+| Motor Oil | `#681109` | 104, 017, 009 | Dark pairing — grounding, contrast provider |
+| Pinot Noir | `#4C0C3A` | 076, 012, 058 | Dark pairing — grounding, contrast provider |
+
+**Brand rules:**
+- Hero Red is the primary brand differentiator. It should appear in every diagram.
+- Supporting colors pair WITH Hero Red, never with each other alone.
+- Full-saturation brand colors go on nodes, never on subgraph backgrounds.
+
+#### How to Apply Color in Diagrams
+
+**Gray is the default.** Most nodes in any diagram are context — data flowing through, services that exist, things that aren't the point. These are gray.
+
+```
+classDef domain fill:#EAEAED,stroke:#B8B8C2,color:#505058,stroke-width:1px
+```
+
+**Then ask: what are the 2-3 things that ARE the point?** Assign brand colors only to those. Each diagram should use at most 2-3 semantic colors plus gray.
+
+Common semantic roles and their brand color:
+
+| Role | Brand color | Tint for nodes | Why this color |
+|---|---|---|---|
+| The action/transformation this RFC proposes | Delivery Red | `fill:#FF3008,stroke:#D42807,color:#FFFFFF` | Red = action, this is what we're building |
+| New components that didn't exist before | Detergent | `fill:#DCEEFB,stroke:#7BBCE0,color:#1A3A50` | Cool blue = new, calm, ordered |
+| Happy path / desired outcome | Detergent | `fill:#DCEEFB,stroke:#7BBCE0,color:#1A3A50` | Blue = positive, flowing |
+| Decision points | Neutral | `fill:#EAEAED,stroke:#B8B8C2,color:#505058` | Decisions are structure, not emphasis |
+| Degraded path / fallback | Bouquet | `fill:#FFE8FB,stroke:#E0A8DC,color:#4C0C3A` | Soft pink = caution without alarm |
+| Danger / discard / error | Delivery Red (light tint) | `fill:#FFF0EB,stroke:#FF3008,color:#FF3008` | Red border draws the eye to risk |
+| External / out-of-scope | Pinot Noir | `fill:#4C0C3A,stroke:#36082A,color:#FFFFFF` | Dark purple = outside our domain |
+
+**Subgraph borders can carry a subtle tint** matching the dominant color inside, but the fill is always transparent:
+
+```
+%% Subgraph with red-tinted border (contains hero/action nodes)
+style sg fill:transparent,stroke:#E0A090,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
+
+%% Subgraph with blue-tinted border (contains proposed/new nodes)
+style sg fill:transparent,stroke:#A0CCE8,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
+
+%% Subgraph with neutral border (contains context/data nodes)
+style sg fill:transparent,stroke:#C8C8D0,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
+```
+
+---
+
+### Design Process — Step by Step
+
+Follow this sequence when styling a mermaid diagram. Do not skip to colors.
+
+**Step 1: Structure.** Get the nodes, edges, and subgraphs right. No styling yet. Does the topology communicate the idea?
+
+**Step 2: Meaning.** For each element, write down what it IS:
+- Is this node the thing we're proposing? Or context?
+- Is this subgraph a label or a real boundary?
+- Is this edge obvious or does it need a label?
+
+**Step 3: Assign roles.** From the meaning, pick 2-3 semantic roles. Example: "action we're proposing" + "new uniform flow" + "everything else is context."
+
+**Step 4: Color.** Map roles to brand colors. Gray for context. One or two brand colors for the things that matter. If you have more than 3 colors (including gray), you're probably over-styling.
+
+**Step 5: Differentiate layers.** Apply the groupings-vs-nodes rules:
+- Nodes: rounded, solid, opaque, darker text
+- Subgraphs: dashed, transparent, light text, padded labels
+- Subgraph borders: subtle tint matching dominant content
+
+**Step 6: Audit.** For every colored element, ask: "If I made this gray, would the reader lose information?" If no → make it gray.
+
+---
+
 ### Example: Well-Structured Diagram
 
 ```markdown
-<!-- Diagram: Geo-grid cache lookup flow
-     Reason: Readers need to understand the happy vs sad path and where latency lives
-     Aha: Cache hits return in <5ms; misses add only ~30ms via async compute+update -->
+<!-- Diagram: Adapt → Rank → Apply Back funnel
+     Reason: Readers need to see how 9 heterogeneous types converge to one uniform pipeline
+     Aha: The adapter boundary is the only place type-awareness exists — everything downstream is type-agnostic -->
 ```
 
 ```mermaid
 flowchart LR
-    A[Matrix API]:::hero -->|decompose OD pairs| B[Cache Provider]:::proposed
-    B -->|lookup| C[(Redis Geo-Cache)]:::existing
-    C -->|hit < 5ms| D[Return Result]:::happy
-    C -->|miss| E{Distance Check}:::degraded
-    E -->|extreme| F[Return Error]:::degraded
-    E -->|reasonable| G[Compute On-The-Fly]:::aha
-    G -->|async update ~30ms| C
-    G -->|return| D
+    subgraph sources["  9 Carousel Types  "]
+        direction TB
+        T1("StoreCarousel"):::domain
+        T2("ItemCarousel"):::domain
+        T3("DealCarousel"):::domain
+    end
 
-    classDef hero fill:#FF3008,stroke:#CC2606,color:#FFFFFF
-    classDef existing fill:#681109,stroke:#4A0C06,color:#FFFFFF
-    classDef proposed fill:#80D8FF,stroke:#5AB8E0,color:#191919
-    classDef happy fill:#F2D531,stroke:#C9B028,color:#191919
-    classDef degraded fill:#FFC4FC,stroke:#E0A8DC,color:#191919
-    classDef aha fill:#FFF0EB,stroke:#FF3008,color:#FF3008,stroke-width:3px
+    subgraph adapt["  Adapt  "]
+        A("toFeedRow()"):::hero
+    end
+
+    T1 --> A
+    T2 --> A
+    T3 --> A
+
+    subgraph pipeline["  Uniform Pipeline  "]
+        direction TB
+        S1("SCORING"):::step
+        S2("BOOSTING"):::step
+        S3("PINNING"):::step
+        S1 --> S2 --> S3
+    end
+
+    A --> S1
+
+    subgraph writeback["  Apply Back  "]
+        WB("applyBackTo()"):::hero
+    end
+
+    S3 --> WB
+
+    %% Gray = data. Red = the action. Blue = the new flow.
+    classDef domain fill:#EAEAED,stroke:#B8B8C2,color:#505058,stroke-width:1px
+    classDef hero fill:#FF3008,stroke:#D42807,color:#FFFFFF,stroke-width:1.5px
+    classDef step fill:#DCEEFB,stroke:#7BBCE0,color:#1A3A50,stroke-width:1px
+
+    style sources fill:transparent,stroke:#C8C8D0,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
+    style adapt fill:transparent,stroke:#E0A090,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
+    style pipeline fill:transparent,stroke:#A0CCE8,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
+    style writeback fill:transparent,stroke:#E0A090,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
 ```
+
+**Why each color exists:**
+- **Gray nodes** — carousel types are data. They're not the point. They recede.
+- **Red nodes** — `toFeedRow()` and `applyBackTo()` are the actions this RFC proposes. Red = "this is what we're building."
+- **Blue nodes** — pipeline steps are the new uniform flow. Blue = "this didn't exist before, and it's calm/ordered."
+- **Dashed subgraphs** — these are labels, not things. They organize without competing.
+- **Tinted borders** — peach on action subgraphs, blue on pipeline, gray on data. Subtle signal, not emphasis.
 
 ### Anti-Patterns
 - **Box-and-arrow soup**: A diagram with 20+ nodes and no subgraphs. Split it up.
-- **The "architecture astronaut"**: Showing every microservice when only 3 are relevant. Scope to what matters for the RFC.
+- **The "architecture astronaut"**: Showing every microservice when only 3 are relevant. Scope to what matters.
 - **The label-less graph**: Edges without labels force the reader to guess what flows between components.
 - **The decorative diagram**: A diagram that restates what the previous paragraph already said clearly. Delete it.
-- **Rainbow styling**: Using colors arbitrarily. Every color must have semantic meaning per the palette above.
+- **Rainbow styling**: More than 3 colors (including gray). If everything is highlighted, nothing is.
+- **Solid subgraphs**: Subgraph fills that compete with node fills. Subgraphs are labels — transparent + dashed.
+- **Sharp rectangles everywhere**: Use rounded nodes. Sharp corners make diagrams feel like system architecture from 2005.
+- **Color without reason**: If you can't say why a node is that color in one sentence, make it gray.
