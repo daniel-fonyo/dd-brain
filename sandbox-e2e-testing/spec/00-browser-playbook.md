@@ -72,18 +72,11 @@ The entire browser session is recorded automatically — no manual screenshot st
 - **Important**: MCP config changes require a Claude Code session restart to take effect
 - **Note**: `--save-video` is NOT a valid `@playwright/mcp` flag. Use `contextOptions.recordVideo` in the config file instead.
 
-**Post-session**: find and copy video to audit trail, then create 2x speed version:
+**Post-session**: find and copy video to audit trail:
 ```bash
 VIDEO_FILE=$(ls -t /tmp/playwright-mcp-output/*.webm 2>/dev/null | head -1)
 cp "${VIDEO_FILE}" <runDir>/session.webm
-
-# 2x speed version for faster review
-ffmpeg -i "<runDir>/session.webm" -filter:v "setpts=0.5*PTS" -an "<runDir>/session-2x.webm"
 ```
-
-- `session.webm` — original speed recording
-- `session-2x.webm` — 2x speed for quick review
-- Requires `ffmpeg` (`brew install ffmpeg`). If unavailable, skip 2x version and note in report.
 
 ---
 
@@ -189,38 +182,49 @@ browser_evaluate → (() => {
 
 ### 3b. Inject Click Indicator (Visual Feedback for Video)
 
-Inject a click event listener that creates a neon green pulsing circle at every click location. Makes the session video much more useful.
+Inject a click indicator via `browser_run_code` using `page.addInitScript()` — this persists across navigations (unlike `browser_evaluate` which is one-shot).
 
+```javascript
+// Via browser_run_code:
+async (page) => {
+  await page.addInitScript(() => {
+    document.addEventListener('mousedown', (e) => {
+      if (!e.isTrusted) return;
+      const indicator = document.createElement('div');
+      indicator.style.cssText = `
+        position: fixed; left: ${e.clientX - 20}px; top: ${e.clientY - 20}px;
+        width: 40px; height: 40px; border-radius: 50%;
+        border: 3px solid #39FF14; background: rgba(57,255,20,0.3);
+        box-shadow: 0 0 20px #39FF14;
+        pointer-events: none; z-index: 999999;
+        animation: clickPulse 1.5s ease-out forwards;
+      `;
+      if (!document.getElementById('click-indicator-style')) {
+        const style = document.createElement('style');
+        style.id = 'click-indicator-style';
+        style.textContent = `
+          @keyframes clickPulse {
+            0% { transform: scale(0.3); opacity: 1; box-shadow: 0 0 20px #39FF14; }
+            50% { transform: scale(1.5); opacity: 0.7; box-shadow: 0 0 40px #39FF14; }
+            100% { transform: scale(2.5); opacity: 0; box-shadow: 0 0 0px #39FF14; }
+          }
+        `;
+        document.head.appendChild(style);
+      }
+      document.body.appendChild(indicator);
+      setTimeout(() => indicator.remove(), 1600);
+    }, true);
+  });
+  return 'click indicator registered via addInitScript';
+}
 ```
-browser_evaluate → (() => {
-  document.addEventListener('click', (e) => {
-    const circle = document.createElement('div');
-    circle.style.cssText = `
-      position: fixed; left: ${e.clientX - 20}px; top: ${e.clientY - 20}px;
-      width: 40px; height: 40px; border-radius: 50%;
-      border: 3px solid #39FF14; background: rgba(57,255,20,0.3);
-      pointer-events: none; z-index: 999999;
-      animation: clickPulse 0.6s ease-out forwards;
-    `;
-    document.body.appendChild(circle);
-    setTimeout(() => circle.remove(), 700);
-  }, true);
 
-  const style = document.createElement('style');
-  style.textContent = `
-    @keyframes clickPulse {
-      0% { transform: scale(0.5); opacity: 1; }
-      100% { transform: scale(2); opacity: 0; }
-    }
-  `;
-  document.head.appendChild(style);
-  return 'click indicator injected';
-})()
-```
-
-- Inject after sign-in and modal dismissal, before debug mode toggle
-- Uses `capture: true` so it fires before any `stopPropagation` calls
-- Re-inject if a full page navigation occurs (unlikely after homepage load)
+**Key design decisions:**
+- `addInitScript` persists across navigations (unlike `browser_evaluate`)
+- `mousedown` fires earlier than `click`, giving more frames for video capture
+- `e.isTrusted` filters out synthetic `element.click()` calls (coords 0,0)
+- 1.5s animation with box-shadow glow ensures visibility at 30fps video capture
+- Programmatic clicks in carousel extraction (via `element.click()`) won't show indicators — this is expected
 
 ### 4. Enable Debug Mode
 
@@ -257,12 +261,13 @@ browser_evaluate → (() => {
 
 **Self-heal**: The styled-component class hash (`ba2scp-0`) WILL change on builds. The fallback (checkbox near bottom-right) is position-based and more resilient. If even that fails, search for any element containing "Debug" or "Debug Mode" text and look for a nearby toggle/checkbox.
 
-### 5. Enumerate and Analyze Every Carousel (Two-Phase)
+### 5. Click Through ALL Horizontal Components and Analyze Carousels (Three-Phase)
 
-This is the core analysis step. Use `browser_run_code` with the two-phase extraction approach. Do NOT try to parse the accessibility snapshot for carousel data — it's too large with debug mode on.
+This is the core analysis step. Use `browser_run_code`. Do NOT try to parse the accessibility snapshot — too large with debug mode on.
 
-**Phase 1**: Vertical scroll to discover all carousel positions and IDs
-**Phase 2**: For each carousel, scroll to it, click "Next" until disabled (extracting stores each step), then click "Previous" back to start — video shows the full right-then-left journey. Stores deduplicated by ID.
+**Phase 1**: Scroll to the very bottom of the page (dynamic `scrollHeight`, not fixed limit) to trigger all lazy loading, then scroll back to top.
+**Phase 2**: Click through ALL horizontal components — banners, promo carousels, store carousels — anything with `aria-label="Next button of carousel"`. At each vertical position, exhaust all Next buttons, then click all Previous buttons back.
+**Phase 3**: Re-scroll to extract store carousel data with horizontal click-through for store deduplication.
 
 #### Proven extraction code (use this exact pattern):
 
@@ -452,15 +457,17 @@ async (page) => {
 - Carousel title is the **line immediately after** the carousel ID in `container.innerText`
 - Store card IDs: regex `card\.store:store:\d+` in container text
 - Store names: `<a href="/store/...">` links → first `<span>` child with length 3-50 and no `$`, `min`, `Store Debug`, or `Ranking` text
-- Carousels lazy-load — must scroll in 500px increments with 800ms waits
+- **Scroll to true page bottom** — use `document.body.scrollHeight` dynamically, not a fixed limit
+- Carousels and banners lazy-load — scroll in 400-500px increments with 600-800ms waits
 - Carousels without `card.store:store:` matches use item/grocery cards (not store cards) — report as 0 stores
 - `setTimeout` is NOT available in `browser_run_code` — use `page.waitForTimeout()` instead
 
-**Horizontal scrolling (Phase 2):**
-- "Next button of carousel" (`aria-label="Next button of carousel"`) — click to scroll right, disabled at end
-- "Previous button of carousel" (`aria-label="Previous button of carousel"`) — click to scroll left, disabled at start
-- Each click scrolls ~4 stores into view; wait 500ms for animation before extracting
-- Carousels can have up to 20 stores — only ~4 visible at a time
+**Horizontal scrolling — be exhaustive:**
+- `aria-label="Next button of carousel"` — universal horizontal scroll for ALL carousel types (banners, promos, stores)
+- `aria-label="Previous button of carousel"` — scroll left, disabled at start
+- Click Next at EVERY vertical scroll position — covers all horizontal components on the page
+- Each click scrolls ~4 items into view; wait 400ms for animation
+- Carousels can have up to 20+ items — only ~4 visible at a time
 - Deduplicate stores by ID across all horizontal positions
 - Bottom bar Second Pass Score: regex `Ranking Second Pass Score:\s*([\d.]+|N\/A)` in container text
 
@@ -488,7 +495,6 @@ browser_close
 - Each session produces one file: `/tmp/playwright-mcp-output/<uuid>.webm`
 - Find it: `VIDEO_FILE=$(ls -t /tmp/playwright-mcp-output/*.webm 2>/dev/null | head -1)`
 - Copy to audit trail: `cp "${VIDEO_FILE}" <runDir>/session.webm`
-- Create 2x speed version: `ffmpeg -i "<runDir>/session.webm" -filter:v "setpts=0.5*PTS" -an "<runDir>/session-2x.webm"`
 
 ---
 
@@ -531,8 +537,7 @@ browser_close
 | Raw React JSON in extraction | Filter for direct text nodes only (`nodeType === 3`) |
 | 0 carousels found | Page may have changed — disable debug mode, take snapshot, report structure |
 | Selector class hash changed | Styled-component hashes change on builds — use fallback selectors |
-| Click indicator not showing | Re-inject after any full page navigation; listener uses `capture: true` |
-| ffmpeg not installed | Run `brew install ffmpeg`. If rejected, skip 2x video and note in report |
+| Click indicator not showing | Verify `addInitScript` was called via `browser_run_code` (not `browser_evaluate`). Only trusted events (from `browser_click`) show indicators — programmatic `element.click()` won't |
 
 ---
 
@@ -548,4 +553,4 @@ browser_close
 | 2026-03-19 | Fixed video recording — use `contextOptions.recordVideo` | `--save-video` is not a valid `@playwright/mcp` flag; config file approach works |
 | 2026-03-19 | Added click indicator injection (Step 3b) | Neon green pulsing circles at click locations for video review |
 | 2026-03-19 | Rewrote carousel extraction as two-phase (Step 5) | Phase 1: vertical scroll discovers carousels. Phase 2: horizontal Next/Previous click-through captures all stores (up to 20 per carousel) |
-| 2026-03-19 | Added 2x speed video post-processing | `ffmpeg setpts=0.5*PTS` creates `session-2x.webm` for faster video review |
+| 2026-03-19 | Removed 2x video, fixed click indicator, exhaustive scrolling | Dropped ffmpeg dependency. Click indicator now uses `addInitScript`+`mousedown` (was `evaluate`+`click`). Three-phase extraction: full vertical scroll to true page bottom, exhaust ALL horizontal Next buttons at every position, then extract store data |
