@@ -144,6 +144,122 @@ classDiagram
 
 ---
 
+## 1B. Class Diagram: Horizontal Layer (RowItem, RowItemRankingStep, RowItemRanker)
+
+Same architecture as vertical, different types. The horizontal layer operates on stores *within*
+a carousel. 3 adapters (vs 9 vertical), and `RankingSortParams` takes a `RankingType` to dispatch
+the correct sort logic from the existing `when(rankingType)` chain.
+
+```mermaid
+classDiagram
+    direction TB
+
+    class RowItem {
+        <<interface>>
+        +id: String
+        +type: RowItemType
+        +score: Double
+        +metadata: Map~String, Any~
+        +applyBackTo()
+    }
+
+    class RowItemType {
+        <<enum>>
+        STORE_ENTITY
+        ITEM_STORE_ENTITY
+        DEAL_STORE
+    }
+
+    class StoreEntityRowItem {
+        -store: DiscoveryStore
+        +applyBackTo()
+    }
+    class ItemStoreEntityRowItem {
+        -entity: ItemStoreEntity
+        +applyBackTo()
+    }
+    class DealStoreRowItem {
+        -store: DealStore
+        +applyBackTo()
+    }
+
+    RowItem <|.. StoreEntityRowItem
+    RowItem <|.. ItemStoreEntityRowItem
+    RowItem <|.. DealStoreRowItem
+    RowItem --> RowItemType
+
+    class RowItemRankingStep {
+        <<interface>>
+        +stepType: String
+        +paramsClass: Class~StepParams~
+        +process(rows, context, params)
+    }
+
+    class StepParams {
+        <<sealed interface>>
+    }
+
+    class ModelScoringParams {
+        +predictorRef: String?
+        +predictorName: String?
+        +modelName: String?
+    }
+    class RankingSortParams {
+        +rankingType: RankingType
+    }
+
+    StepParams <|.. ModelScoringParams
+    StepParams <|.. RankingSortParams
+
+    class ModelScoringStep {
+        -scorers: Map~RankingType, StoreScorer~
+        +process(rows, context, params)
+    }
+    class RankingSortStep {
+        -storeCarouselService: StoreCarouselService
+        +process(rows, context, params)
+    }
+
+    RowItemRankingStep <|.. ModelScoringStep
+    RowItemRankingStep <|.. RankingSortStep
+    RowItemRankingStep --> StepParams : params
+
+    ModelScoringStep --> ModelScoringParams
+    RankingSortStep --> RankingSortParams
+
+    class RankingType {
+        <<enum>>
+        CAROUSEL
+        CAMPAIGN
+        ITEM_CAROUSEL
+        PICKUP_STORE_FEED
+        BOOKMARKS
+        MAP_CAROUSEL
+        CONTEXTUAL_TASTE_CAROUSEL
+        RETENTION_RECOMMENDED_CAROUSEL
+        WHOLE_ORDER_REORDER
+        ... 20+ more
+    }
+
+    RankingSortParams --> RankingType
+
+    class RowItemRanker {
+        -stepRegistry: Map~String, RowItemRankingStep~
+        +rank(rows, pipeline, context): List~RowItem~
+    }
+
+    RowItemRanker --> RowItemRankingStep : dispatches to
+    RowItemRanker --> RowItem : operates on
+```
+
+**Key differences from Diagram 1 (vertical):**
+- 3 adapters vs 9 — stores within a carousel are simpler
+- `RankingSortParams.rankingType` drives the `when(rankingType)` dispatch (30+ variants in prod: CAROUSEL, CAMPAIGN, ITEM_CAROUSEL, PICKUP_STORE_FEED, BOOKMARKS, etc.)
+- `ModelScoringStep` dispatches to different scorers: StoreCollectionScorer (standard), ContextualStoreScorer (taste carousels), RetentionStoreScorer (retention)
+- `ModelScoringParams` is shared with vertical — same struct
+
+---
+
 ## 2A. Before vs After: Type-Check Branching at Every Stage
 
 Side-by-side contrast. Left: the current code branches on carousel type at every ranking stage —
