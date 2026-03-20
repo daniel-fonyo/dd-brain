@@ -131,103 +131,86 @@ Expected structure:
 
 ---
 
-## Bug: Tiger Team Overlap Makes T1 a No-Op
+## Analysis: Why T1 Shows No Effect (p=0.89)
 
-### The problem
+### Confirmed: Ranking type change IS working
 
-The `getRankingType()` if/else chain fires **top to bottom, first match wins**:
-
-```
-check 1: if (isTigerFeatureActive)                          → CAROUSEL
-check 2: else if (shoppingTab)                              → FAVORITES_CAROUSEL
-check 3: else if (isInflationOverrideActive && homepage)    → CAROUSEL
-check 4: else if (homepage && inflation_ranker_v3 == TREATMENT) → INFLATION_MULTIPLIER_CAROUSEL
-check 5: else if (homepage && reorder_carousel)             → REORDER_CAROUSEL
-check 6: else                                               → fallback
-```
-
-**Check 1 (tiger team) fires before check 3 (this experiment) and check 4 (inflation multiplier).**
-
-### DV dependency chain
+Tiger team runtime config (`tiger_team/experiment_feature_mapping.json`) does **not** include `DISABLE_ORDER_AGAIN_INFLATION_FILTER` in any bucket:
 
 ```
-sdk-dynamic-taste-homepage-rollout
-  └─ contained in treatment4?
-       └─ YES → hp-tiger-team-2025 (t1-t4, all 100% → treatment)
-                  └─ isTigerFeatureActive = true → check 1 fires
-
-discovery_p13n_inflation_ranker_v2
-  ├─ 90% → treatment3 → homepage_inflation_filter_ranker_v3 = TREATMENT
-  └─ 10% → control    → homepage_inflation_filter_ranker_v3 = CONTROL
+control:              []
+treatment1:           [CONTENT_SYSTEM_DAY_PART_CX_AFFINITY]
+treatment2:           [... ORDER_AGAIN_SR_OVERRIDDEN]
+treatment3:           [... ORDER_AGAIN_SR_OVERRIDDEN, DISABLE_THE_CAROUSEL_CAPPING]
+treatment4:           []
 ```
 
-### What happens for tiger team users
+So check 1 (`isTigerFeatureActive` for `DISABLE_ORDER_AGAIN_INFLATION_FILTER`) is **always false**. The ranking type path works as designed:
 
-If a user is in tiger team treatment, check 1 fires and returns `CAROUSEL` for **all three buckets**. Check 3 (inflation override) and check 4 (inflation multiplier) are never reached.
+- Control → `INFLATION_MULTIPLIER_CAROUSEL` (inflation ON)
+- T1 → `CAROUSEL` (inflation OFF)
+- T2 → `CAROUSEL` (inflation OFF)
 
-```
-Tiger team users:
-  Control:  check 1 → CAROUSEL  (inflation already OFF — tiger team turned it off)
-  T1:       check 1 → CAROUSEL  (inflation already OFF — same as control)
-  T2:       check 1 → CAROUSEL  (inflation already OFF — same as control)
-  ↑
-  All three buckets are IDENTICAL for ranking type.
-```
+**T1 is genuinely changing the ranking type.** Yet p=0.89.
 
-### What happens for non-tiger-team users
+### Heuristic gate: only tiger team t2/t3
 
-Check 1 is skipped. The experiment works as designed:
+The heuristic reranking in `rerankDecoratedEntitiesUtil` checks a **different** feature:
 
-```
-Non-tiger-team users:
-  Control:  check 4 → INFLATION_MULTIPLIER_CAROUSEL  (inflation ON)
-  T1:       check 3 → CAROUSEL                       (inflation OFF)
-  T2:       check 3 → CAROUSEL                       (inflation OFF)
+```kotlin
+val isTigerFeatureActive = TigerTeamUtil.isTigerTeamFeatureEnabled(
+    featureName = TigerTeamFeature.ORDER_AGAIN_SR_OVERRIDDEN,  // different from ranking check
+    experimentMap = experimentMap,
+)
 ```
 
-### PR table vs reality
+`ORDER_AGAIN_SR_OVERRIDDEN` only exists in tiger team **treatment2 and treatment3**. So:
 
-| Bucket | PR says: Inflation | Tiger team users (actual) | Non-tiger-team users (actual) |
-|--------|--------------------|--------------------------|-----------------------------|
-| Control | ON | **OFF** (check 1 → CAROUSEL) | ON (check 4 → IMC) |
-| T1 | OFF | **OFF** (check 1 → CAROUSEL) | OFF (check 3 → CAROUSEL) |
-| T2 | OFF | **OFF** (check 1 → CAROUSEL) | OFF (check 3 → CAROUSEL) |
+| Tiger team bucket | Heuristics available? |
+|-------------------|-----------------------|
+| treatment1 | NO |
+| treatment2 | YES |
+| treatment3 | YES |
+| treatment4 | NO |
 
-The PR table is only accurate for non-tiger-team users. For tiger team users, **Control already has inflation OFF**, making T1 identical to Control.
+Heuristics are OFF for ~half the tiger team population (t1/t4) and all non-tiger-team users.
 
-### Why T2 still works
+### Corrected PR table
 
-The heuristic disable (`rerankDecoratedEntitiesUtil`) is a **separate code path** that runs after ranking type is selected. It's not gated by the if/else chain above. So T2's heuristic disable applies to ALL users regardless of tiger team status:
+| Bucket | Inflation Multiplier | Heuristics (PR claim) | Heuristics (actual) |
+|--------|---------------------|----------------------|---------------------|
+| Control | ON | ON | **ON only for tiger team t2/t3** |
+| T1 | OFF | ON | **ON only for tiger team t2/t3** |
+| T2 | OFF | OFF | OFF |
+
+### Hypothesis: heuristics override the ranking change
+
+For tiger team t2/t3 users, the call stack is:
+1. Store Ranker produces ranked list (with or without inflation multiplier)
+2. `rerankDecoratedEntitiesUtil` runs S1/S2/S3 heuristics **after** ranking
+3. Heuristics re-sort stores, potentially overriding the ranker's ordering
 
 ```
-Tiger team users:     Control = T1 (heuristics ON) ≠ T2 (heuristics OFF)  ← T2 differs
-Non-tiger-team users: Control ≠ T1 (ranking type) ≠ T2 (ranking + heuristics)
+Control (t2/t3 user):
+  Store Ranker (INFLATION_MULTIPLIER_CAROUSEL) → [ranked list] → S1/S2/S3 rerank → [final order]
+
+T1 (t2/t3 user):
+  Store Ranker (CAROUSEL, no inflation)        → [ranked list] → S1/S2/S3 rerank → [final order]
+                                                                  ↑
+                                              if heuristics dominate, both produce similar final order
 ```
 
-### Impact on results
+**If heuristics are strong enough to override the input ranking**, then for t2/t3 users the inflation multiplier removal has no net effect — heuristics push high-inflators back into the same positions regardless.
 
-```
-T1 overall effect ≈ (%tiger × 0) + (%non-tiger × real_inflation_effect)
-                         ↑ no-op           ↑ diluted into total
-                   = heavily diluted → p=0.89
+For non-t2/t3 users (heuristics OFF), T1 should show the clean effect of removing the inflation multiplier. But this subgroup may be too small or the inflation multiplier may genuinely not affect `vol_from_over_25` for these users either.
 
-T2 overall effect ≈ (%tiger × heuristic_effect) + (%non-tiger × inflation + heuristic effect)
-                         ↑ real signal                    ↑ real signal
-                   = signal from entire population → p=0.0017
-```
-
-### Conclusion
-
-T1's p=0.89 does NOT mean the inflation multiplier has no effect. It means **T1 is a no-op for the tiger-team subpopulation**, which dilutes any real signal. We cannot draw conclusions about inflation multiplier impact from T1 without segmenting out tiger team users.
-
-T2's stat sig result is driven by heuristic removal, which works across the entire population.
+**We need to trace the full call stack to confirm whether something downstream re-sorts the favorites carousel after the ranking type is applied.**
 
 ---
 
-## Open Questions / Next Steps
+## Next Steps
 
-- **Determine tiger team population overlap** — what % of this experiment's users are in tiger team? This tells us how diluted T1 is.
-- **Segment T1 results** — look at T1 vs Control for non-tiger-team users only. This isolates the actual inflation multiplier effect.
-- **Validate T2 at 2 weeks** — confirm stat sig holds
-- **Check core metrics for T2** — orders, GMV, Cx satisfaction to confirm no negative tradeoffs
-- **Understand S1/S2/S3 heuristics** — what specifically are they doing that pushes volume toward high-inflators?
+- [ ] **Trace favorites carousel call stack end-to-end** — follow a homepage load from `getRankingType()` through to the final serialized carousel order. Identify every point where store ordering can change after the ranker (heuristics, filters, deduplication, etc). Determine if something overrides or re-sorts after the inflation multiplier is applied/removed.
+- [ ] **Segment T1 results by tiger team bucket** — compare T1 vs Control for t2/t3 users (heuristics ON) vs t1/t4 users (heuristics OFF). If T1 only shows no effect for t2/t3, that confirms heuristics are washing out the ranking change.
+- [ ] **Validate T2 at 2 weeks** — confirm stat sig holds
+- [ ] **Check core metrics for T2** — orders, GMV, Cx satisfaction for negative tradeoffs
