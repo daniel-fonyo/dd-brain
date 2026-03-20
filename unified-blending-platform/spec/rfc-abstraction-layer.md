@@ -219,15 +219,16 @@ flowchart LR
     WB --> O3
     WB --> O4
 
-    classDef domain fill:#FFF9F5,stroke:#C4907A,color:#4C0C3A,stroke-width:1px
+    %% Gray = data, not the point. Red = the action we're proposing. Blue = the new uniform flow.
+    classDef domain fill:#EAEAED,stroke:#B8B8C2,color:#505058,stroke-width:1px
     classDef hero fill:#FF3008,stroke:#D42807,color:#FFFFFF,stroke-width:1.5px
-    classDef step fill:#FEF7D1,stroke:#D4B82A,color:#4A3D00,stroke-width:1px
+    classDef step fill:#DCEEFB,stroke:#7BBCE0,color:#1A3A50,stroke-width:1px
 
-    style sources fill:#FFFAF8,stroke:#D4A08A,stroke-width:1px,color:#681109
-    style adapt fill:#FFF0EB,stroke:#FF3008,stroke-width:1.5px,color:#681109
-    style pipeline fill:#FFFCEE,stroke:#E8CF2D,stroke-width:1.5px,color:#4A3D00
-    style writeback fill:#FFF0EB,stroke:#FF3008,stroke-width:1.5px,color:#681109
-    style outputs fill:#FFFAF8,stroke:#D4A08A,stroke-width:1px,color:#681109
+    style sources fill:#F8F8FA,stroke:#C8C8D0,stroke-width:1px,color:#606068
+    style adapt fill:#F8F8FA,stroke:#E8A090,stroke-width:1.5px,color:#606068
+    style pipeline fill:#F8F8FA,stroke:#A0CCE8,stroke-width:1.5px,color:#606068
+    style writeback fill:#F8F8FA,stroke:#E8A090,stroke-width:1.5px,color:#606068
+    style outputs fill:#F8F8FA,stroke:#C8C8D0,stroke-width:1px,color:#606068
 ```
 
 ## Architecture
