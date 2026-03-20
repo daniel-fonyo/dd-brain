@@ -85,6 +85,15 @@ classDiagram
     FeedRow <|.. StoreEntityRow
     FeedRow --> RowType
 
+    class StepType {
+        <<string constants>>
+        MODEL_SCORING
+        MULTIPLIER_BOOST
+        DIVERSITY_RERANK
+        POSITION_BOOSTING
+        FIXED_PINNING
+    }
+
     class FeedRowRankingStep {
         <<interface>>
         +stepType: String
@@ -96,6 +105,40 @@ classDiagram
         <<sealed interface>>
     }
 
+    class ModelScoringParams {
+        +predictorRef: String?
+        +predictorName: String?
+        +modelName: String?
+    }
+    class MultiplierBoostParams {
+        +calibrationConfig: CalibrationConfig
+        +intentScoringConfig: IntentScoringConfig
+        +verticalBoostWeights: VerticalBoostWeights
+    }
+    class DiversityRerankParams {
+        +enabled: Boolean
+        +diversityScoringParams: DiversityScoringParams
+    }
+    class PositionBoostingParams {
+        +dealCarouselMultiplier: Double
+        +boostByPositionAllowList: List~String~
+        +nvUnpinEnabled: Boolean
+    }
+    class FixedPinningParams {
+        +rules: List~PinRule~
+    }
+    class PinRule {
+        +rowId: String
+        +position: Int
+    }
+
+    StepParams <|.. ModelScoringParams
+    StepParams <|.. MultiplierBoostParams
+    StepParams <|.. DiversityRerankParams
+    StepParams <|.. PositionBoostingParams
+    StepParams <|.. FixedPinningParams
+    FixedPinningParams --> PinRule
+
     class ModelScoringStep {
         -entityScorer: EntityScorer
         +process(rows, context, params)
@@ -106,6 +149,9 @@ classDiagram
     class DiversityRerankStep {
         +process(rows, context, params)
     }
+    class PositionBoostingStep {
+        +process(rows, context, params)
+    }
     class FixedPinningStep {
         +process(rows, context, params)
     }
@@ -113,8 +159,16 @@ classDiagram
     FeedRowRankingStep <|.. ModelScoringStep
     FeedRowRankingStep <|.. MultiplierBoostStep
     FeedRowRankingStep <|.. DiversityRerankStep
+    FeedRowRankingStep <|.. PositionBoostingStep
     FeedRowRankingStep <|.. FixedPinningStep
-    FeedRowRankingStep --> StepParams
+    FeedRowRankingStep --> StepType : type
+    FeedRowRankingStep --> StepParams : params
+
+    ModelScoringStep --> ModelScoringParams
+    MultiplierBoostStep --> MultiplierBoostParams
+    DiversityRerankStep --> DiversityRerankParams
+    PositionBoostingStep --> PositionBoostingParams
+    FixedPinningStep --> FixedPinningParams
 
     class FeedRowRanker {
         -stepRegistry: Map~String, FeedRowRankingStep~
@@ -140,10 +194,11 @@ sequenceDiagram
     participant Adapter as FeedRow Adapters
     participant Engine as FeedRowRanker
     participant Registry as StepRegistry
-    participant Score as ModelScoringStep
-    participant Boost as MultiplierBoostStep
-    participant Diversity as DiversityRerankStep
-    participant Pin as FixedPinningStep
+    participant Score as MODEL_SCORING
+    participant Boost as MULTIPLIER_BOOST
+    participant Diversity as DIVERSITY_RERANK
+    participant PosBoost as POSITION_BOOSTING
+    participant Pin as FIXED_PINNING
     participant Trace as TraceEmitter
 
     PP->>Adapter: toFeedRow() for each carousel
@@ -156,21 +211,25 @@ sequenceDiagram
         Registry-->>Engine: step instance
         Engine->>Engine: deserialize params → StepParams
 
-        alt step = MODEL_SCORING
-            Engine->>Score: process(rows, context, params)
+        alt type = "MODEL_SCORING"
+            Engine->>Score: process(rows, ctx, ModelScoringParams)
             Score->>Score: entityScorer.score() → Sibyl gRPC
             Score-->>Engine: rows with scores set
-        else step = MULTIPLIER_BOOST
-            Engine->>Boost: process(rows, context, params)
+        else type = "MULTIPLIER_BOOST"
+            Engine->>Boost: process(rows, ctx, MultiplierBoostParams)
             Boost->>Boost: BlendingUtil.blendBundle()
             Boost-->>Engine: rows with boosted scores
-        else step = DIVERSITY_RERANK
-            Engine->>Diversity: process(rows, context, params)
+        else type = "DIVERSITY_RERANK"
+            Engine->>Diversity: process(rows, ctx, DiversityRerankParams)
             Diversity->>Diversity: BlendingUtil.rerankEntitiesWithDiversity()
             Diversity-->>Engine: rows reranked
-        else step = FIXED_PINNING
-            Engine->>Pin: process(rows, context, params)
-            Pin->>Pin: BoostingBundle.boosted() + RankingBundle.ranked()
+        else type = "POSITION_BOOSTING"
+            Engine->>PosBoost: process(rows, ctx, PositionBoostingParams)
+            PosBoost->>PosBoost: apply position boosts + deal multiplier
+            PosBoost-->>Engine: rows with position boosts
+        else type = "FIXED_PINNING"
+            Engine->>Pin: process(rows, ctx, FixedPinningParams)
+            Pin->>Pin: apply PinRule list → fix positions
             Pin-->>Engine: rows with pins applied
         end
 
@@ -187,86 +246,159 @@ sequenceDiagram
 
 ---
 
-## 3. Before / After: Current Spaghetti vs Clean Pipeline
+## 3A. Before vs After: Type-Check Branching at Every Stage
 
-### Before: Inline calls through utility objects
-
-No interfaces, no boundaries. Understanding one stage requires reading all stages.
+Side-by-side contrast. Left: the current code branches on carousel type at every ranking stage —
+9 types x 4 stages = type-checks everywhere. Right: adapt once, rank uniformly.
 
 ```mermaid
 flowchart TB
-    subgraph current["Current: Inline Method Calls (No Interfaces)"]
+    subgraph before["Before: Type-Checks at Every Stage"]
         direction TB
-        A["reOrderGlobalEntitiesV2()"] --> B["rankAndDedupeContent()"]
-        B --> C["rankAndMergeContent()"]
-        C --> D["rankContent()"]
-        D --> E["BaseEntityRankerConfiguration.rank()"]
+        S1["Score Stage"] --> B1{"if StoreCarousel?
+        if ItemCarousel?
+        if DealCarousel?
+        ... 9 branches"}
+        S2["Blend Stage"] --> B2{"if StoreCarousel?
+        if ItemCarousel?
+        if DealCarousel?
+        ... 9 branches"}
+        S3["Boost Stage"] --> B3{"if StoreCarousel?
+        if ItemCarousel?
+        if DealCarousel?
+        ... 9 branches"}
+        S4["Pin Stage"] --> B4{"if StoreCarousel?
+        if ItemCarousel?
+        if DealCarousel?
+        ... 9 branches"}
 
-        E --> F["getEntities()
-        Flatten 9+ types via type-checks"]
-        E --> G["getScoreBundle()
-        → EntityScorer → SibylRegressor
-        → gRPC to Sibyl"]
-        E --> H["getBoostBundle()
-        → BoostingBundle.boosted()
-        Reads DVs + runtime JSON internally"]
-        E --> I["getRankingBundle()
-        → RankingBundle.ranked()
-        Pin/flow separation"]
-        E --> J["getRankableContent()
-        Re-assemble typed containers"]
+        B1 --> R1["9 type-specific
+        scoring paths"]
+        B2 --> R2["9 type-specific
+        blending paths"]
+        B3 --> R3["9 type-specific
+        boosting paths"]
+        B4 --> R4["9 type-specific
+        pinning paths"]
 
-        G -.->|"reads config from"| K["3 runtime JSONs
-        5+ DV keys
-        Hardcoded constants"]
-        H -.->|"reads config from"| K
+        NOTE["36 type-check branches
+        across 4 stages"]
     end
 
-    style current fill:#fff3f3,stroke:#cc0000
-    style K fill:#ffcccc,stroke:#cc0000
+    subgraph after["After: Adapt Once, Rank Uniformly"]
+        direction TB
+        ADAPT["Adapt once
+        toFeedRow()"] --> UNI["Uniform FeedRow list"]
+        UNI --> P1["MODEL_SCORING"]
+        P1 --> P2["MULTIPLIER_BOOST"]
+        P2 --> P3["DIVERSITY_RERANK"]
+        P3 --> P4["POSITION_BOOSTING"]
+        P4 --> P5["FIXED_PINNING"]
+        P5 --> BACK["applyBackTo()
+        Write back once"]
+
+        NOTE2["0 type-checks in pipeline
+        Each step sees only FeedRow"]
+    end
+
+    style before fill:#fff3f3,stroke:#cc0000
+    style after fill:#f3fff3,stroke:#00aa00
+    style NOTE fill:#ffcccc,stroke:#cc0000
+    style NOTE2 fill:#ccffcc,stroke:#00aa00
 ```
 
-### After: Named steps with typed params
+---
 
-Each step is independent, testable, and configurable. Params flow in from config — no internal
-DV reads.
+## 3B. The Funnel: Adapt Once, Rank Uniformly, Apply Back
+
+The "aha" visual. 9 diverse carousel types fan in through adapters → converge to a uniform
+FeedRow list → pass through the sequential step pipeline → fan out via applyBackTo() back to
+original domain objects.
 
 ```mermaid
-flowchart TB
-    subgraph proposed["Proposed: Config-Driven Pipeline"]
+flowchart LR
+    subgraph sources["9 Carousel Types"]
         direction TB
-        A2["reOrderGlobalEntitiesV2()"] --> B2{"DV: ubpRolloutEnabled?"}
-        B2 -->|Yes| C2["Adapt → FeedRow list"]
-        B2 -->|No| OLD["Old path (unchanged)"]
-
-        C2 --> D2["FeedRowRanker.rank()"]
-
-        D2 --> E2["ModelScoringStep
-        calls EntityScorer.score()
-        Same Sibyl gRPC"]
-        E2 --> F2["MultiplierBoostStep
-        calls BlendingUtil.blendBundle()
-        Same in-memory math"]
-        F2 --> G2["DiversityRerankStep
-        calls BlendingUtil.rerankEntitiesWithDiversity()
-        Same in-memory math"]
-        G2 --> H2["FixedPinningStep
-        calls BoostingBundle.boosted()
-        Same in-memory math"]
-
-        H2 --> I2["applyBackTo()
-        Write scores to original objects"]
-
-        J2["Pipeline Config JSON
-        (one source of truth)"] -.->|"params injected"| E2
-        J2 -.->|"params injected"| F2
-        J2 -.->|"params injected"| G2
-        J2 -.->|"params injected"| H2
+        T1["StoreCarousel"]
+        T2["ItemCarousel"]
+        T3["DealCarousel"]
+        T4["StoreCollection"]
+        T5["CollectionV2"]
+        T6["ItemCollection"]
+        T7["MapCarousel"]
+        T8["ReelsCarousel"]
+        T9["StoreEntity"]
     end
 
-    style proposed fill:#f3fff3,stroke:#00aa00
-    style J2 fill:#ccffcc,stroke:#00aa00
-    style OLD fill:#ffffcc,stroke:#aaaa00
+    subgraph adapt["Adapt"]
+        direction TB
+        A["toFeedRow()
+        1 adapter per type"]
+    end
+
+    T1 --> A
+    T2 --> A
+    T3 --> A
+    T4 --> A
+    T5 --> A
+    T6 --> A
+    T7 --> A
+    T8 --> A
+    T9 --> A
+
+    subgraph pipeline["Uniform FeedRow Pipeline"]
+        direction TB
+        STEP1["MODEL_SCORING
+        ModelScoringParams"]
+        STEP2["MULTIPLIER_BOOST
+        MultiplierBoostParams"]
+        STEP3["DIVERSITY_RERANK
+        DiversityRerankParams"]
+        STEP4["POSITION_BOOSTING
+        PositionBoostingParams"]
+        STEP5["FIXED_PINNING
+        FixedPinningParams"]
+        STEP1 --> STEP2 --> STEP3 --> STEP4 --> STEP5
+    end
+
+    A --> STEP1
+
+    subgraph writeback["Apply Back"]
+        direction TB
+        WB["applyBackTo()
+        Scores → original objects"]
+    end
+
+    STEP5 --> WB
+
+    subgraph outputs["Original Domain Objects"]
+        direction TB
+        O1["StoreCarousel"]
+        O2["ItemCarousel"]
+        O3["DealCarousel"]
+        O4["StoreCollection"]
+        O5["CollectionV2"]
+        O6["ItemCollection"]
+        O7["MapCarousel"]
+        O8["ReelsCarousel"]
+        O9["StoreEntity"]
+    end
+
+    WB --> O1
+    WB --> O2
+    WB --> O3
+    WB --> O4
+    WB --> O5
+    WB --> O6
+    WB --> O7
+    WB --> O8
+    WB --> O9
+
+    style sources fill:#fff3f3,stroke:#cc0000
+    style adapt fill:#ffffcc,stroke:#aaaa00
+    style pipeline fill:#e6f0ff,stroke:#0055cc
+    style writeback fill:#ffffcc,stroke:#aaaa00
+    style outputs fill:#f3fff3,stroke:#00aa00
 ```
 
 ---
@@ -342,7 +474,14 @@ flowchart LR
         V_IMPL["ModelScoringStep
         MultiplierBoostStep
         DiversityRerankStep
+        PositionBoostingStep
         FixedPinningStep"]
+        V_TYPES["Step Types:
+        MODEL_SCORING
+        MULTIPLIER_BOOST
+        DIVERSITY_RERANK
+        POSITION_BOOSTING
+        FIXED_PINNING"]
         V_ENG["FeedRowRanker
         (engine)"]
         V_ENTRY["Incision:
@@ -354,6 +493,7 @@ flowchart LR
         V_ENG --> V_STEP
         V_IF --- V_ADAPT
         V_STEP --- V_IMPL
+        V_IMPL --- V_TYPES
     end
 
     subgraph horizontal["Horizontal Ranking (follows vertical)"]
@@ -368,8 +508,15 @@ flowchart LR
         (interface)"]
         H_IMPL["ModelScoringStep
         ScoreModifierStep
+        CampaignSortStep
         BusinessRulesSortStep
         OrderHistoryRerankStep"]
+        H_TYPES["Step Types:
+        MODEL_SCORING
+        SCORE_MODIFIER
+        CAMPAIGN_SORT
+        BUSINESS_RULES_SORT
+        ORDER_HISTORY_RERANK"]
         H_ENG["RowItemRanker
         (engine)"]
         H_ENTRY["Incision:
@@ -381,6 +528,7 @@ flowchart LR
         H_ENG --> H_STEP
         H_IF --- H_ADAPT
         H_STEP --- H_IMPL
+        H_IMPL --- H_TYPES
     end
 
     vertical -.->|"Same architecture
