@@ -368,20 +368,24 @@ class FeedRowRanker(
 
 ### Both layers side by side
 
+<!-- Diagram: Both ranking layers side by side
+     Reason: Show that vertical and horizontal share the same architecture — only types differ
+     Aha: Once you understand vertical, horizontal is the same pattern with different step names -->
+
 ```mermaid
 flowchart LR
-    subgraph vertical["Vertical Ranking"]
+    subgraph vertical["  Vertical Ranking  "]
         direction TB
-        V_IF["FeedRow"]
-        V_STEP["FeedRowRankingStep"]
-        V_TYPES["MODEL_SCORING
+        V_IF("FeedRow"):::step
+        V_STEP("FeedRowRankingStep"):::step
+        V_TYPES("MODEL_SCORING
         MULTIPLIER_BOOST
         DIVERSITY_RERANK
         POSITION_BOOSTING
-        FIXED_PINNING"]
-        V_ENG["FeedRowRanker"]
-        V_INC["Incision: PostProcessor
-        .reOrderGlobalEntitiesV2()"]
+        FIXED_PINNING"):::domain
+        V_ENG("FeedRowRanker"):::step
+        V_INC("Incision: PostProcessor
+        .reOrderGlobalEntitiesV2()"):::domain
 
         V_INC --> V_ENG
         V_ENG --> V_IF
@@ -389,18 +393,18 @@ flowchart LR
         V_STEP --- V_TYPES
     end
 
-    subgraph horizontal["Horizontal Ranking"]
+    subgraph horizontal["  Horizontal Ranking  "]
         direction TB
-        H_IF["RowItem"]
-        H_STEP["RowItemRankingStep"]
-        H_TYPES["MODEL_SCORING
+        H_IF("RowItem"):::step
+        H_STEP("RowItemRankingStep"):::step
+        H_TYPES("MODEL_SCORING
         SCORE_MODIFIER
         CAMPAIGN_SORT
         BUSINESS_RULES_SORT
-        ORDER_HISTORY_RERANK"]
-        H_ENG["RowItemRanker"]
-        H_INC["Incision: StoreRanker
-        .modifyLiteStoreCollection()"]
+        ORDER_HISTORY_RERANK"):::domain
+        H_ENG("RowItemRanker"):::step
+        H_INC("Incision: StoreRanker
+        .modifyLiteStoreCollection()"):::domain
 
         H_INC --> H_ENG
         H_ENG --> H_IF
@@ -408,8 +412,12 @@ flowchart LR
         H_STEP --- H_TYPES
     end
 
-    style vertical fill:#e6f0ff,stroke:#0055cc
-    style horizontal fill:#f0e6ff,stroke:#7700cc
+    %% Blue = new interfaces/engines. Gray = existing code and step lists.
+    classDef domain fill:#EAEAED,stroke:#B8B8C2,color:#505058,stroke-width:1px
+    classDef step fill:#DCEEFB,stroke:#7BBCE0,color:#1A3A50,stroke-width:1px
+
+    style vertical fill:transparent,stroke:#A0CCE8,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
+    style horizontal fill:transparent,stroke:#A0CCE8,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
 ```
 
 ### Safe Delivery: Shadow → Rollout
@@ -420,37 +428,48 @@ We never put users at risk. The migration has two phases:
 
 **Rollout mode:** Once shadow proves zero divergence, a rollout DV gates the new path as primary. Ramped gradually: 1% → 5% → 25% → 50% → 100%. The old path is the `else` branch — compiles and runs identically.
 
+<!-- Diagram: Shadow → Rollout migration
+     Reason: Show the two-phase safety mechanism — shadow validates, rollout migrates
+     Aha: The old path is NEVER removed — it's always the else branch, always compiling -->
+
 ```mermaid
 flowchart TB
-    subgraph shadow["Phase 1: Shadow Mode"]
+    subgraph shadow["  Phase 1: Shadow Mode  "]
         direction TB
-        R1["Request"] --> PP1["PostProcessor"]
-        PP1 --> OLD1["Old Path"]
-        PP1 --> DV1{"ubpShadowEnabled?"}
-        DV1 -->|Yes| NEW1["UBP Engine
-        (parallel coroutine)"]
-        DV1 -->|No| SKIP1["Skip"]
-        OLD1 --> RESULT1["Result → User"]
-        NEW1 --> CMP["Compare sort orders
+        R1("Request"):::domain --> PP1("PostProcessor"):::domain
+        PP1 --> OLD1("Old Path"):::domain
+        PP1 --> DV1{"ubpShadowEnabled?"}:::domain
+        DV1 -->|Yes| NEW1("UBP Engine
+        parallel coroutine"):::step
+        DV1 -->|No| SKIP1("Skip"):::domain
+        OLD1 --> RESULT1("Result → User"):::domain
+        NEW1 --> CMP("Compare sort orders
         Log divergences
-        Discard shadow result"]
+        Discard shadow result"):::discard
     end
 
-    subgraph rollout["Phase 2: Rollout Mode"]
+    subgraph rollout["  Phase 2: Rollout Mode  "]
         direction TB
-        R2["Request"] --> PP2["PostProcessor"]
-        PP2 --> DV2{"ubpRolloutEnabled?"}
-        DV2 -->|Yes| NEW2["UBP Engine"]
-        DV2 -->|No| OLD2["Old Path (unchanged)"]
-        NEW2 --> RESULT2a["Result → User"]
-        OLD2 --> RESULT2b["Result → User"]
+        R2("Request"):::domain --> PP2("PostProcessor"):::domain
+        PP2 --> DV2{"ubpRolloutEnabled?"}:::domain
+        DV2 -->|Yes| NEW2("UBP Engine"):::hero
+        DV2 -->|No| OLD2("Old Path
+        unchanged"):::domain
+        NEW2 --> RESULT2a("Result → User"):::domain
+        OLD2 --> RESULT2b("Result → User"):::domain
     end
 
     shadow -.->|"divergence_count = 0
     sustained"| rollout
 
-    style shadow fill:#fff8e6,stroke:#cc8800
-    style rollout fill:#e6fff0,stroke:#00aa44
+    %% Gray = existing/context. Blue = new UBP path (shadow). Red = new UBP path (live). Red tint = discard.
+    classDef domain fill:#EAEAED,stroke:#B8B8C2,color:#505058,stroke-width:1px
+    classDef step fill:#DCEEFB,stroke:#7BBCE0,color:#1A3A50,stroke-width:1px
+    classDef hero fill:#FF3008,stroke:#D42807,color:#FFFFFF,stroke-width:1.5px
+    classDef discard fill:#FFF0EB,stroke:#FF3008,color:#FF3008,stroke-width:1px
+
+    style shadow fill:transparent,stroke:#A0CCE8,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
+    style rollout fill:transparent,stroke:#E0A090,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
 ```
 
 **Characterization tests with UBP flag OFF must remain green at every stage** — proving the old path is untouched.
