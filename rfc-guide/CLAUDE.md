@@ -58,31 +58,62 @@ Pick the right diagram type for the insight:
 - Diamonds `{text}` — decision points
 - Stadium `([text])` — external systems, third-party APIs
 
-#### Color Palette
-Use DoorDash Spark brand colors for consistency. Apply via `style` or `classDef`.
+#### Color Palette — DoorDash Spark Brand Colors
+Source: [Spark Learning Experience Design Guide](https://coda.io/d/Spark-Learning-Experience-Design-Guide_dSexISkBOCq/Color-Brand_su6akA4x#_luEgXFbT) and `rfc-guide/dd-brand-guidelines.pdf`.
+
+**Brand palette reference:**
+
+| Name | Hex | RGB | Role in brand |
+|---|---|---|---|
+| Delivery Red (Hero Red) | `#FF3008` | 255, 048, 008 | Primary brand color. Must appear in every DoorDash visual. |
+| Detergent | `#80D8FF` | 128, 216, 255 | Light pairing — cool, calming complement to Hero Red |
+| Bouquet | `#FFC4FC` | 255, 196, 252 | Light pairing — warm, soft complement to Hero Red |
+| Yolk | `#F2D531` | 242, 213, 049 | Light pairing — energetic, attention-grabbing |
+| Motor Oil | `#681109` | 104, 017, 009 | Dark pairing — grounding, contrast provider |
+| Pinot Noir | `#4C0C3A` | 076, 012, 058 | Dark pairing — grounding, contrast provider |
+
+**Brand rules (from guide):**
+- Hero Red is the primary brand differentiator. It MUST appear in every diagram.
+- Supporting colors pair WITH Hero Red, never with each other alone.
+- Yolk, Bouquet, and Detergent are lighter pairings to Hero Red.
+- Pinot Noir and Motor Oil are darker pairings for contrast.
+- Use lighter tints (from the Color Spectrum in the guide) for subgraph backgrounds where full saturation is too heavy.
+
+**Mermaid classDef definitions — copy-paste into diagrams:**
 
 ```
-%% DoorDash Spark Colors — PLACEHOLDER
-%% Replace with actual hex codes from Spark Design Guide once provided.
-%% Assign semantic meaning to each color:
+%% DoorDash Spark Colors — Semantic mapping for RFC diagrams
+%% Source: dd-brand-guidelines.pdf
 
-classDef primary fill:#FF3008,stroke:#CC2606,color:#FFFFFF
-classDef secondary fill:#191919,stroke:#000000,color:#FFFFFF
-classDef accent fill:#0057FF,stroke:#0044CC,color:#FFFFFF
-classDef success fill:#00A651,stroke:#008541,color:#FFFFFF
-classDef warning fill:#FFB800,stroke:#CC9300,color:#000000
-classDef neutral fill:#F5F5F5,stroke:#E0E0E0,color:#191919
-classDef highlight fill:#FFF0EB,stroke:#FF3008,color:#191919
+classDef hero fill:#FF3008,stroke:#CC2606,color:#FFFFFF
+classDef existing fill:#681109,stroke:#4A0C06,color:#FFFFFF
+classDef proposed fill:#80D8FF,stroke:#5AB8E0,color:#191919
+classDef happy fill:#F2D531,stroke:#C9B028,color:#191919
+classDef degraded fill:#FFC4FC,stroke:#E0A8DC,color:#191919
+classDef external fill:#4C0C3A,stroke:#36082A,color:#FFFFFF
+classDef aha fill:#FFF0EB,stroke:#FF3008,color:#FF3008,stroke-width:3px
 ```
 
-**Color usage rules:**
-- `primary` — The main service or component being proposed in this RFC
-- `secondary` — Existing infrastructure that is not changing
-- `accent` — New components or services being introduced
-- `success` — Happy path / desired outcome
-- `warning` — Degraded path / fallback behavior
-- `neutral` — Context / background systems
-- `highlight` — The "aha" element — the node or edge that IS the insight
+**Semantic color mapping:**
+
+| classDef | Spark Color | Use for |
+|---|---|---|
+| `hero` | Delivery Red | The main service/component this RFC proposes. Always present. |
+| `existing` | Motor Oil | Existing infrastructure that is NOT changing |
+| `proposed` | Detergent | New components or services being introduced |
+| `happy` | Yolk | Happy path, desired outcome, success states |
+| `degraded` | Bouquet | Degraded path, fallback behavior, warnings |
+| `external` | Pinot Noir | External systems, third-party APIs, out-of-scope services |
+| `aha` | Red-tinted highlight | The "aha" element — the node or edge that IS the insight. Uses a light red fill with a thick red border to draw the eye. |
+
+**Why this mapping:**
+- **Delivery Red = hero**: The RFC exists because of this component. It's the protagonist.
+- **Motor Oil = existing**: Dark, stable, already in the ground. Not the focus.
+- **Detergent = proposed**: Light blue stands out against the warm palette — it's new and fresh.
+- **Yolk = happy path**: Yellow = go, sunshine, success. Naturally reads as positive.
+- **Bouquet = degraded**: Soft pink = caution without alarm. Not an error, just not ideal.
+- **Pinot Noir = external**: Dark purple = outside our domain. Distant, separate.
+- **aha = highlighted red border**: Thin red-tinted node with thick red stroke. This is the node the reader's eye should land on.
 
 #### Edge Labels
 - Always label edges that aren't self-explanatory.
@@ -103,18 +134,21 @@ classDef highlight fill:#FFF0EB,stroke:#FF3008,color:#191919
 
 ```mermaid
 flowchart LR
-    A[Matrix API] -->|decompose OD pairs| B[Cache Provider]
-    B -->|lookup| C[(Redis Geo-Cache)]
-    C -->|hit| D[Return Result]:::success
-    C -->|miss| E{Distance Check}:::warning
-    E -->|extreme| F[Return Error]:::warning
-    E -->|reasonable| G[Compute On-The-Fly]:::accent
-    G -->|async update| C
+    A[Matrix API]:::hero -->|decompose OD pairs| B[Cache Provider]:::proposed
+    B -->|lookup| C[(Redis Geo-Cache)]:::existing
+    C -->|hit < 5ms| D[Return Result]:::happy
+    C -->|miss| E{Distance Check}:::degraded
+    E -->|extreme| F[Return Error]:::degraded
+    E -->|reasonable| G[Compute On-The-Fly]:::aha
+    G -->|async update ~30ms| C
     G -->|return| D
 
-    classDef success fill:#00A651,stroke:#008541,color:#FFFFFF
-    classDef warning fill:#FFB800,stroke:#CC9300,color:#000000
-    classDef accent fill:#0057FF,stroke:#0044CC,color:#FFFFFF
+    classDef hero fill:#FF3008,stroke:#CC2606,color:#FFFFFF
+    classDef existing fill:#681109,stroke:#4A0C06,color:#FFFFFF
+    classDef proposed fill:#80D8FF,stroke:#5AB8E0,color:#191919
+    classDef happy fill:#F2D531,stroke:#C9B028,color:#191919
+    classDef degraded fill:#FFC4FC,stroke:#E0A8DC,color:#191919
+    classDef aha fill:#FFF0EB,stroke:#FF3008,color:#FF3008,stroke-width:3px
 ```
 
 ### Anti-Patterns
@@ -123,8 +157,3 @@ flowchart LR
 - **The label-less graph**: Edges without labels force the reader to guess what flows between components.
 - **The decorative diagram**: A diagram that restates what the previous paragraph already said clearly. Delete it.
 - **Rainbow styling**: Using colors arbitrarily. Every color must have semantic meaning per the palette above.
-
-## TODO: DoorDash Spark Color Palette
-> **ACTION REQUIRED**: Replace placeholder hex codes above with actual values from the
-> [Spark Learning Experience Design Guide](https://coda.io/d/Spark-Learning-Experience-Design-Guide_dSexISkBOCq/Color-Brand_su6akA4x#_luEgXFbT).
-> The user needs to provide these values (Coda is behind auth).
