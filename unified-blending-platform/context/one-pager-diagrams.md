@@ -182,71 +182,7 @@ classDiagram
 
 ---
 
-## 2. Sequence Diagram: Engine Dispatch Flow
-
-Shows the full lifecycle of a ranking request through the UBP engine: adapt → score → boost →
-diversify → pin → apply back. Params are injected at each step from config — steps never read
-DVs internally.
-
-```mermaid
-sequenceDiagram
-    participant PP as PostProcessor
-    participant Adapter as FeedRow Adapters
-    participant Engine as FeedRowRanker
-    participant Registry as StepRegistry
-    participant Score as MODEL_SCORING
-    participant Boost as MULTIPLIER_BOOST
-    participant Diversity as DIVERSITY_RERANK
-    participant PosBoost as POSITION_BOOSTING
-    participant Pin as FIXED_PINNING
-    participant Trace as TraceEmitter
-
-    PP->>Adapter: toFeedRow() for each carousel
-    Note over Adapter: 9 types → uniform FeedRow list
-
-    PP->>Engine: rank(rows, pipeline, context)
-
-    loop For each step in pipeline config
-        Engine->>Registry: lookup(stepConfig.type)
-        Registry-->>Engine: step instance
-        Engine->>Engine: deserialize params → StepParams
-
-        alt type = "MODEL_SCORING"
-            Engine->>Score: process(rows, ctx, ModelScoringParams)
-            Score->>Score: entityScorer.score() → Sibyl gRPC
-            Score-->>Engine: rows with scores set
-        else type = "MULTIPLIER_BOOST"
-            Engine->>Boost: process(rows, ctx, MultiplierBoostParams)
-            Boost->>Boost: BlendingUtil.blendBundle()
-            Boost-->>Engine: rows with boosted scores
-        else type = "DIVERSITY_RERANK"
-            Engine->>Diversity: process(rows, ctx, DiversityRerankParams)
-            Diversity->>Diversity: BlendingUtil.rerankEntitiesWithDiversity()
-            Diversity-->>Engine: rows reranked
-        else type = "POSITION_BOOSTING"
-            Engine->>PosBoost: process(rows, ctx, PositionBoostingParams)
-            PosBoost->>PosBoost: apply position boosts + deal multiplier
-            PosBoost-->>Engine: rows with position boosts
-        else type = "FIXED_PINNING"
-            Engine->>Pin: process(rows, ctx, FixedPinningParams)
-            Pin->>Pin: apply PinRule list → fix positions
-            Pin-->>Engine: rows with pins applied
-        end
-
-        opt emit_trace = true
-            Engine->>Trace: recordStep(row_id, step_id, score_before, score_after)
-        end
-    end
-
-    Engine-->>PP: rows sorted by final score
-
-    PP->>Adapter: applyBackTo() for each FeedRow
-    Note over Adapter: Writes scores back to original domain objects
-```
-
----
-
-## 3A. Before vs After: Type-Check Branching at Every Stage
+## 2A. Before vs After: Type-Check Branching at Every Stage
 
 Side-by-side contrast. Left: the current code branches on carousel type at every ranking stage —
 9 types x 4 stages = type-checks everywhere. Right: adapt once, rank uniformly.
@@ -309,7 +245,7 @@ flowchart TB
 
 ---
 
-## 3B. The Funnel: Adapt Once, Rank Uniformly, Apply Back
+## 2B. The Funnel: Adapt Once, Rank Uniformly, Apply Back
 
 The "aha" visual. 9 diverse carousel types fan in through adapters → converge to a uniform
 FeedRow list → pass through the sequential step pipeline → fan out via applyBackTo() back to
@@ -403,7 +339,7 @@ flowchart LR
 
 ---
 
-## 4. Strangler Fig: Shadow → Rollout Migration
+## 3. Strangler Fig: Shadow → Rollout Migration
 
 Two phases of wiring. Shadow runs both paths in parallel (new path's result is discarded).
 Rollout switches the primary path via DV.
@@ -454,7 +390,7 @@ flowchart TB
 
 ---
 
-## 5. Horizontal Mirroring: Same Architecture, Different Types
+## 4A. Horizontal Mirroring: Same Architecture, Different Types
 
 Horizontal ranking follows the identical pattern. `RowItem` mirrors `FeedRow`; `RowItemRankingStep`
 mirrors `FeedRowRankingStep`. The engine shape is the same — only the abstraction type changes.
@@ -540,7 +476,94 @@ flowchart LR
 
 ---
 
-## 6. Carousel Onboarding: Before vs After
+## 4B. The Horizontal Funnel: Adapt Once, Rank Stores Uniformly
+
+Same "aha" as 2B but for within-carousel ranking. Today, each RankingType (30+) has its own
+bespoke sort logic scattered across StoreRanker, CampaignRanker, and StoreCarouselService.
+With UBP: adapt each store to RowItem once → uniform pipeline → applyBackTo().
+
+```mermaid
+flowchart LR
+    subgraph sources["Store Sources (by RankingType)"]
+        direction TB
+        T1["StoreEntity
+        (standard carousel)"]
+        T2["StoreEntity
+        (collection)"]
+        T3["DealStore
+        (campaign/deals)"]
+        T4["ItemStoreEntity
+        (item carousel)"]
+        T5["StoreEntity
+        (save list)"]
+        T6["StoreEntity
+        (search results)"]
+    end
+
+    subgraph adapt["Adapt"]
+        direction TB
+        A["toRowItem()
+        1 adapter per source"]
+    end
+
+    T1 --> A
+    T2 --> A
+    T3 --> A
+    T4 --> A
+    T5 --> A
+    T6 --> A
+
+    subgraph pipeline["Uniform RowItem Pipeline"]
+        direction TB
+        STEP1["MODEL_SCORING
+        ScoreModifierParams"]
+        STEP2["SCORE_MODIFIER
+        ScoreModifierParams"]
+        STEP3["CAMPAIGN_SORT
+        CampaignSortParams"]
+        STEP4["BUSINESS_RULES_SORT
+        BusinessRulesSortParams"]
+        STEP5["ORDER_HISTORY_RERANK"]
+        STEP1 --> STEP2 --> STEP3 --> STEP4 --> STEP5
+    end
+
+    A --> STEP1
+
+    subgraph writeback["Apply Back"]
+        direction TB
+        WB["applyBackTo()
+        Scores → original store objects"]
+    end
+
+    STEP5 --> WB
+
+    subgraph outputs["Original Store Objects"]
+        direction TB
+        O1["StoreEntity"]
+        O2["StoreEntity"]
+        O3["DealStore"]
+        O4["ItemStoreEntity"]
+        O5["StoreEntity"]
+        O6["StoreEntity"]
+    end
+
+    WB --> O1
+    WB --> O2
+    WB --> O3
+    WB --> O4
+    WB --> O5
+    WB --> O6
+
+    style sources fill:#fff3f3,stroke:#cc0000
+    style adapt fill:#ffffcc,stroke:#aaaa00
+    style pipeline fill:#f0e6ff,stroke:#7700cc
+    style writeback fill:#ffffcc,stroke:#aaaa00
+    style outputs fill:#f3fff3,stroke:#00aa00
+```
+
+---
+
+## 5. Carousel Onboarding: Before vs After
 
 The "aha" for product teams: adding a new carousel type goes from touching 10+ files to writing
 1 adapter class.
