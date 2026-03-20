@@ -245,7 +245,11 @@ class UbpConfig {
 
 // ═══════════════════════════════════════════════════════════════
 // 7. THE PIPELINE CONFIG
-//    Today: hardcoded. Tomorrow: JSON from experiment config.
+//    Hardcoded here for illustration. In production, this comes
+//    from upstream: hash-based traffic bucketing resolves which
+//    experiment config (if any) applies to this request, then
+//    config resolution produces the step sequence + params.
+//    See: experiment-traffic-industry-research.md, experiment-config-contract.md
 // ═══════════════════════════════════════════════════════════════
 
 val verticalPipeline = listOf(
