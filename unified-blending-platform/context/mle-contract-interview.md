@@ -53,7 +53,7 @@
 ## Contract Reference Examples
 
 All examples use the canonical `UnifiedExperimentConfig` schema.
-Engine step order is **always hardcoded**: `MODEL_SCORING → MULTIPLIER_BOOST → DIVERSITY_RERANK → FIXED_PINNING`.
+Engine step order is **always hardcoded**: `MODEL_SCORING → BOOST_AND_RANK`.
 
 ---
 
@@ -69,17 +69,10 @@ UnifiedExperimentConfig
 │   ├── gov                        Gross Order Value weight
 │   ├── fiv                        First Impression Value weight (NV lifestage)
 │   └── strategic                  Strategic business priority weight
-├── boost_weights                  Per-vertical score multipliers (MULTIPLIER_BOOST step)
-│   ├── nv                         New Vertical carousel boost
-│   ├── rx                         Grocery/pharmacy carousel boost
-│   └── <vertical_id>              Per-carousel-id override (highest priority)
-├── diversity                      DIVERSITY_RERANK step params
-│   ├── enabled                    Whether diversity reranking runs
-│   └── weight                     Penalty weight for non-Rx density (0.0–1.0)
-├── pins[]                         FIXED_PINNING step — replaces post-ranking fixups
-│   ├── carousel_id                Carousel to pin
-│   ├── position                   0-indexed target position
-│   └── condition                  Optional: "post_checkout", "dashpass_active", etc.
+├── boost_and_rank                 BOOST_AND_RANK step params
+│   ├── boost_by_position_enabled  Whether position boosting is active
+│   ├── deal_carousel_score_multiplier  Multiplier for deal carousels
+│   └── boost_by_position_allow_list   Carousel IDs eligible for position boost
 └── extends                        Inherit from named config, merge overrides on top
 ```
 
@@ -88,9 +81,7 @@ UnifiedExperimentConfig
 |---|---|---|
 | `p_act.predictor` + `p_act.model` | pAct | MLE |
 | `v_act.*` | vAct | MLE (or business policy) |
-| `boost_weights.*` | vAct post-processing | MLE |
-| `diversity.*` | pipeline param | MLE |
-| `pins.*` | FIXED_PINNING | MLE declares, BE enforces |
+| `boost_and_rank.*` | BOOST_AND_RANK params | MLE |
 | `pImp` (position decay rate) | pImp | BE only — not in contract |
 | Sibyl RPC, retries, timeouts | — | BE only |
 | Trace schema | — | BE only, auto-emitted |
@@ -115,15 +106,11 @@ It is the inheritance base for all experiments.
       "fiv": 0.0,
       "strategic": 0.0
     },
-    "boost_weights": {
-      "nv": 1.0,
-      "rx": 1.0
-    },
-    "diversity": {
-      "enabled": false,
-      "weight": 0.0
-    },
-    "pins": []
+    "boost_and_rank": {
+      "boost_by_position_enabled": false,
+      "deal_carousel_score_multiplier": 1.0,
+      "boost_by_position_allow_list": []
+    }
   }
 }
 ```
@@ -181,16 +168,17 @@ Rebalance GOV vs strategic value while boosting NV carousel visibility.
       "fiv": 0.1,
       "strategic": 0.1
     },
-    "boost_weights": {
-      "nv": 2.5,
-      "rx": 1.0
+    "boost_and_rank": {
+      "boost_by_position_enabled": true,
+      "deal_carousel_score_multiplier": 2.5,
+      "boost_by_position_allow_list": ["nv_carousel"]
     }
   }
 }
 ```
 
-**What changes:** value function rebalanced toward NV/strategic; NV carousels get 2.5× score multiplier.
-**What's inherited:** model, features, diversity, pins.
+**What changes:** value function rebalanced toward NV/strategic; boost-and-rank params enable position boosting.
+**What's inherited:** model, features.
 
 **Key insight from audit trail:** boost_weights lookup priority is `carousel_id` > `business_vertical_id` > `vertical_id` > default.
 A carousel with `vertical_id=100322` (NV) but `business_vertical_id=169` (matched a different rule) will get the wrong multiplier.
@@ -222,45 +210,39 @@ New model that emphasizes vertical intent, plus diversity reranking to prevent N
       "fiv": 0.2,
       "strategic": 0.1
     },
-    "diversity": {
-      "enabled": true,
-      "weight": 0.35
+    "boost_and_rank": {
+      "boost_by_position_enabled": false,
+      "deal_carousel_score_multiplier": 1.0,
+      "boost_by_position_allow_list": []
     }
   }
 }
 ```
 
-**What changes:** model, features, value weights, diversity on with moderate penalty weight.
-**What's inherited:** boost_weights (all 1.0), pins.
+**What changes:** model, features, value weights.
+**What's inherited:** boost_and_rank defaults.
 
 ---
 
-### Example 5 — Fixed pins declared in config (replacing post-ranking code fixups)
+### Example 5 — Boost-and-rank with position boosting enabled
 
-Today, NV post-checkout pinning and PAD position=3 are silent post-pipeline fixups in Kotlin code.
-Under UBP, they are declared pins in the config — observable, traceable, testable.
+Position boosting and pinning are now part of the `BOOST_AND_RANK` step.
 
 ```json
 {
-  "control_with_pins": {
+  "treatment_boost_enabled": {
     "extends": "control",
-    "pins": [
-      {
-        "carousel_id": "PAD_CAROUSEL_SPOTLIGHT_V2",
-        "position": 3,
-        "condition": "dashpass_active"
-      },
-      {
-        "carousel_id": "NV_POST_CHECKOUT_CAROUSEL",
-        "position": 0,
-        "condition": "post_checkout"
-      }
-    ]
+    "boost_and_rank": {
+      "boost_by_position_enabled": true,
+      "deal_carousel_score_multiplier": 1.5,
+      "boost_by_position_allow_list": ["dt:some_carousel", "nv_carousel"]
+    }
   }
 }
 ```
 
-**Why this matters:** current code runs fixups silently after the pipeline. Logged sort orders ≠ actual user-visible positions. With declared pins, every position change is traced in the standard schema.
+**Note:** Business fixups (NV post-checkout pinning, PAD position=3) remain outside the pipeline
+in `NonRankableHomepageOrderingUtil`. Only MLE-configurable boost params are inside `BOOST_AND_RANK`.
 
 ---
 

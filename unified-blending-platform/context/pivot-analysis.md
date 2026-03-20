@@ -52,7 +52,7 @@
 - FeedRow / RowItem interfaces + adapters
 - FeedRowRankingStep / RowItemRankingStep interfaces
 - FeedRowRanker / RowItemRanker engines + step registry
-- Step implementations (MODEL_SCORING, MULTIPLIER_BOOST, etc.)
+- Step implementations (MODEL_SCORING, BOOST_AND_RANK for vertical; MODEL_SCORING, RANKING_SORT for horizontal)
 - Auto-trace infrastructure
 - control.json as internal production behavior definition
 

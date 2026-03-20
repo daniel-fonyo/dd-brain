@@ -142,7 +142,7 @@ From `rfc.md` Contract 5:
 
 - Stage-wise score snapshots: grep/query `score_before` / `score_after` per step in log tooling
 - Counterfactuals: "what would rank #1 if boost weight were 1.0?"
-- Opportunity cost of pinning: `score_before` on a `FIXED_PINNING` step = organic score displaced
+- Opportunity cost of pinning: `score_before` on a `BOOST_AND_RANK` step = organic score displaced
 - Validate model changes: confirm Sibyl score change actually changed `MODEL_SCORING` output
 - Retire heuristics: measure their impact before removing
 

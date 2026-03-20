@@ -53,14 +53,10 @@ typealias StepRegistry = Map<String, FeedRowRankingStep>
 
 fun buildStepRegistry(
     modelScoringStep: ModelScoringStep,
-    multiplierBoostStep: MultiplierBoostStep,
-    diversityRerankStep: DiversityRerankStep,
-    fixedPinningStep: FixedPinningStep,
+    boostAndRankStep: BoostAndRankStep,
 ): StepRegistry = mapOf(
-    modelScoringStep.stepType    to modelScoringStep,
-    multiplierBoostStep.stepType to multiplierBoostStep,
-    diversityRerankStep.stepType to diversityRerankStep,
-    fixedPinningStep.stepType    to fixedPinningStep,
+    modelScoringStep.stepType to modelScoringStep,
+    boostAndRankStep.stepType to boostAndRankStep,
 )
 ```
 
@@ -248,12 +244,12 @@ fun `FeedRowRanker resolves predictor_ref into predictor_config`() {
 ## Prerequisites
 
 - Part 2: `FeedRow`, `RowType`
-- Part 3: `FeedRowRankingStep` interface + all 4 step implementations
+- Part 3: `FeedRowRankingStep` interface + both step implementations (`ModelScoringStep`, `BoostAndRankStep`)
 - Part 5: `UbpRuntimeUtil`, `ResolvedPipeline`, `StepConfig` (stub sufficient for compilation)
 
 ## Done When
 
 - `FeedRowRanker` compiles with a stub `UbpRuntimeUtil`
 - Four unit tests pass: order, skip unknown, sort by score, predictor-ref resolution
-- `buildStepRegistry()` wires all 4 steps
+- `buildStepRegistry()` wires both steps (`ModelScoringStep`, `BoostAndRankStep`)
 - `resolveParams()` substitutes `predictor_ref` → `predictor_config` before deserialization

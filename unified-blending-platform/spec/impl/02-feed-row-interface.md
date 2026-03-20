@@ -66,7 +66,7 @@ interface FeedRow {
 ```
 
 `metadata` is intentionally untyped. Steps that need to pass information to later steps
-(e.g., the calibration multiplier used by MODEL_SCORING, for DIVERSITY_RERANK to reference)
+(e.g., intermediate scoring data from MODEL_SCORING, for BOOST_AND_RANK to reference)
 write to `metadata`. This avoids coupling steps to each other's types.
 
 ## RowType Enum
@@ -86,7 +86,7 @@ enum class RowType {
 }
 ```
 
-`FIXED_PINNING` and `DIVERSITY_RERANK` steps use `RowType` to apply type-specific logic
+`BOOST_AND_RANK` step uses `RowType` to apply type-specific logic
 without casting the `FeedRow` itself.
 
 **Scope notes:**

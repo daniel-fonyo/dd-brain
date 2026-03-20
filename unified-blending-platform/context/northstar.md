@@ -161,9 +161,9 @@ INPUT: list of Components (carousels OR stores, depending on layer)
 OUTPUT: same Components, reordered by final score
 ```
 
-**Vertical engine** (Layer 4): components are carousels. Steps include: MODEL_SCORING, MULTIPLIER_BOOST, DIVERSITY_RERANK, FIXED_PINNING.
+**Vertical engine** (Layer 4): components are carousels. Steps: MODEL_SCORING, BOOST_AND_RANK.
 
-**Horizontal engine** (Layer 3): components are stores/items. Steps include: MODEL_SCORING, MULTIPLIER_BOOST, BUSINESS_RULES_SORT, ORDER_HISTORY_RERANK, ADS_BLEND.
+**Horizontal engine** (Layer 3): components are stores/items. Steps: MODEL_SCORING, RANKING_SORT.
 
 ---
 
@@ -189,7 +189,7 @@ Today there are 9+ separate typed carousel classes with no shared interface. UBP
 
 ```kotlin
 interface VerticalProcessor {
-    val type: String                 // "MODEL_SCORING", "MULTIPLIER_BOOST", etc.
+    val type: String                 // "MODEL_SCORING", "BOOST_AND_RANK", etc.
 
     suspend fun process(
         components: MutableList<VerticalComponent>,
@@ -255,20 +255,16 @@ One JSON file per experiment. One DV controls which variant runs. No code change
   "control": {
     "vertical_pipeline": {
       "steps": [
-        { "id": "score",     "type": "MODEL_SCORING",    "params": { "model": "store_ranking_v1_1" } },
-        { "id": "blend",     "type": "MULTIPLIER_BOOST", "params": { ... } },
-        { "id": "diversity", "type": "DIVERSITY_RERANK", "params": { "enabled": false } },
-        { "id": "pin",       "type": "FIXED_PINNING",    "params": { ... } }
+        { "id": "score",          "type": "MODEL_SCORING",  "params": { "predictor_ref": "p_act" } },
+        { "id": "boost_and_rank", "type": "BOOST_AND_RANK", "params": { ... } }
       ]
     }
   },
   "treatment_intent_v3": {
     "vertical_pipeline": {
       "steps": [
-        { "id": "score",     "type": "MODEL_SCORING",    "params": { "model": "vertical_intent_v3" } },
-        { "id": "blend",     "type": "MULTIPLIER_BOOST", "params": { ... } },
-        { "id": "diversity", "type": "DIVERSITY_RERANK", "params": { "enabled": true, "weight": 0.4 } },
-        { "id": "pin",       "type": "FIXED_PINNING",    "params": { ... } }
+        { "id": "score",          "type": "MODEL_SCORING",  "params": { "model_name": "vertical_intent_v3" } },
+        { "id": "boost_and_rank", "type": "BOOST_AND_RANK", "params": { ... } }
       ]
     }
   }
@@ -305,7 +301,7 @@ These are the root causes that UBP addresses:
 | Each carousel type owns its own ranking logic | FavoritesCarousel, DVCarousel, TasteCarousel each do ranking differently, no shared interface | `Component` interface collapses all types; `Processor` registry handles step logic |
 | Step params live in 10+ scattered places | Changing one experiment touches 5 DVs + 3 JSON files + hardcoded constants | Single experiment JSON per treatment; params injected at call time |
 | No config seam for step sequence | Adding/removing a step requires code change | Steps declared in config; engine composes from registry at request time |
-| Post-ranking fixups are outside the pipeline | `updateSortOrderOfNVCarousel()` runs after the DAG with no traceability | All fixups become declared `FIXED_PINNING` steps in the config |
+| Post-ranking fixups are outside the pipeline | `updateSortOrderOfNVCarousel()` runs after the DAG with no traceability | Business fixups stay outside pipeline; MLE-configurable pins are part of `BOOST_AND_RANK` |
 | Manual per-step Iguazu instrumentation | Each processor manually calls IguazuEventUtil — inconsistent, often missing | Engine auto-calls `recordTrace()` after every step; standard schema |
 | Organic/ads/NV scores are incomparable | Ads inserted AFTER organic ranking — highest-value ads may not be at the top | All content declares `pAct` + `vAct`; calibration service normalizes scores |
 

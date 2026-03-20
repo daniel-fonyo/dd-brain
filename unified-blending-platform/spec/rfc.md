@@ -80,7 +80,7 @@ Together: traffic allocation is declarative, the engine is generic, and MLEs sel
 | Ads blending (ad candidates competing with organic stores) | Post-POC — requires shared scoring scale and unified value function |
 | Multi-vertical cross-scoring (Rx vs NV in one score space) | Requires isotonic calibration + shared value function — post-POC |
 | Explicit `pImp` position decay | Steps are position-unaware during scoring |
-| Explicit `vAct` weights (`gov_w`, `fiv_w`, `strategic_w`) | `MULTIPLIER_BOOST` approximates vAct in POC; explicit config is post-POC |
+| Explicit `vAct` weights (`gov_w`, `fiv_w`, `strategic_w`) | `MODEL_SCORING` approximates vAct in POC via blending; explicit config is post-POC |
 | Partner-owned custom steps | Engine must prove stable first |
 | Post-ranking business rule fixups (NV post-checkout pin, PAD=3, member pricing) | Business constraints, not MLE experiments — stay in `NonRankableHomepageOrderingUtil` |
 | Color bleed reordering, immersive content spacing | Presentation constraints, not ranking |
@@ -253,23 +253,22 @@ Config hot-reloaded via `DeserializedRuntimeCache` (5-min TTL). No pod restart.
 
 ### Vertical step types (Phase 1)
 
-| Type | What it does | Replaces today |
+Two coarse steps. We are NOT boiling the ocean — finer decomposition is a future iteration
+once interfaces are proven.
+
+| Type | What it wraps | Replaces today |
 |---|---|---|
-| `MODEL_SCORING` | Sibyl scoring — assigns `pAct` to each FeedRow | `EntityRankerConfiguration.getScoreBundleWithWorkflowHelper()` |
-| `MULTIPLIER_BOOST` | Calibration × intent × vertical boost weights (`≈ vAct`) | `BlendingUtil.blendBundle()` |
-| `DIVERSITY_RERANK` | Greedy rerank penalizing non-Rx density | `BlendingUtil.rerankEntitiesWithDiversity()` |
-| `POSITION_BOOSTING` | Deal carousel multiplier + boost-by-position enforcement + NV unpinning | `Boosting.kt` logic after blending |
-| `FIXED_PINNING` | MLE-configured position pins (not the hardcoded business fixups) | `BoostingBundle.boosted()` |
+| `MODEL_SCORING` | `getScoreBundle()` — Sibyl gRPC + `BlendingUtil.blendBundle()` including diversity rerank (all one atomic call) | `EntityRankerConfiguration.getScoreBundleWithWorkflowHelper()` + `BlendingUtil` |
+| `BOOST_AND_RANK` | `getBoostBundle()` + `getRankingBundle()` + `getRankableContent()` — score assignment to domain objects, position boosting, deal multiplier, pin vs flow sort order, reassembly (all one atomic flow) | `Boosting.kt` + `BoostingBundle.boosted()` + `RankingBundle.ranked()` |
 
 ### Horizontal step types (Phase 1.5)
 
-| Type | What it does | Replaces today |
+Two coarse steps, mirroring the vertical decomposition.
+
+| Type | What it wraps | Replaces today |
 |---|---|---|
-| `MODEL_SCORING` | Score organic + ad stores together via Sibyl | `StoreCollectionScorer.regressionContext()` |
-| `SCORE_MODIFIER` | Per-business/store score multipliers from runtime JSON | `getScoreModifierMap()` in `StoreCollectionScorer.kt` |
-| `CAMPAIGN_SORT` | Campaign-positioned stores + business sort order overrides | `StoreCarouselService.sortStoreEntitiesForCarousels()` |
-| `BUSINESS_RULES_SORT` | Open/closed sort + AlwaysOpen type + priority business/vertical IDs | `StoreCarouselService` comparator chain + `StoreStatusComparator` |
-| `ORDER_HISTORY_RERANK` | S1/S2/S3 reranking by order history | `WholeOrderReorderFilterUtil.getGoToOrders()` |
+| `MODEL_SCORING` | `scoredCollections()` — Sibyl + score modifiers (atomic) | `StoreCollectionScorer` |
+| `RANKING_SORT` | `modifyLiteStoreCollection()` `when(rankingType)` dispatch | `DefaultHomePageStoreRanker.modifyLiteStoreCollection()` when-chain |
 
 ---
 
@@ -343,14 +342,15 @@ EV(c, k) = pImp(k) × pAct(c) × vAct(c)
 **POC approximation:**
 
 ```
-score = MODEL_SCORING  ×  MULTIPLIER_BOOST
+score = MODEL_SCORING  →  BOOST_AND_RANK
       ≈    pAct(c)     ×      vAct(c)
 
 pImp = 1.0 (not yet — steps are position-unaware during scoring)
 ```
 
-Step order is load-bearing: `MODEL_SCORING` sets the base score; `MULTIPLIER_BOOST` multiplies
-into it. Calibration types available per experiment: `NONE` (within-type ranking), `PIECEWISE`
+Step order is load-bearing: `MODEL_SCORING` sets the base score (Sibyl + blending + diversity);
+`BOOST_AND_RANK` handles score assignment, position boosting, deal multiplier, pin vs flow sort.
+Calibration types available per experiment: `NONE` (within-type ranking), `PIECEWISE`
 (score-range multipliers), `ISOTONIC` (regression table — post-POC for cross-type scoring).
 
 ---
@@ -413,12 +413,12 @@ message UbpFeedRowRankingTrace {
 }
 ```
 
-One event per (FeedRow, step) pair. 20 rows × 3 steps = 60 events per request. Enable in
+One event per (FeedRow, step) pair. 20 rows × 2 steps = 40 events per request. Enable in
 treatment arms only; leave off in control to manage volume.
 
 **What this enables:**
 - Stage-wise score snapshots queryable in Snowflake without code changes
-- Opportunity cost of pinning: `score_before` at `FIXED_PINNING` = organic value displaced
+- Opportunity cost of pinning: `score_before` at `BOOST_AND_RANK` = organic value displaced
 - Validate model changes actually move scores (not silently swallowed by calibration)
 - Measurement-gated heuristic removal: measure impact, then remove
 
@@ -508,26 +508,13 @@ both ranking layers are config-driven, and MLEs self-serve experiments.
           "params": { "predictor_ref": "p_act" }
         },
         {
-          "id": "blend",
-          "type": "MULTIPLIER_BOOST",
+          "id": "boost_and_rank",
+          "type": "BOOST_AND_RANK",
           "params": {
-            "calibration_config":     { "calibration_entries": [], "default_multiplier": 1.0 },
-            "intent_scoring_config":  { "feature_configs": [], "score_lookup_entries": [], "default_score": 1.0 },
-            "vertical_boost_weights": {
-              "boosting_multipliers": [], "default_multiplier": 1.0,
-              "item_carousel_boosting_multipliers": [], "item_carousel_default_multiplier": 1.0
-            }
+            "boost_by_position_enabled": false,
+            "deal_carousel_score_multiplier": 1.0,
+            "boost_by_position_allow_list": []
           }
-        },
-        {
-          "id": "diversity",
-          "type": "DIVERSITY_RERANK",
-          "params": { "enabled": false, "diversity_scoring_params": { "weight": 0.0 } }
-        },
-        {
-          "id": "pin",
-          "type": "FIXED_PINNING",
-          "params": { "rules": [] }
         }
       ]
     },
@@ -557,16 +544,14 @@ both ranking layers are config-driven, and MLEs self-serve experiments.
     },
     "horizontal_pipeline": {
       "steps": [
-        { "id": "score",        "type": "MODEL_SCORING",        "params": { "predictor_ref": "p_act" } },
-        { "id": "boost",        "type": "MULTIPLIER_BOOST",     "params": { "vertical_boost_weights": { "boosting_multipliers": [], "default_multiplier": 1.0 } } },
-        { "id": "rules",        "type": "BUSINESS_RULES_SORT",  "params": { "apply_open_closed": true } },
-        { "id": "order_rerank", "type": "ORDER_HISTORY_RERANK", "params": { "enabled": false } }
+        { "id": "score", "type": "MODEL_SCORING", "params": { "predictor_ref": "p_act" } },
+        { "id": "rank",  "type": "RANKING_SORT",  "params": { "ranking_type": "CAROUSEL", "apply_open_closed": true } }
       ],
       "row_overrides": {
-        "FAVORITES":   { "order_rerank": { "enabled": true, "tiers": ["S1","S2","S3"], "lookback_days": 10 } },
-        "PICKUP_MAP":  { "score": { "skip": true }, "rules": { "sort_by": "DISTANCE" } },
-        "BOOKMARKS":   { "score": { "skip": true }, "rules": { "sort_by": "SAVELIST_ORDER" } },
-        "WHOLE_ORDER": { "order_rerank": { "enabled": true } },
+        "FAVORITES":   { "rank": { "ranking_type": "CAROUSEL", "order_history_rerank_enabled": true } },
+        "PICKUP_MAP":  { "score": { "skip": true }, "rank": { "ranking_type": "PICKUP_STORE_FEED", "sort_by": "DISTANCE" } },
+        "BOOKMARKS":   { "score": { "skip": true }, "rank": { "ranking_type": "BOOKMARKS", "sort_by": "SAVELIST_ORDER" } },
+        "WHOLE_ORDER": { "rank": { "ranking_type": "WHOLE_ORDER_REORDER", "order_history_rerank_enabled": true } },
         "NOOP":        { "steps": [] }
       }
     },

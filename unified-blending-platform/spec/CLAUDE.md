@@ -14,7 +14,7 @@ Unified Blending Platform.
 | `impl/00a-safe-refactoring.md` | Safe refactoring strategy: characterization tests, seams, strangler fig, Cover and Modify discipline |
 | `impl/01-shadow-infra.md` | Shadow traffic path for safe validation before any real traffic migrates |
 | `impl/02-feed-row-interface.md` | FeedRow interface + 9 adapters (Adapter pattern) |
-| `impl/03-ranking-step.md` | FeedRowRankingStep interface + 4 step implementations (Strategy pattern) |
+| `impl/03-ranking-step.md` | FeedRowRankingStep interface + 2 step implementations (Strategy pattern) |
 | `impl/04-ranker-engine.md` | FeedRowRanker engine + step registry (Facade + Chain of Responsibility) |
 | `impl/05-config.md` | UnifiedExperimentConfig data classes + UbpRuntimeUtil (Factory Method + Prototype) |
 | `impl/06-wiring.md` | Wire engine into DefaultHomePagePostProcessor and DefaultHomePageStoreRanker |

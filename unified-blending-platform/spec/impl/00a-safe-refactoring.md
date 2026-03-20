@@ -178,7 +178,7 @@ src/test/resources/
 
 ### Level 2: Method — Specific Ranking Logic
 
-Before extracting `BlendingUtil.blendBundle()` into `MultiplierBoostStep`, characterize it:
+Before extracting `getScoreBundle()` into `ModelScoringStep`, characterize `BlendingUtil.blendBundle()`:
 
 ```kotlin
 class BlendingUtilCharacterizationTest {
@@ -293,27 +293,26 @@ FeedRow** — the ranking pipeline — so you have a safety net before Step 2.
 
 **Order:**
 1. Characterization tests from Step 1 are already green
-2. Extract `MultiplierBoostStep` — wraps `BlendingUtil.blendBundle()`. Characterization tests
-   must stay green.
-3. Extract `DiversityRerankStep` — wraps `BlendingUtil.rerankEntitiesWithDiversity()`.
-4. Extract `ModelScoringStep` — wraps Sibyl call.
-5. Extract `FixedPinningStep` — wraps pinning logic.
-6. After each extraction: run characterization tests. Green → continue. Red → revert + investigate.
+2. Extract `ModelScoringStep` — wraps `getScoreBundle()` (Sibyl gRPC + `BlendingUtil.blendBundle()`
+   including diversity rerank — all one atomic call). Characterization tests must stay green.
+3. Extract `BoostAndRankStep` — wraps `getBoostBundle()` + `getRankingBundle()` + `getRankableContent()`
+   (score assignment to domain objects, position boosting, deal multiplier, pin vs flow sort order,
+   reassembly — all one atomic flow). Characterization tests must stay green.
+4. After each extraction: run characterization tests. Green → continue. Red → revert + investigate.
 
 **Critical rule:** The step's `process()` method literally calls the same existing method. No
 behavior change. The step is a wrapper, not a rewrite.
 
 ```kotlin
-// MultiplierBoostStep.process() wraps the EXISTING call:
+// BoostAndRankStep.process() wraps the EXISTING calls:
 override suspend fun process(rows, context, params) {
-    val typedParams = params as MultiplierBoostParams
-    // Same call the old path makes — same method, same logic
-    BlendingUtil.blendBundle(
-        rows.toScorableEntities(),
-        typedParams.toVerticalBlendingConfig(),
-    )
-    // Write scores back to FeedRow
-    rows.forEachIndexed { i, row -> row.score = scoredEntities[i].score }
+    val typedParams = params as BoostAndRankParams
+    // Same calls the old path makes — same methods, same logic
+    val boostBundle = getBoostBundle(rows, typedParams)
+    val rankingBundle = getRankingBundle(rows, typedParams)
+    val rankableContent = getRankableContent(rows, boostBundle, rankingBundle)
+    // Score assignment, position boosting, deal multiplier, pin vs flow sort, reassembly
+    applyRankings(rows, rankableContent, typedParams)
 }
 ```
 
@@ -349,9 +348,7 @@ Request ──→ PostProcessor.reOrderGlobalEntitiesV2()
                 │     ├── Sibyl scoring                              ├── if (ubpFlag):
                 │     ├── BlendingUtil                               │     FeedRowRanker.rank()
                 │     └── Boosting                                   │       ├── ModelScoringStep
-                │                                                    │       ├── MultiplierBoostStep
-                └── NonRankable fixups                               │       ├── DiversityStep
-                                                                     │       └── PinningStep
+                └── NonRankable fixups                               │       └── BoostAndRankStep
                                                                      │
                                                                      └── else:
                                                                            rankAndMergeContent()

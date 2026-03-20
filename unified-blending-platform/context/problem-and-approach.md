@@ -64,10 +64,8 @@ fun rank() {
 You have a JSON that MLEs write:
 ```json
 "steps": [
-  { "type": "MODEL_SCORING",    "params": { "model": "store_ranker_fw_v3" } },
-  { "type": "MULTIPLIER_BOOST", "params": { "vertical_boost_weights": { "10": 1.2 } } },
-  { "type": "DIVERSITY_RERANK", "params": { "enabled": true, "weight": 0.4 } },
-  { "type": "FIXED_PINNING",    "params": { "component_id": "pad", "position": 3 } }
+  { "type": "MODEL_SCORING",  "params": { "predictor_ref": "p_act" } },
+  { "type": "BOOST_AND_RANK", "params": { "boost_by_position_enabled": false } }
 ]
 ```
 

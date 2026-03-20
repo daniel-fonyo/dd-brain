@@ -51,13 +51,13 @@ Use when the step sequence itself changes (adding/removing a step).
 
 ```json
 {
-  "treatment_diversity_v1": {
+  "treatment_merch_v1": {
     "value_function": { ... },
     "vertical_pipeline": {
       "steps": [
-        { "id": "vertical_scoring",   "type": "MODEL_SCORING",    "params": { ... } },
-        { "id": "vertical_blend",     "type": "MULTIPLIER_BOOST", "params": { ... } },
-        { "id": "vertical_diversity", "type": "DIVERSITY_RERANK", "params": { "enabled": true, "diversity_weight": 0.4 } }
+        { "id": "vertical_scoring",        "type": "MODEL_SCORING",  "params": { ... } },
+        { "id": "vertical_boost_and_rank", "type": "BOOST_AND_RANK", "params": { ... } },
+        { "id": "vertical_merch",          "type": "MERCH_PLACEMENT","params": { "campaign_boost": 1.3 } }
       ]
     }
   }
@@ -98,31 +98,12 @@ HP owns `control.json`. All experiments that use `"extends": "control"` start fr
           "params": { "predictor_ref": "p_act" }
         },
         {
-          "id": "vertical_blend",
-          "type": "MULTIPLIER_BOOST",
+          "id": "vertical_boost_and_rank",
+          "type": "BOOST_AND_RANK",
           "params": {
-            "calibration_config": {
-              "calibration_entries": [],
-              "default_multiplier": 1.0
-            },
-            "intent_scoring_config": {
-              "feature_configs": [],
-              "score_lookup_entries": [],
-              "default_score": 1.0
-            },
-            "vertical_boost_weights": {
-              "boosting_multipliers": [],
-              "default_multiplier": 1.0
-            }
-          }
-        },
-        {
-          "id": "vertical_diversity",
-          "type": "DIVERSITY_RERANK",
-          "params": {
-            "enabled": false,
-            "diversity_weight": 0.0,
-            "coefficient_for_non_rx": 0.0
+            "boost_by_position_enabled": false,
+            "deal_carousel_score_multiplier": 1.0,
+            "boost_by_position_allow_list": []
           }
         }
       ]
@@ -186,114 +167,43 @@ The `PredictorConfig` you declare in `value_function.p_act`:
 
 ---
 
-### `MULTIPLIER_BOOST`
+### `BOOST_AND_RANK`
 
-Applies calibration × intent multiplier × vertical boost weights to each carousel's score.
+Wraps `getBoostBundle()` + `getRankingBundle()` + `getRankableContent()` — score assignment
+to domain objects, position boosting, deal multiplier, pin vs flow sort order, reassembly.
+All as one atomic flow.
 
-**Replaces:** `BlendingUtil.blendBundle()` in `VerticalBlending.kt`
+**Replaces:** `Boosting.kt` + `BoostingBundle.boosted()` + `RankingBundle.ranked()`
 
 ```json
 {
-  "id": "vertical_blend",
-  "type": "MULTIPLIER_BOOST",
+  "id": "vertical_boost_and_rank",
+  "type": "BOOST_AND_RANK",
   "params": {
-    "calibration_config": {
-      "calibration_entries": [
-        {
-          "vertical_ids": [2],
-          "piecewise_multipliers": [
-            { "min_score": 0.0, "max_score": 0.3, "multiplier": 1.2 },
-            { "min_score": 0.3, "max_score": 1.0, "multiplier": 1.0 }
-          ]
-        }
-      ],
-      "default_multiplier": 1.0
-    },
-    "intent_scoring_config": {
-      "feature_configs": [
-        { "feature_name": "day_of_week", "transform_fn": [{ "input": [1,7], "output": "weekend" }] }
-      ],
-      "score_lookup_entries": [
-        {
-          "feature_names": ["day_of_week"],
-          "entries": { "weekend": 1.15 },
-          "default_score": 1.0
-        }
-      ],
-      "default_score": 1.0
-    },
-    "vertical_boost_weights": {
-      "boosting_multipliers": [
-        { "vertical_ids": [2], "multiplier": 1.1 }
-      ],
-      "default_multiplier": 1.0
-    }
+    "boost_by_position_enabled": true,
+    "deal_carousel_score_multiplier": 1.5,
+    "boost_by_position_allow_list": ["dt:some_carousel", "nv_carousel"]
   }
 }
 ```
 
-For experiments that only adjust a boost weight, use Mode 1:
+For experiments that only adjust boost params, use Mode 1:
 ```json
 {
   "extends": "control",
   "step_params": {
-    "vertical_blend": {
-      "vertical_boost_weights": {
-        "boosting_multipliers": [{ "vertical_ids": [10], "multiplier": 1.5 }],
-        "default_multiplier": 1.0
-      }
+    "vertical_boost_and_rank": {
+      "boost_by_position_enabled": true,
+      "deal_carousel_score_multiplier": 1.5,
+      "boost_by_position_allow_list": ["dt:some_carousel"]
     }
   }
 }
 ```
 
----
-
-### `DIVERSITY_RERANK`
-
-Greedy rerank that penalizes non-Rx density to prevent a page dominated by one vertical.
-
-**Replaces:** `BlendingUtil.rerankEntitiesWithDiversity()` in `VerticalBlending.kt`
-
-```json
-{
-  "id": "vertical_diversity",
-  "type": "DIVERSITY_RERANK",
-  "params": {
-    "enabled": true,
-    "diversity_weight": 0.4,
-    "coefficient_for_non_rx": 0.6,
-    "local_window_size_for_non_rx": 3,
-    "local_coefficient_for_non_rx": 0.3
-  }
-}
-```
-
-Set `"enabled": false` to disable without removing the step. The step is still traced.
-
----
-
-### `FIXED_PINNING`
-
-Pins a carousel component to a specific page position by inflating its score above the component already at that position.
-
-**Replaces:** `BoostingBundle.boosted()` in `Boosting.kt` + `NonRankableHomepageOrderingUtil` post-ranking fixups.
-
-```json
-{
-  "id": "pin_bookmarks",
-  "type": "FIXED_PINNING",
-  "params": {
-    "component_id": "bookmarks",
-    "position": 0,
-    "hard_pin": true
-  }
-}
-```
-
-Multiple `FIXED_PINNING` steps can be declared, one per pinned carousel. Order of declaration determines precedence when two pins conflict.
-
-Today's post-ranking fixups (`updateSortOrderOfNVCarousel`, `updateSortOrderOfTasteOfDashPass`, etc.) become declared `FIXED_PINNING` steps. They're now part of the DAG and traced.
+**Note:** Blending (calibration, intent, boost weights, diversity rerank) is now inside
+`MODEL_SCORING`, not in a separate step. This is intentionally coarse — finer decomposition
+is a future iteration.
 
 ---
 
@@ -448,10 +358,9 @@ If the DV value doesn't match any key in the JSON, the engine silently falls bac
   "treatment_with_new_step": {
     "vertical_pipeline": {
       "steps": [
-        { "id": "vertical_scoring",   "type": "MODEL_SCORING",    "params": { "predictor_ref": "p_act" } },
-        { "id": "vertical_blend",     "type": "MULTIPLIER_BOOST", "params": { ... } },
-        { "id": "vertical_diversity", "type": "DIVERSITY_RERANK", "params": { "enabled": true, "diversity_weight": 0.4 } },
-        { "id": "pin_bookmarks",      "type": "FIXED_PINNING",    "params": { "component_id": "bookmarks", "position": 0 } }
+        { "id": "vertical_scoring",        "type": "MODEL_SCORING",  "params": { "predictor_ref": "p_act" } },
+        { "id": "vertical_boost_and_rank", "type": "BOOST_AND_RANK", "params": { ... } },
+        { "id": "merch",                   "type": "MERCH_PLACEMENT","params": { "campaign_boost": 1.3 } }
       ]
     }
   }

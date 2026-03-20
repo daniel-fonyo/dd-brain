@@ -10,11 +10,11 @@ See `spec/rfc.md` for the full contracts and architecture.
 | What you're changing | Mode | Example below |
 |---|---|---|
 | New model version | Mode 1 — override `p_act` | Case 1 |
-| Adjust a boost weight | Mode 1 — override `step_params.blend` | Case 2 |
-| New intent model + calibration | Mode 1 — override `p_act` + `step_params.blend` | Case 3 |
-| Enable diversity reranking | Mode 1 — override `step_params.diversity` | Case 4 |
+| Adjust boost-and-rank params | Mode 1 — override `step_params.boost_and_rank` | Case 2 |
+| New intent model + calibration | Mode 1 — override `p_act` + `step_params.score` | Case 3 |
+| Enable diversity reranking | Mode 1 — override `step_params.score` (diversity is inside MODEL_SCORING) | Case 4 |
 | UCB exploration for cold-start | Mode 1 — override `step_params.score` | Case 5 |
-| Remove or change a pin | Mode 1 — override `step_params.pin.rules` | Case 6 |
+| Measure impact of a boost setting | Mode 1 — override `step_params.boost_and_rank` + `output_config.emit_trace` | Case 6 |
 | New step type in the pipeline | Mode 2 — full `vertical_pipeline` (BE registers step first) | Case 7 |
 
 ---
@@ -64,40 +64,38 @@ Swap the Sibyl predictor and model. All other pipeline params stay from control.
 
 ---
 
-## Case 2: Adjust Vertical Boost Weight
+## Case 2: Adjust Boost-and-Rank Params
 
-Test multiple boost multipliers for NV (`vertical_id: 10`) in one file.
+Test different boost-and-rank settings in one file.
 DV assigns users to a treatment name — two treatments = two DV buckets.
 
 ```json
 {
-  "treatment_nv_1_5x": {
+  "treatment_boost_on": {
     "extends": "control",
     "step_params": {
-      "blend": {
-        "vertical_boost_weights": {
-          "boosting_multipliers": [{ "vertical_ids": [10], "multiplier": 1.5 }],
-          "default_multiplier": 1.0
-        }
+      "boost_and_rank": {
+        "boost_by_position_enabled": true,
+        "deal_carousel_score_multiplier": 1.5,
+        "boost_by_position_allow_list": ["dt:some_carousel"]
       }
     }
   },
-  "treatment_nv_2x": {
+  "treatment_boost_2x": {
     "extends": "control",
     "step_params": {
-      "blend": {
-        "vertical_boost_weights": {
-          "boosting_multipliers": [{ "vertical_ids": [10], "multiplier": 2.0 }],
-          "default_multiplier": 1.0
-        }
+      "boost_and_rank": {
+        "boost_by_position_enabled": true,
+        "deal_carousel_score_multiplier": 2.0,
+        "boost_by_position_allow_list": ["dt:some_carousel"]
       }
     }
   }
 }
 ```
 
-Note: `step_params` shallow-merges. If you override `vertical_boost_weights`, you must
-re-declare the full map — not just the key you're changing.
+Note: `step_params` shallow-merges. If you override `boost_and_rank`, you must
+re-declare the full params — not just the key you're changing.
 
 ---
 
@@ -163,19 +161,18 @@ new model's score distribution differs from the control model's.
 
 ## Case 4: Enable Diversity Reranking
 
-Control has `diversity` step with `"enabled": false`. Override to turn it on.
+Under the 2-step decomposition, diversity reranking is part of the `MODEL_SCORING` step
+(inside `getScoreBundle()` which wraps `BlendingUtil.blendBundle()` + diversity rerank).
+Override MODEL_SCORING params to control diversity behavior.
 
 ```json
 {
   "treatment_diversity_v1": {
     "extends": "control",
     "step_params": {
-      "diversity": {
-        "enabled": true,
-        "weight": 0.4,
-        "coefficient_for_non_rx": 0.6,
-        "local_window_size_for_non_rx": 3,
-        "local_coefficient_for_non_rx": 0.3
+      "score": {
+        "diversity_enabled": true,
+        "diversity_weight": 0.4
       }
     }
   }
@@ -213,29 +210,30 @@ The UCB bonus is proportional to model uncertainty for each carousel. High-uncer
 
 ---
 
-## Case 6: Measure and Remove a Legacy Pin
+## Case 6: Measure Impact of a Boost Setting
 
-**Step 1** — Make the pin explicit in `control.json` (if not already). Enable tracing on the
-treatment to capture `score_before` at the `FIXED_PINNING` step.
-
-**Step 2** — Remove the pin in a treatment:
+Enable tracing to capture `score_before` at the `BOOST_AND_RANK` step.
 
 ```json
 {
-  "treatment_no_pad_pin": {
+  "treatment_no_boost": {
     "extends": "control",
     "step_params": {
-      "pin": { "rules": [] }
+      "boost_and_rank": {
+        "boost_by_position_enabled": false,
+        "deal_carousel_score_multiplier": 1.0,
+        "boost_by_position_allow_list": []
+      }
     },
     "output_config": { "emit_trace": true }
   }
 }
 ```
 
-Trace events show `score_before` at `FIXED_PINNING` = what PAD would have scored organically.
-`score_after` = pinned position score. The gap is the opportunity cost.
+Trace events show `score_before` at `BOOST_AND_RANK` = organic score before boosting.
+`score_after` = score after boosting applied. The gap is the impact of the boost setting.
 
-Once you've measured and decided to remove, the treatment becomes the new control.
+Once you've measured and decided to change, the treatment becomes the new control.
 
 ---
 
@@ -248,11 +246,9 @@ Requires BE to implement and register the new step first. Then you declare the f
   "treatment_with_merch_boost": {
     "vertical_pipeline": {
       "steps": [
-        { "id": "score",     "type": "MODEL_SCORING",    "params": { "predictor_ref": "p_act" } },
-        { "id": "blend",     "type": "MULTIPLIER_BOOST", "params": { ... } },
-        { "id": "diversity", "type": "DIVERSITY_RERANK", "params": { "enabled": true, "weight": 0.4 } },
-        { "id": "merch",     "type": "MERCH_PLACEMENT",  "params": { "campaign_boost": 1.3 } },
-        { "id": "pin",       "type": "FIXED_PINNING",    "params": { "rules": [] } }
+        { "id": "score",          "type": "MODEL_SCORING",    "params": { "predictor_ref": "p_act" } },
+        { "id": "boost_and_rank", "type": "BOOST_AND_RANK",   "params": { ... } },
+        { "id": "merch",          "type": "MERCH_PLACEMENT",  "params": { "campaign_boost": 1.3 } }
       ]
     }
   }
