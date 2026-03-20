@@ -160,21 +160,21 @@ The strategy is simple: **adapt once, rank uniformly, apply back**.
 flowchart LR
     subgraph sources["9 Carousel Types"]
         direction TB
-        T1["StoreCarousel"]:::domain
-        T2["ItemCarousel"]:::domain
-        T3["DealCarousel"]:::domain
-        T4["StoreCollection"]:::domain
-        T5["CollectionV2"]:::domain
-        T6["ItemCollection"]:::domain
-        T7["MapCarousel"]:::domain
-        T8["ReelsCarousel"]:::domain
-        T9["StoreEntity"]:::domain
+        T1("StoreCarousel"):::domain
+        T2("ItemCarousel"):::domain
+        T3("DealCarousel"):::domain
+        T4("StoreCollection"):::domain
+        T5("CollectionV2"):::domain
+        T6("ItemCollection"):::domain
+        T7("MapCarousel"):::domain
+        T8("ReelsCarousel"):::domain
+        T9("StoreEntity"):::domain
     end
 
     subgraph adapt["Adapt"]
         direction TB
-        A["toFeedRow()
-        1 adapter per type"]:::hero
+        A("toFeedRow()
+        1 adapter per type"):::hero
     end
 
     T1 --> A
@@ -189,11 +189,11 @@ flowchart LR
 
     subgraph pipeline["Uniform FeedRow Pipeline"]
         direction TB
-        STEP1["MODEL_SCORING"]:::step
-        STEP2["MULTIPLIER_BOOST"]:::step
-        STEP3["DIVERSITY_RERANK"]:::step
-        STEP4["POSITION_BOOSTING"]:::step
-        STEP5["FIXED_PINNING"]:::step
+        STEP1("MODEL_SCORING"):::step
+        STEP2("MULTIPLIER_BOOST"):::step
+        STEP3("DIVERSITY_RERANK"):::step
+        STEP4("POSITION_BOOSTING"):::step
+        STEP5("FIXED_PINNING"):::step
         STEP1 --> STEP2 --> STEP3 --> STEP4 --> STEP5
     end
 
@@ -201,17 +201,17 @@ flowchart LR
 
     subgraph writeback["Apply Back"]
         direction TB
-        WB["applyBackTo()"]:::hero
+        WB("applyBackTo()"):::hero
     end
 
     STEP5 --> WB
 
     subgraph outputs["Original Domain Objects"]
         direction TB
-        O1["StoreCarousel"]:::domain
-        O2["ItemCarousel"]:::domain
-        O3["DealCarousel"]:::domain
-        O4["..."]:::domain
+        O1("StoreCarousel"):::domain
+        O2("ItemCarousel"):::domain
+        O3("DealCarousel"):::domain
+        O4("..."):::domain
     end
 
     WB --> O1
@@ -219,15 +219,15 @@ flowchart LR
     WB --> O3
     WB --> O4
 
-    classDef domain fill:#FFFFFF,stroke:#681109,color:#4C0C3A,stroke-width:1.5px
-    classDef hero fill:#FF3008,stroke:#CC2606,color:#FFFFFF,stroke-width:2px,font-weight:bold
-    classDef step fill:#80D8FF,stroke:#4A9AC7,color:#191919,stroke-width:1.5px
+    classDef domain fill:#FFF9F5,stroke:#C4907A,color:#4C0C3A,stroke-width:1px
+    classDef hero fill:#FF3008,stroke:#D42807,color:#FFFFFF,stroke-width:1.5px
+    classDef step fill:#FEF7D1,stroke:#D4B82A,color:#4A3D00,stroke-width:1px
 
-    style sources fill:#FEF5F4,stroke:#681109,stroke-width:1px,color:#681109
-    style adapt fill:#FFF0EB,stroke:#FF3008,stroke-width:2px,color:#FF3008
-    style pipeline fill:#EFF8FF,stroke:#80D8FF,stroke-width:2px,color:#191919
-    style writeback fill:#FFF0EB,stroke:#FF3008,stroke-width:2px,color:#FF3008
-    style outputs fill:#FEF5F4,stroke:#681109,stroke-width:1px,color:#681109
+    style sources fill:#FFFAF8,stroke:#D4A08A,stroke-width:1px,color:#681109
+    style adapt fill:#FFF0EB,stroke:#FF3008,stroke-width:1.5px,color:#681109
+    style pipeline fill:#FFFCEE,stroke:#E8CF2D,stroke-width:1.5px,color:#4A3D00
+    style writeback fill:#FFF0EB,stroke:#FF3008,stroke-width:1.5px,color:#681109
+    style outputs fill:#FFFAF8,stroke:#D4A08A,stroke-width:1px,color:#681109
 ```
 
 ## Architecture
