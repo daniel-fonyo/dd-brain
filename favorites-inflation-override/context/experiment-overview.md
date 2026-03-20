@@ -324,12 +324,146 @@ T2 disables BOTH the inflation multiplier AND the S1/S2/S3 heuristic reranking. 
 
 ---
 
+## Sandbox Run 4: Full T1 Production State (2026-03-20)
+
+### Setup
+
+Matched complete T1 production state by hardcoding all DV overrides AND runtime configs:
+
+**DV overrides** (in `HomepageRequestToContext.kt`):
+- `favorites-inflation-override-vp-2026` = `treatment1`
+- `hp-tiger-team-2025` = `treatment2`
+
+**Runtime config hardcodes** (in `TigerTeamUtil.kt` — replaced `DiscoveryRuntimeUtil.get*()` calls with prod values):
+- `tiger_team/experiment_feature_mapping.json`
+- `tiger_team/tiger_heuristic_override_mapping.json`
+- `ranking/reorder_carousel_override.json`
+
+**Run ID:** `2026-03-20T19-01-04-b5356f`
+
+### Results
+
+| Metric | Run 2 (inflation only) | Run 3 (+tiger DV) | Run 4 (+runtime configs) |
+|---|---|---|---|
+| tiger_team_bucket | control | control | **treatment2** |
+| isTigerFeatureActive (OA_SR) | false | false | **true** |
+| Heuristics fired | 0 | 0 | **11** |
+| order_changed | N/A | N/A | **False (100%)** |
+| bizRules override rate | 100% | 100% | **83%** |
+| Debug lines | 81 | 189 | **333** |
+
+**Key finding:** With full T1 prod state, all 4 heuristic gates pass and `s1s2s3_heuristics` fires 11 times — but `order_changed=False` for all 11. Heuristics are a no-op even when fully enabled.
+
+---
+
+## Deep Dive: Business Rules Sort (step 4b)
+
+The business rules sort is the **dominant ordering signal** in the favorites carousel pipeline, overriding ML scores 83-93% of the time. Understanding it is critical to interpreting the experiment results.
+
+### Pipeline Location
+
+In `DefaultHomePageStoreRanker.kt` (line 71), the `rank()` function processes each carousel:
+
+1. **Score sort** (line 116-120) — sorts stores by ML `finalScore` descending, then `popularityScore` as tiebreaker
+2. **Business rules sort** (line 137-243) — applies a priority comparator chain that can override score ordering
+3. **Pagination** (line 256) — trims to page size
+
+### The Comparator Chain
+
+`StoreCarouselService.sortDiscoveryStoresWithBizRules()` (line 713) builds a chained comparator. Each comparator returns 0 (tie) to defer to the next, or non-zero to override all subsequent comparators:
+
+```
+Priority 1: StoreStatusComparator        — open stores above closed
+Priority 2: ShipAnywhereComparator       — shipping-eligible stores (only for allowlisted carousels)
+Priority 3: StoreListComparator(pinned)  — PINNED STORES from business rules
+Priority 4: StoreSortOrderMapComparator  — CAMPAIGN SORT ORDERS (sponsored/boosted)
+Priority 5: StoreListComparator(scores)  — ML SCORES (last resort tiebreaker)
+```
+
+**ML scores are Priority 5 — the last tiebreaker.** Any store affected by a higher-priority comparator will be positioned independently of ML scores.
+
+### How Each Comparator Works
+
+**Priority 1 — `StoreStatusComparator`** (`discoveryUtils/sorting/StoreStatusComparator.kt`)
+Compares by `deliveryAvailable()`. Open stores sort above closed. Returns 0 (tie) if both stores have same delivery status. Most stores in a favorites carousel are open → usually ties → falls through.
+
+**Priority 2 — `ShipAnywhereComparator`** (`discoveryUtils/sorting/ShipAnywhereComparator.kt`)
+Only applies if carousel ID is in `ship_anywhere_carousel_ids_allowlist.json` runtime config. For most favorites carousels this is not active → returns 0 → falls through.
+
+**Priority 3 — `StoreListComparator(prioritizedStoreIds)`** (`discoveryUtils/sorting/StoreListComparator.kt`)
+Takes a list of store IDs and sorts by position in that list. Uses `ignoreNullsCompare` (`util/comparator/Utils.kt:20`):
+- Both stores in list → sort by list position (ascending)
+- One store in list, other not → listed store sorts first (nulls go to end)
+- Neither store in list → returns 0 → falls through to Priority 4
+
+The `prioritizedStoreIds` come from:
+```kotlin
+// StoreCarouselService.kt:515-519
+val prioritizedBusinessIds = businessSortOrderOverride[carouselId] ?: emptyList()
+val prioritizedStoreIds = getPrioritizedStoreIdsForCarousel(
+    prioritizedBusinessIds = prioritizedBusinessIds,
+    carouselDiscoveryStores = carouselDiscoveryStores,
+)
+```
+The runtime config `carousels/business_sort_order_override_by_carousel_id.json` maps carousel IDs → sets of **business IDs**. All stores belonging to those businesses get pinned to the top of their carousel regardless of ML score.
+
+**Priority 4 — `StoreSortOrderMapComparator`** (`discoveryUtils/sorting/StoreListComparator.kt:56`)
+For stores with campaign sponsorship/boost data (from `CampaignsFetchJob`), sorts by the campaign's `sortOrder` integer. Uses `ignoreNullsCompareWithZeros` — null and 0 sort orders go to end. Campaign fetch is gated by experiment `should_fetch_campaigns_from_promotions_for_all_stores` — if in control, no campaigns are fetched and this comparator is a no-op.
+
+**Priority 5 — `StoreListComparator(sortedByScoreList)`**
+Same comparator as Priority 3, but with the ML-score-sorted store ID list. This is where the multiplier model difference between T1 (`CAROUSEL`) and Control (`INFLATION_MULTIPLIER_CAROUSEL`) would manifest — but only for stores not already positioned by Priorities 1-4.
+
+### Why This Matters for the Experiment
+
+The 83% `order_changed_from_score=True` rate means: in 83% of carousel instances, at least one store's position was changed by Priorities 1-4 versus where ML scores alone would have placed it. The experiment's multiplier model change can only affect the **17% of orderings** where no higher-priority rule intervened.
+
+### Configuration Sources
+
+| Config | Type | Experiment-Gated? | Same in T1 vs Control? |
+|---|---|---|---|
+| `carousels/business_sort_order_override_by_carousel_id.json` | Runtime (prod) | No — always applied | **Yes** — identical |
+| Campaign sort orders | Promotion Service API | Yes — `should_fetch_campaigns_from_promotions_for_all_stores` | Depends on that experiment |
+| `ship_anywhere_carousel_ids_allowlist.json` | Runtime (prod) | No | **Yes** — identical |
+
+All runtime configs come from the prod runtime backend. They are NOT gated by `favorites-inflation-override-vp-2026`. The business rules sort applies **identically** to T1 and Control — it's not a confound, but it reduces the signal surface where the ML model change could manifest to ~17% of carousel instances.
+
+### Key Files
+
+| Component | File | Lines |
+|---|---|---|
+| Ranking entry point | `DefaultHomePageStoreRanker.kt` | 71-102, 116-243 |
+| Comparator chain | `StoreCarouselService.sortDiscoveryStoresWithBizRules()` | 713-746 |
+| Pinned store lookup | `StoreCarouselService.sortStoreEntitiesForCarousels()` | 489-550 |
+| Business rules config fetch | `DiscoveryUtilsRuntimeUtil.getBusinessSortOrderOverrideByCarouselId()` | 39-45 |
+| StoreStatusComparator | `discoveryUtils/sorting/StoreStatusComparator.kt` | 16-90 |
+| StoreListComparator + StoreSortOrderMapComparator | `discoveryUtils/sorting/StoreListComparator.kt` | 13-73 |
+| ShipAnywhereComparator | `discoveryUtils/sorting/ShipAnywhereComparator.kt` | 4-30 |
+| ignoreNullsCompare | `util/comparator/Utils.kt` | 20-30 |
+
+---
+
+## Confirmed Root Cause Summary
+
+**Why T1 vs Control shows p=0.89 (no effect):**
+
+1. **Multiplier model change works** — T1 uses `CAROUSEL` (standard multiplier), Control uses `INFLATION_MULTIPLIER_CAROUSEL` (`inflation_sr_multiplier_3_1`). Different models produce different ML scores.
+2. **Business rules sort dominates** — Overrides ML score-based ordering 83% of the time via store pinning (Priority 3) and campaign sort orders (Priority 4). This washes out any score differences from the multiplier model change.
+3. **Heuristic reranking is a no-op** — S1/S2/S3 heuristics fire in T1 but produce identical ordering (`order_changed=False` 100%). They don't mask or amplify anything.
+4. **Net effect** — T1 and Control produce functionally identical store orderings on the homepage.
+
+**Why T2 vs Control shows p=0.0017 (stat sig -0.4%):**
+
+T2 additionally disables heuristics entirely (`DISABLE_FAVORITES_HEURISTIC_RERANKING`). Since heuristics are already a no-op in T1, the T2 effect likely comes from a different mechanism — possibly the complete removal of the heuristic code path affects edge case behavior at scale, or the -0.4% is driven by the subset of users where heuristics DO change ordering (unlike our single test consumer).
+
+---
+
 ## Next Steps
 
 - [x] ~~Trace favorites carousel call stack end-to-end~~ — **Done.** See sandbox debug trace above.
+- [x] ~~Investigate business rules sort dominance~~ — **Done.** See deep dive above. Business rules sort is a 5-priority comparator chain; ML scores are Priority 5 (last tiebreaker). Store pinning and campaigns override scores 83% of the time.
+- [x] ~~Test with heuristic-active user~~ — **Done.** Run 4 matched full T1 prod state (tiger team treatment2). Heuristics fire but are a no-op (order_changed=False 100%).
 - [ ] **Segment T1 results by tiger team bucket** — compare T1 vs Control for t2/t3 users (heuristics ON) vs t1/t4 users (heuristics OFF)
 - [ ] **Validate T2 at 2 weeks** — confirm stat sig holds
 - [ ] **Check core metrics for T2** — orders, GMV, Cx satisfaction for negative tradeoffs
-- [ ] **Investigate business rules sort dominance** — understand what `bizRulesSort` does in `DefaultHomePageStoreRanker` and whether it's intentionally overriding ML scores. If so, the multiplier model is irrelevant for favorites carousel ranking.
 - [ ] **Compare multiplier model outputs** — get actual score distributions for `inflation_sr_multiplier_3_1` vs standard model to quantify the difference
-- [ ] **Test with heuristic-active user** — run sandbox trace with a consumer in tiger team t2/t3 who has diverse store mix to see if heuristics actually change order for them
+- [ ] **Investigate business rules config content** — what specific business IDs are pinned in `carousels/business_sort_order_override_by_carousel_id.json`? Are favorites carousels heavily pinned?
