@@ -88,10 +88,7 @@ classDiagram
     class StepType {
         <<string constants>>
         MODEL_SCORING
-        MULTIPLIER_BOOST
-        DIVERSITY_RERANK
-        POSITION_BOOSTING
-        FIXED_PINNING
+        BOOST_AND_RANK
     }
 
     class FeedRowRankingStep {
@@ -110,65 +107,30 @@ classDiagram
         +predictorName: String?
         +modelName: String?
     }
-    class MultiplierBoostParams {
-        +calibrationConfig: CalibrationConfig
-        +intentScoringConfig: IntentScoringConfig
-        +verticalBoostWeights: VerticalBoostWeights
-    }
-    class DiversityRerankParams {
-        +enabled: Boolean
-        +diversityScoringParams: DiversityScoringParams
-    }
-    class PositionBoostingParams {
-        +dealCarouselMultiplier: Double
+    class BoostAndRankParams {
+        +boostByPositionEnabled: Boolean
+        +dealCarouselScoreMultiplier: Double
         +boostByPositionAllowList: List~String~
-        +nvUnpinEnabled: Boolean
-    }
-    class FixedPinningParams {
-        +rules: List~PinRule~
-    }
-    class PinRule {
-        +rowId: String
-        +position: Int
     }
 
     StepParams <|.. ModelScoringParams
-    StepParams <|.. MultiplierBoostParams
-    StepParams <|.. DiversityRerankParams
-    StepParams <|.. PositionBoostingParams
-    StepParams <|.. FixedPinningParams
-    FixedPinningParams --> PinRule
+    StepParams <|.. BoostAndRankParams
 
     class ModelScoringStep {
         -entityScorer: EntityScorer
         +process(rows, context, params)
     }
-    class MultiplierBoostStep {
-        +process(rows, context, params)
-    }
-    class DiversityRerankStep {
-        +process(rows, context, params)
-    }
-    class PositionBoostingStep {
-        +process(rows, context, params)
-    }
-    class FixedPinningStep {
+    class BoostAndRankStep {
         +process(rows, context, params)
     }
 
     FeedRowRankingStep <|.. ModelScoringStep
-    FeedRowRankingStep <|.. MultiplierBoostStep
-    FeedRowRankingStep <|.. DiversityRerankStep
-    FeedRowRankingStep <|.. PositionBoostingStep
-    FeedRowRankingStep <|.. FixedPinningStep
+    FeedRowRankingStep <|.. BoostAndRankStep
     FeedRowRankingStep --> StepType : type
     FeedRowRankingStep --> StepParams : params
 
     ModelScoringStep --> ModelScoringParams
-    MultiplierBoostStep --> MultiplierBoostParams
-    DiversityRerankStep --> DiversityRerankParams
-    PositionBoostingStep --> PositionBoostingParams
-    FixedPinningStep --> FixedPinningParams
+    BoostAndRankStep --> BoostAndRankParams
 
     class FeedRowRanker {
         -stepRegistry: Map~String, FeedRowRankingStep~
@@ -226,11 +188,8 @@ flowchart TB
         ADAPT["Adapt once
         toFeedRow()"] --> UNI["Uniform FeedRow list"]
         UNI --> P1["MODEL_SCORING"]
-        P1 --> P2["MULTIPLIER_BOOST"]
-        P2 --> P3["DIVERSITY_RERANK"]
-        P3 --> P4["POSITION_BOOSTING"]
-        P4 --> P5["FIXED_PINNING"]
-        P5 --> BACK["applyBackTo()
+        P1 --> P2["BOOST_AND_RANK"]
+        P2 --> BACK["applyBackTo()
         Write back once"]
 
         NOTE2["0 type-checks in pipeline
@@ -286,15 +245,9 @@ flowchart LR
         direction TB
         STEP1["MODEL_SCORING
         ModelScoringParams"]
-        STEP2["MULTIPLIER_BOOST
-        MultiplierBoostParams"]
-        STEP3["DIVERSITY_RERANK
-        DiversityRerankParams"]
-        STEP4["POSITION_BOOSTING
-        PositionBoostingParams"]
-        STEP5["FIXED_PINNING
-        FixedPinningParams"]
-        STEP1 --> STEP2 --> STEP3 --> STEP4 --> STEP5
+        STEP2["BOOST_AND_RANK
+        BoostAndRankParams"]
+        STEP1 --> STEP2
     end
 
     A --> STEP1
@@ -305,7 +258,7 @@ flowchart LR
         Scores → original objects"]
     end
 
-    STEP5 --> WB
+    STEP2 --> WB
 
     subgraph outputs["Original Domain Objects"]
         direction TB
@@ -408,16 +361,10 @@ flowchart LR
         V_STEP["FeedRowRankingStep
         (interface)"]
         V_IMPL["ModelScoringStep
-        MultiplierBoostStep
-        DiversityRerankStep
-        PositionBoostingStep
-        FixedPinningStep"]
+        BoostAndRankStep"]
         V_TYPES["Step Types:
         MODEL_SCORING
-        MULTIPLIER_BOOST
-        DIVERSITY_RERANK
-        POSITION_BOOSTING
-        FIXED_PINNING"]
+        BOOST_AND_RANK"]
         V_ENG["FeedRowRanker
         (engine)"]
         V_ENTRY["Incision:
