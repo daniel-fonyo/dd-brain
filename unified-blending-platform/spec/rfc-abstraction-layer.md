@@ -158,7 +158,7 @@ The strategy is simple: **adapt once, rank uniformly, apply back**.
 
 ```mermaid
 flowchart LR
-    subgraph sources["9 Carousel Types"]
+    subgraph sources["  9 Carousel Types  "]
         direction TB
         T1("StoreCarousel"):::domain
         T2("ItemCarousel"):::domain
@@ -171,7 +171,7 @@ flowchart LR
         T9("StoreEntity"):::domain
     end
 
-    subgraph adapt["Adapt"]
+    subgraph adapt["  Adapt  "]
         direction TB
         A("toFeedRow()
         1 adapter per type"):::hero
@@ -187,7 +187,7 @@ flowchart LR
     T8 --> A
     T9 --> A
 
-    subgraph pipeline["Uniform FeedRow Pipeline"]
+    subgraph pipeline["  Uniform FeedRow Pipeline  "]
         direction TB
         STEP1("MODEL_SCORING"):::step
         STEP2("MULTIPLIER_BOOST"):::step
@@ -199,14 +199,14 @@ flowchart LR
 
     A --> STEP1
 
-    subgraph writeback["Apply Back"]
+    subgraph writeback["  Apply Back  "]
         direction TB
         WB("applyBackTo()"):::hero
     end
 
     STEP5 --> WB
 
-    subgraph outputs["Original Domain Objects"]
+    subgraph outputs["  Original Domain Objects  "]
         direction TB
         O1("StoreCarousel"):::domain
         O2("ItemCarousel"):::domain
@@ -219,16 +219,17 @@ flowchart LR
     WB --> O3
     WB --> O4
 
-    %% Gray = data, not the point. Red = the action we're proposing. Blue = the new uniform flow.
+    %% Nodes = solid, the things. Subgraphs = dashed, just grouping labels.
+    %% Gray = data. Red = the action we're proposing. Blue = the new uniform flow.
     classDef domain fill:#EAEAED,stroke:#B8B8C2,color:#505058,stroke-width:1px
     classDef hero fill:#FF3008,stroke:#D42807,color:#FFFFFF,stroke-width:1.5px
     classDef step fill:#DCEEFB,stroke:#7BBCE0,color:#1A3A50,stroke-width:1px
 
-    style sources fill:#F8F8FA,stroke:#C8C8D0,stroke-width:1px,color:#606068
-    style adapt fill:#F8F8FA,stroke:#E8A090,stroke-width:1.5px,color:#606068
-    style pipeline fill:#F8F8FA,stroke:#A0CCE8,stroke-width:1.5px,color:#606068
-    style writeback fill:#F8F8FA,stroke:#E8A090,stroke-width:1.5px,color:#606068
-    style outputs fill:#F8F8FA,stroke:#C8C8D0,stroke-width:1px,color:#606068
+    style sources fill:transparent,stroke:#C8C8D0,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
+    style adapt fill:transparent,stroke:#E0A090,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
+    style pipeline fill:transparent,stroke:#A0CCE8,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
+    style writeback fill:transparent,stroke:#E0A090,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
+    style outputs fill:transparent,stroke:#C8C8D0,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
 ```
 
 ## Architecture
