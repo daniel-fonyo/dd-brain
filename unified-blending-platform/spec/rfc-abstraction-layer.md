@@ -22,7 +22,7 @@
 | Dependency | Team | DRI | Status | Impact |
 | :---- | :---- | :---- | :---- | :---- |
 | feed-service | Homepage | Daniel Fonyo | Not started | All changes live here |
-| Sibyl | ML Platform | — | None | No changes — same gRPC calls |
+| Sibyl | ML Platform | — | Shadow only | 2x QPS during shadow mode (bounded by sample rate) |
 
 ---
 
@@ -45,9 +45,7 @@ These create a clean abstraction boundary between *what gets ranked* and *how ra
 
 ## The homepage grew faster than its infrastructure
 
-The DoorDash homepage started as a single-vertical product — just restaurants. Over time it grew to serve 9+ content types on the same page: Rx stores, NV stores, item carousels, deal carousels, collections, map carousels, reels, and standalone store entities. Each was bolted on by different teams at different times.
-
-The result: ranking logic is scattered across utility objects with no shared interface, no clean boundaries, and no way to test or configure one stage independently. Understanding what happens to a carousel's score requires reading 6+ files. Changing one experiment parameter requires touching 10-15 files and 2-3 weeks of HP engineer time.
+The homepage now serves 9+ content types, each added by different teams at different times with no shared ranking interface. The result: ranking logic is scattered across utility objects with no clean boundaries, and no way to test or configure one stage independently. Understanding what happens to a carousel's score requires reading 6+ files. Changing one experiment parameter requires touching 10-15 files and 2-3 weeks of HP engineer time.
 
 ## Three concrete problems
 
@@ -104,31 +102,6 @@ None of this is possible without clean interfaces. You cannot make ranking confi
 
 ---
 
-# Who?
-
-| Person | Role |
-| :---- | :---- |
-| Daniel Fonyo | Implementation DRI — writes code, drives delivery |
-| Yu Zhang | UBP vision author — alignment on interface contracts |
-| Frank Zhang | HP tech lead — code review, architecture sign-off |
-| Dipali Ranjan | HP engineering — code review |
-
----
-
-# When?
-
-| Phase | What | Duration |
-| :---- | :---- | :---- |
-| **0. Characterization tests** | Lock down current vertical + horizontal ranking behavior with golden master tests | 1 week |
-| **1. Vertical interfaces** | `FeedRow`, `FeedRowRankingStep`, 5 step wrappers, `FeedRowRanker` engine — all pure additions | 2 weeks |
-| **2. Horizontal interfaces** | `RowItem`, `RowItemRankingStep`, 5 step wrappers, `RowItemRanker` engine — mirrors vertical | 1-2 weeks |
-| **3. Shadow validation** | Wire shadow paths in `PostProcessor` (vertical) and `StoreRanker` (horizontal). Run both paths, compare sort orders, log divergences. Target: `divergence_count = 0` | 2 weeks |
-| **4. Rollout** | DV-gated gradual migration per layer: 1% → 5% → 25% → 50% → 100% | 2-3 weeks |
-
-Total: ~8-10 weeks. Each phase is independently shippable. If any phase shows risk, we stop and the old path continues serving 100% of traffic.
-
----
-
 # Design
 
 ## Introduction
@@ -148,7 +121,9 @@ reOrderGlobalEntitiesV2()
                       └─ getRankableContent()   — re-assemble typed containers
 ```
 
-We introduce three interfaces that create clean boundaries at these seams. The existing methods don't change — they get wrapped by step classes that expose them through a uniform contract.
+The same problem exists in horizontal ranking: within-carousel store ordering is scattered across `StoreRanker`, `CampaignRanker`, and `StoreCarouselService` with no shared interface between store types.
+
+We introduce six interfaces (three per layer) that create clean boundaries at these seams. The existing methods don't change — they get wrapped by step classes that expose them through a uniform contract.
 
 The strategy is simple: **adapt once, rank uniformly, apply back**.
 
@@ -282,22 +257,6 @@ enum class RowItemType {
 
 The current horizontal codebase handles stores via `LiteStoreCollection` containing `StoreEntity` objects, with `DealStore` and `ItemStoreEntity` as variants.
 
-### Immutability Design
-
-Both `FeedRow` and `RowItem` follow the same immutability contract:
-
-| Field | Mutable? | Why |
-| :---- | :---- | :---- |
-| `id` | No (`val`) | Identity — never changes |
-| `type` | No (`val`) | Set once by adapter |
-| `score` | Yes (`var`) | Steps write scores in-place — this is the pipeline's output |
-| `metadata` | Yes (`MutableMap`) | Inter-step data passing (e.g., score factors for downstream steps) |
-| `applyBackTo()` | N/A | Write-once at pipeline exit — pushes final score to domain object |
-
-Adapters hold the domain object via `val` (immutable reference). `StepParams` subclasses are immutable `data class` instances — all fields are `val`. Steps and engines are stateless — no shared mutable state between requests.
-
-**Mutation is confined to two controlled points:** `score` (the pipeline's output) and `metadata` (inter-step communication). Everything else is immutable by construction.
-
 ### Vertical Steps: `FeedRowRankingStep`
 
 Each inline ranking method gets a step wrapper. The step calls the **same existing method** — same class, same arguments, same logic. The step is a thin delegation layer that makes the method independently configurable and testable.
@@ -341,6 +300,70 @@ interface RowItemRankingStep {
 | `OrderHistoryRerankStep` | `ORDER_HISTORY_RERANK` | `WholeOrderReorderFilterUtil.getGoToOrders()` | `OrderHistoryRerankParams(enabled)` |
 
 `ModelScoringParams` is shared between vertical and horizontal — same struct, same predictor ref semantics.
+
+<!-- Diagram: Horizontal Adapt → Rank → Apply Back funnel
+     Reason: Readers need to see how store/item types converge to one uniform pipeline (mirrors vertical diagram)
+     Aha: Same pattern as vertical — adapt once at the boundary, everything downstream is type-agnostic -->
+
+```mermaid
+flowchart LR
+    subgraph sources["  Store Types  "]
+        direction TB
+        T1("StoreEntity"):::domain
+        T2("ItemStoreEntity"):::domain
+        T3("DealStore"):::domain
+    end
+
+    subgraph adapt["  Adapt  "]
+        direction TB
+        A("toRowItem()
+        1 adapter per type"):::hero
+    end
+
+    T1 --> A
+    T2 --> A
+    T3 --> A
+
+    subgraph pipeline["  Uniform RowItem Pipeline  "]
+        direction TB
+        STEP1("MODEL_SCORING"):::step
+        STEP2("SCORE_MODIFIER"):::step
+        STEP3("CAMPAIGN_SORT"):::step
+        STEP4("BUSINESS_RULES_SORT"):::step
+        STEP5("ORDER_HISTORY_RERANK"):::step
+        STEP1 --> STEP2 --> STEP3 --> STEP4 --> STEP5
+    end
+
+    A --> STEP1
+
+    subgraph writeback["  Apply Back  "]
+        direction TB
+        WB("applyBackTo()"):::hero
+    end
+
+    STEP5 --> WB
+
+    subgraph outputs["  Original Store Objects  "]
+        direction TB
+        O1("StoreEntity"):::domain
+        O2("ItemStoreEntity"):::domain
+        O3("DealStore"):::domain
+    end
+
+    WB --> O1
+    WB --> O2
+    WB --> O3
+
+    classDef domain fill:#EAEAED,stroke:#B8B8C2,color:#505058,stroke-width:1px
+    classDef hero fill:#FF3008,stroke:#D42807,color:#FFFFFF,stroke-width:1.5px
+    classDef step fill:#DCEEFB,stroke:#7BBCE0,color:#1A3A50,stroke-width:1px
+
+    style sources fill:transparent,stroke:#C8C8D0,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
+    style adapt fill:transparent,stroke:#E0A090,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
+    style pipeline fill:transparent,stroke:#A0CCE8,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
+    style writeback fill:transparent,stroke:#E0A090,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
+    style outputs fill:transparent,stroke:#C8C8D0,stroke-width:1px,stroke-dasharray:6 4,color:#A0A0A8
+```
 
 ### Ranking Engines: `FeedRowRanker` and `RowItemRanker`
 
@@ -476,7 +499,15 @@ flowchart TB
 
 ### Dependencies
 
-**Upstream:** None. Internal to feed-service post-processing. Retrieval, grouping, and Sibyl are untouched.
+| Dependency | Type | Impact during shadow | Impact during rollout |
+| :---- | :---- | :---- | :---- |
+| **Sibyl** (gRPC) | ML scoring | Duplicate calls — 2x QPS for shadowed traffic | Same as today — no change |
+| **Redis** (percentage match cache) | Async write | Duplicate async writes (negligible) | Same as today |
+| **Redis** (campaign info cache) | Read + DB fallback | Reads cached, minimal impact | Same as today |
+| **DV/Experiment flags** | In-memory (Caffeine, 30s TTL) | No impact — shared cache | No impact |
+| **Runtime configs** | In-memory | No impact — local reads | No impact |
+
+**Upstream:** Sibyl is the only dependency with meaningful impact, and only during shadow mode.
 
 **Downstream:** None. API response shape is identical. Client apps see no change.
 
@@ -518,7 +549,7 @@ Shadow mode runs old and new paths **in parallel** via coroutines. The user-faci
 3. **Consider score reuse** — the shadow `MODEL_SCORING` step could reuse scores from the old path's `ScoreWithFactors` instead of making an independent Sibyl call. This eliminates the Sibyl doubling entirely but means we cannot validate the scoring step independently. **Decision: start with independent calls at low sample rate, switch to score reuse if dependency capacity is a concern.**
 4. **Shadow is temporary** — once `divergence_count = 0` is sustained, rollout replaces shadow. The old path turns off and dependency QPS returns to baseline.
 
-**Dependency impact during shadow:** The primary dependency affected is **Sibyl** (gRPC scoring). Other dependencies (runtime config caches, DV reads) are local in-memory reads with no network cost — doubling these is negligible. The QPS impact on Sibyl is bounded by the shadow sample rate. See SLO section for current feed-service dependency QPS baseline (TBD — pending research).
+**Dependency impact during shadow:** The primary dependency affected is **Sibyl** (gRPC scoring) — no per-request score cache exists, scores are computed fresh each call, so shadow WILL duplicate Sibyl gRPC calls. Other dependencies: DV/experiment flags use Caffeine caches (~30s TTL, in-memory, no network duplication); runtime configs are in-memory reads (no duplication); Redis percentage-match cache writes are async and negligible; Redis campaign-info cache reads are cached with DB fallback (minimal impact). The QPS impact on Sibyl is bounded by the shadow sample rate.
 
 ### Expected QPS
 
@@ -536,28 +567,6 @@ Same as current homepage QPS. No new endpoints. No change to traffic volume. Dur
 - The old code path is never modified. It compiles and runs identically at every stage.
 - Characterization tests enforce this: UBP flag OFF = old path must match golden master.
 - No existing DV keys are modified or removed. Four new DVs are added (vertical shadow, vertical rollout, horizontal shadow, horizontal rollout).
-
-## Contract Stability
-
-**These interfaces are the long-term contract.** Once approved and shipped, they become the stable API surface that all future UBP work, all MLE experiments, and all partner integrations build against. They persist from now through Pedregal and beyond.
-
-This is why this RFC exists — not just to get code reviewed, but to get alignment that these are the right abstractions. Specifically:
-
-| Interface | What's being committed | Impact of getting it wrong |
-| :---- | :---- | :---- |
-| `FeedRow` | Field set (`id`, `type`, `score`, `metadata`, `applyBackTo()`) | Every adapter, every step, and every future consumer of vertical ranking depends on this shape |
-| `RowItem` | Same field set for horizontal | Every horizontal step and every carousel-level ranking integration depends on this shape |
-| `RowType` enum | 9 entries today | Adding is easy; removing or renaming is a breaking change across all adapters and any step that filters by type |
-| `FeedRowRankingStep` / `RowItemRankingStep` | `process(rows, context, params)` signature | Every step implementation, every engine dispatch, and every future partner step depends on this signature |
-| `StepParams` subclasses | Field names and types (`ModelScoringParams`, `MultiplierBoostParams`, etc.) | All experiment configs, all MLE-facing tooling, and all config validation depends on these field names |
-
-**What can change later:** New `RowType` entries. New `StepParams` subclasses. New step types registered in the engine. New fields added to existing params (with defaults). These are additive and non-breaking.
-
-**What cannot change without migration:** Removing `FeedRow` fields. Changing the `process()` signature. Renaming `StepParams` fields that experiments already reference. Removing `RowType` entries.
-
-**Open question for reviewers:** Are `FeedRow` and `RowItem` the right names? Are the 5 fields on each (`id`, `type`, `score`, `metadata`, `applyBackTo()`) the right surface? This is the time to debate — not after 20 adapters and 10 step implementations depend on them.
-
----
 
 ## What These Interfaces Unlock
 
@@ -588,6 +597,20 @@ Rejected. Pedregal timeline is uncertain and addresses a different layer (retrie
 
 **4. Refactor the existing code without interfaces.**
 Rejected. Without a shared type (`FeedRow`) and a step contract (`FeedRowRankingStep`), any refactoring still results in scattered type-checks and inline method chains. Interfaces are the minimum structural change needed to make the pipeline composable.
+
+---
+
+# When?
+
+| Phase | What | Duration |
+| :---- | :---- | :---- |
+| **0. Characterization tests** | Lock down current vertical + horizontal ranking behavior with golden master tests | 1 week |
+| **1. Vertical interfaces** | `FeedRow`, `FeedRowRankingStep`, 5 step wrappers, `FeedRowRanker` engine — all pure additions | 2 weeks |
+| **2. Horizontal interfaces** | `RowItem`, `RowItemRankingStep`, 5 step wrappers, `RowItemRanker` engine — mirrors vertical | 1-2 weeks |
+| **3. Shadow validation** | Wire shadow paths in `PostProcessor` (vertical) and `StoreRanker` (horizontal). Run both paths, compare sort orders, log divergences. Target: `divergence_count = 0` | 2 weeks |
+| **4. Rollout** | DV-gated gradual migration per layer: 1% → 5% → 25% → 50% → 100% | 2-3 weeks |
+
+Total: ~8-10 weeks. Each phase is independently shippable. If any phase shows risk, we stop and the old path continues serving 100% of traffic.
 
 ---
 
