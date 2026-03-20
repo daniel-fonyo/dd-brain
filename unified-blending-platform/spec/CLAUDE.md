@@ -52,3 +52,4 @@ Parts 2–7 each have a direct Phase 1.5 equivalent (not yet written — follow 
 | `context/rfc-feedback.md` | Stakeholder pain points (YZ, Dipali, Frank) with synthesis |
 | `context/experiment-traffic-industry-research.md` | Industry research on per-layer experiment traffic allocation |
 | `context/one-pager-abstraction-proposal.md` | 1-pager: problem statement, proposed abstraction layer, safe delivery plan, scope |
+| `context/one-pager-diagrams.md` | Mermaid diagrams companion: class, sequence, before/after, strangler fig, horizontal mirroring, onboarding |
