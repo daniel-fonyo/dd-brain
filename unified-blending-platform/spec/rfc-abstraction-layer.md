@@ -159,68 +159,39 @@ flowchart LR
         T1["StoreCarousel"]
         T2["ItemCarousel"]
         T3["DealCarousel"]
-        T4["StoreCollection"]
-        T5["CollectionV2"]
-        T6["ItemCollection"]
-        T7["MapCarousel"]
-        T8["ReelsCarousel"]
-        T9["StoreEntity"]
+        T4["...6 more"]
     end
 
-    subgraph adapt["Adapt"]
-        direction TB
-        A["toFeedRow()
-        1 adapter per type"]
+    subgraph adapt["toFeedRow()"]
+        A["Adapter per type"]
     end
 
     T1 --> A
     T2 --> A
     T3 --> A
     T4 --> A
-    T5 --> A
-    T6 --> A
-    T7 --> A
-    T8 --> A
-    T9 --> A
 
-    subgraph pipeline["Uniform FeedRow Pipeline"]
-        direction TB
-        STEP1["MODEL_SCORING"]
-        STEP2["MULTIPLIER_BOOST"]
-        STEP3["DIVERSITY_RERANK"]
-        STEP4["POSITION_BOOSTING"]
-        STEP5["FIXED_PINNING"]
-        STEP1 --> STEP2 --> STEP3 --> STEP4 --> STEP5
+    subgraph pipeline["FeedRowRanker"]
+        ENG["FeedRowRankingStep
+        .process(rows, ctx, params)
+        × N steps from config"]
     end
 
-    A --> STEP1
+    A --> ENG
 
-    subgraph writeback["Apply Back"]
-        direction TB
-        WB["applyBackTo()"]
+    subgraph writeback["applyBackTo()"]
+        WB["Scores → original objects"]
     end
 
-    STEP5 --> WB
-
-    subgraph outputs["Original Domain Objects"]
-        direction TB
-        O1["StoreCarousel"]
-        O2["ItemCarousel"]
-        O3["DealCarousel"]
-        O4["..."]
-    end
-
-    WB --> O1
-    WB --> O2
-    WB --> O3
-    WB --> O4
+    ENG --> WB
 
     style sources fill:#fff3f3,stroke:#cc0000
     style adapt fill:#ffffcc,stroke:#aaaa00
     style pipeline fill:#e6f0ff,stroke:#0055cc
     style writeback fill:#ffffcc,stroke:#aaaa00
-    style outputs fill:#f3fff3,stroke:#00aa00
 ```
+
+This diagram shows the core design decision: diverse types converge to one interface, pass through a config-driven step loop, and write back. The specific steps and their params are defined in the Architecture sections below.
 
 ## Architecture
 
@@ -356,46 +327,150 @@ class FeedRowRanker(
 **Vertical incision point:** `DefaultHomePagePostProcessor.reOrderGlobalEntitiesV2()`
 **Horizontal incision point:** `DefaultHomePageStoreRanker.rank()` → each `modifyLiteStoreCollection()` call
 
-### Both layers side by side
+### Class Diagram
+
+The full type hierarchy for the vertical layer. Any carousel type adapts to `FeedRow`, any ranking algorithm implements `FeedRowRankingStep`, and the engine orchestrates them. Teams add adapters and steps — the engine doesn't change.
+
+```mermaid
+classDiagram
+    direction TB
+
+    class FeedRow {
+        <<interface>>
+        +id: String
+        +type: RowType
+        +score: Double
+        +metadata: Map~String, Any~
+        +applyBackTo()
+    }
+
+    class RowType {
+        <<enum>>
+        STORE_CAROUSEL
+        ITEM_CAROUSEL
+        DEAL_CAROUSEL
+        STORE_COLLECTION
+        COLLECTION_V2
+        ITEM_COLLECTION
+        MAP_CAROUSEL
+        REELS_CAROUSEL
+        STORE_ENTITY
+    }
+
+    class StoreCarouselRow {
+        -carousel: StoreCarousel
+    }
+    class ItemCarouselRow {
+        -carousel: ItemCarousel
+    }
+    class DealCarouselRow {
+        -carousel: DealCarousel
+    }
+
+    FeedRow <|.. StoreCarouselRow
+    FeedRow <|.. ItemCarouselRow
+    FeedRow <|.. DealCarouselRow
+    FeedRow --> RowType
+    note for FeedRow "9 adapter classes total\n(6 more omitted for brevity)"
+
+    class FeedRowRankingStep {
+        <<interface>>
+        +stepType: String
+        +paramsClass: Class~StepParams~
+        +process(rows, context, params)
+    }
+
+    class StepParams {
+        <<sealed interface>>
+    }
+
+    class ModelScoringParams {
+        +predictorRef: String?
+        +predictorName: String?
+        +modelName: String?
+    }
+    class MultiplierBoostParams {
+        +calibrationConfig: CalibrationConfig
+        +intentScoringConfig: IntentScoringConfig
+        +verticalBoostWeights: VerticalBoostWeights
+    }
+    class DiversityRerankParams {
+        +enabled: Boolean
+        +diversityScoringParams: DiversityScoringParams
+    }
+    class PositionBoostingParams {
+        +dealCarouselMultiplier: Double
+        +boostByPositionAllowList: List~String~
+        +nvUnpinEnabled: Boolean
+    }
+    class FixedPinningParams {
+        +rules: List~PinRule~
+    }
+
+    StepParams <|.. ModelScoringParams
+    StepParams <|.. MultiplierBoostParams
+    StepParams <|.. DiversityRerankParams
+    StepParams <|.. PositionBoostingParams
+    StepParams <|.. FixedPinningParams
+
+    class ModelScoringStep
+    class MultiplierBoostStep
+    class DiversityRerankStep
+    class PositionBoostingStep
+    class FixedPinningStep
+
+    FeedRowRankingStep <|.. ModelScoringStep
+    FeedRowRankingStep <|.. MultiplierBoostStep
+    FeedRowRankingStep <|.. DiversityRerankStep
+    FeedRowRankingStep <|.. PositionBoostingStep
+    FeedRowRankingStep <|.. FixedPinningStep
+    FeedRowRankingStep --> StepParams : params
+
+    ModelScoringStep --> ModelScoringParams
+    MultiplierBoostStep --> MultiplierBoostParams
+    DiversityRerankStep --> DiversityRerankParams
+    PositionBoostingStep --> PositionBoostingParams
+    FixedPinningStep --> FixedPinningParams
+
+    class FeedRowRanker {
+        -stepRegistry: Map~String, FeedRowRankingStep~
+        +rank(rows, pipeline, context): List~FeedRow~
+    }
+
+    FeedRowRanker --> FeedRowRankingStep : dispatches to
+    FeedRowRanker --> FeedRow : operates on
+```
+
+### Both Layers Side by Side
+
+Same architecture, different types. Vertical proven first, horizontal mirrors it.
 
 ```mermaid
 flowchart LR
     subgraph vertical["Vertical Ranking"]
         direction TB
+        V_INC["PostProcessor
+        .reOrderGlobalEntitiesV2()"]
+        V_ENG["FeedRowRanker"]
         V_IF["FeedRow"]
         V_STEP["FeedRowRankingStep"]
-        V_TYPES["MODEL_SCORING
-        MULTIPLIER_BOOST
-        DIVERSITY_RERANK
-        POSITION_BOOSTING
-        FIXED_PINNING"]
-        V_ENG["FeedRowRanker"]
-        V_INC["Incision: PostProcessor
-        .reOrderGlobalEntitiesV2()"]
 
         V_INC --> V_ENG
         V_ENG --> V_IF
         V_ENG --> V_STEP
-        V_STEP --- V_TYPES
     end
 
     subgraph horizontal["Horizontal Ranking"]
         direction TB
+        H_INC["StoreRanker
+        .modifyLiteStoreCollection()"]
+        H_ENG["RowItemRanker"]
         H_IF["RowItem"]
         H_STEP["RowItemRankingStep"]
-        H_TYPES["MODEL_SCORING
-        SCORE_MODIFIER
-        CAMPAIGN_SORT
-        BUSINESS_RULES_SORT
-        ORDER_HISTORY_RERANK"]
-        H_ENG["RowItemRanker"]
-        H_INC["Incision: StoreRanker
-        .modifyLiteStoreCollection()"]
 
         H_INC --> H_ENG
         H_ENG --> H_IF
         H_ENG --> H_STEP
-        H_STEP --- H_TYPES
     end
 
     style vertical fill:#e6f0ff,stroke:#0055cc
