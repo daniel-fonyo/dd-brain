@@ -42,7 +42,7 @@ Every stakeholder confirmed these pains independently (Frank Zhang, Yu Zhang, Di
 
 - Rewriting ranking logic. Steps call the same existing methods.
 - Changing any experiment behavior or traffic allocation.
-- Horizontal ranking (`DefaultHomePageStoreRanker`) — follows once vertical is proven.
+- Horizontal ranking (`DefaultHomePageStoreRanker`) — defined alongside vertical, follows same pattern.
 - MLE self-service experiment declaration — future work built on these abstractions.
 
 ---
@@ -91,17 +91,16 @@ New files (pure additions):
 Existing files modified: NONE
 ```
 
-### `FeedRowRankingStep` Interface + 4 Step Wrappers
+### `FeedRowRankingStep` Interface + 2 Step Wrappers
 
-Each inline ranking method gets a step wrapper. The step's `process()` calls the **same existing
-method** — same class, same arguments, same logic. The step is a thin delegation layer.
+The existing `BaseEntityRankerConfiguration.rank()` has 4 sub-calls, but code analysis shows they collapse into **2 separable units**. Each step wraps existing methods — same class, same arguments, same logic.
 
 | Step class | Wraps (existing method) | Current location |
 |---|---|---|
-| `ModelScoringStep` | Sibyl ML scoring | `EntityScorer.score()` via `BaseEntityRankerConfiguration.getScoreBundle()` |
-| `MultiplierBoostStep` | Calibration x intent x vertical boost weights | `BlendingUtil.blendBundle()` |
-| `DiversityRerankStep` | Rx vs non-Rx diversity balancing | `BlendingUtil.rerankEntitiesWithDiversity()` |
-| `FixedPinningStep` | Position pinning + boost-by-position | `BoostingBundle.boosted()` + `RankingBundle.ranked()` |
+| `ModelScoringStep` | Sibyl ML scoring + blending (calibration × intent × boost weights + diversity rerank) | `getScoreBundle()` → `entityScorer.score()` + `BlendingUtil.blendBundle()` |
+| `BoostAndRankStep` | Score assignment, position boosting, deal multiplier, pin vs flow, reassembly | `getBoostBundle()` + `getRankingBundle()` + `getRankableContent()` |
+
+**Why only 2?** Scoring and blending are entangled inside `getScoreBundleWithWorkflowHelper()`. Boosting, pinning, and reassembly share mutable state across 3 methods. Finer decomposition requires rearchitecting existing code — which is a future iteration, not step 1.
 
 Parameters are injected from config. Steps do not read DVs or runtime JSON internally.
 
@@ -109,9 +108,7 @@ Parameters are injected from config. Steps do not read DVs or runtime JSON inter
 New files (pure additions):
   ubp/vertical/FeedRowRankingStep.kt         — interface
   ubp/vertical/steps/ModelScoringStep.kt
-  ubp/vertical/steps/MultiplierBoostStep.kt
-  ubp/vertical/steps/DiversityRerankStep.kt
-  ubp/vertical/steps/FixedPinningStep.kt
+  ubp/vertical/steps/BoostAndRankStep.kt
 
 Existing files modified: NONE
 ```
@@ -246,10 +243,8 @@ same operations — but through step wrappers instead of inline method calls.
 
 | Step | What it calls | Same method as old path? | Additional network calls? |
 |---|---|---|---|
-| `ModelScoringStep` | `EntityScorer.score()` → Sibyl gRPC | Yes — same Sibyl RPC, same model, same features | No |
-| `MultiplierBoostStep` | `BlendingUtil.blendBundle()` | Yes — same in-memory computation | No |
-| `DiversityRerankStep` | `BlendingUtil.rerankEntitiesWithDiversity()` | Yes — same in-memory computation | No |
-| `FixedPinningStep` | `BoostingBundle.boosted()` + `RankingBundle.ranked()` | Yes — same in-memory computation | No |
+| `ModelScoringStep` | `getScoreBundle()` → Sibyl gRPC + `blendBundle()` | Yes — same Sibyl RPC, same blending | No |
+| `BoostAndRankStep` | `getBoostBundle()` + `getRankingBundle()` + `getRankableContent()` | Yes — same in-memory computation | No |
 
 **Each step literally calls the same existing method.** The wrapper adds:
 - One `StepParams` deserialization per step (~0.1ms)
@@ -261,7 +256,7 @@ same operations — but through step wrappers instead of inline method calls.
 - Additional overhead: ~3-5ms per request (adapter conversion + step dispatch + param deser)
 - No additional network calls — same single Sibyl gRPC call
 - No additional cache reads — same local runtime config reads
-- Trace emission (when enabled): ~2-3ms for ~60 trace events (20 rows × 3 traced steps)
+- Trace emission (when enabled): ~1-2ms for ~40 trace events (20 rows × 2 steps)
 - **Total: <10ms additional latency vs old path**
 
 ### Compute and memory
@@ -354,16 +349,14 @@ DealCarousel   ──→ DealCarouselRow  (adapter) ──→ FeedRow interface
 
 **What it is.** Define a family of algorithms, encapsulate each one, and make them interchangeable. Strategy lets the algorithm vary independently from the clients that use it.
 
-**Why we use it.** The ranking pipeline has 4 distinct algorithmic stages (scoring, boosting, diversity, pinning). Today they are hardcoded inline methods. We want each stage to be swappable — a different scoring model, a different diversity algorithm — without changing the engine or other stages.
+**Why we use it.** The ranking pipeline has distinct algorithmic stages. Today they are hardcoded inline methods. We want each stage to be swappable — a different scoring model, different boost config — without changing the engine.
 
 **Where it appears.** Each `FeedRowRankingStep` implementation is a Strategy. The engine doesn't know or care which algorithm runs — it calls `process()` on whatever step the config specifies.
 
 ```
 FeedRowRankingStep (interface = Strategy)
-    ├── ModelScoringStep      — calls Sibyl ML inference
-    ├── MultiplierBoostStep   — applies calibration × intent × boost weights
-    ├── DiversityRerankStep   — greedy rerank penalizing category density
-    └── FixedPinningStep      — enforces configured position pins
+    ├── ModelScoringStep   — Sibyl scoring + blending + diversity (atomic)
+    └── BoostAndRankStep   — position boosting + pinning + reassembly (atomic)
 ```
 
 **Reference:** refactoring.guru/design-patterns/strategy
@@ -379,7 +372,7 @@ FeedRowRankingStep (interface = Strategy)
 **Where it appears.** The engine loops through steps from the pipeline config and calls each one sequentially:
 
 ```
-FeedRow list → [ModelScoringStep] → [MultiplierBoostStep] → [DiversityRerankStep] → [FixedPinningStep] → sorted result
+FeedRow list → [ModelScoringStep] → [BoostAndRankStep] → sorted result
 ```
 
 The chain is config-driven (step sequence comes from JSON), not hardcoded.
@@ -533,9 +526,7 @@ Request → PostProcessor             Request → PostProcessor
   └─ rankAndMergeContent()            ├─ if (ubpEnabled):
        ├─ Sibyl scoring               │     FeedRowRanker.rank()
        ├─ BlendingUtil                 │       ├─ ModelScoringStep
-       └─ Boosting                     │       ├─ MultiplierBoostStep
-                                       │       ├─ DiversityRerankStep
-                                       │       └─ FixedPinningStep
+       └─ Boosting                     │       └─ BoostAndRankStep
                                        └─ else:
                                              rankAndMergeContent()
                                              (old path, unchanged)
@@ -570,7 +561,7 @@ The proposed system uses interfaces and composition, not class hierarchies:
 - `FeedRow` IS A rankable unit → interface, not abstract class.
 - `StoreCarouselRow` IS A `FeedRow` AND HAS A `StoreCarousel` → implements interface, wraps domain object by composition.
 - `FeedRowRankingStep` IS A strategy → interface.
-- `ModelScoringStep` IS A `FeedRowRankingStep` AND HAS A `EntityScorer` → dependency injection, not inheritance.
+- `ModelScoringStep` IS A `FeedRowRankingStep` AND HAS dependencies → dependency injection, not inheritance.
 
 We never extend domain objects (`StoreCarousel`, `ItemCarousel`). They serve a different concern.
 
@@ -604,7 +595,7 @@ Clear lines between layers of the system:
 ### C.4 Naming Conventions
 
 - Interface names are nouns describing what the thing IS: `FeedRow`, `RowItem`, `FeedRowRankingStep`.
-- Implementation names describe what the thing DOES: `ModelScoringStep`, `DiversityRerankStep`.
+- Implementation names describe what the thing DOES: `ModelScoringStep`, `BoostAndRankStep`.
 - No `I` prefix on interfaces (Kotlin convention).
 - No `Impl` suffix on implementations — use descriptive names.
 

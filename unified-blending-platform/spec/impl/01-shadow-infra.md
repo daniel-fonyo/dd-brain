@@ -154,34 +154,23 @@ class UbpContractAssembler(
         // 5. Assemble the equivalent UBP JSON
         val steps = mutableListOf(
             StepConfig("score", "MODEL_SCORING",
-                paramNode("predictor_ref", "p_act")),
-            StepConfig("blend", "MULTIPLIER_BOOST",
-                OBJECT_MAPPER_RELAX.valueToTree(MultiplierBoostParams(
+                OBJECT_MAPPER_RELAX.valueToTree(ModelScoringParams(
+                    predictorRef = "p_act",
+                    predictorName = predictorName.label,
+                    modelName = modelName,
                     calibrationConfig = blendingConfig.calibrationConfig,
                     intentScoringConfig = blendingConfig.intentScoringConfig,
                     verticalBoostWeights = blendingConfig.verticalBoostWeights,
-                ))),
-            StepConfig("diversity", "DIVERSITY_RERANK",
-                OBJECT_MAPPER_RELAX.valueToTree(DiversityRerankParams(
-                    enabled = blendingConfig.rerankingParams.enabled,
+                    diversityEnabled = blendingConfig.rerankingParams.enabled,
                     diversityScoringParams = blendingConfig.rerankingParams.diversityScoringParams,
                 ))),
-        )
-
-        // Boosting step — captures deal multiplier + boost-by-position enforcement
-        if (dealMultiplier != 1.0 || boostAllowList.isNotEmpty()) {
-            steps.add(StepConfig("boost", "POSITION_BOOSTING",
-                OBJECT_MAPPER_RELAX.valueToTree(PositionBoostingParams(
-                    dealCarouselMultiplier = dealMultiplier,
+            StepConfig("boost_and_rank", "BOOST_AND_RANK",
+                OBJECT_MAPPER_RELAX.valueToTree(BoostAndRankParams(
+                    boostByPositionEnabled = boostAllowList.isNotEmpty(),
+                    dealCarouselScoreMultiplier = dealMultiplier,
                     boostByPositionAllowList = boostAllowList.toList(),
-                    nvUnpinEnabled = nvUnpinEnabled,
-                ))))
-        }
-
-        steps.add(StepConfig("pin", "FIXED_PINNING",
-            OBJECT_MAPPER_RELAX.valueToTree(FixedPinningParams(
-                rules = pinnedOrder.map { PinRule(rowId = it.id, position = it.position) },
-            ))))
+                ))),
+        )
 
         val contract = UnifiedExperimentConfig(
             treatments = mapOf("control" to TreatmentConfig(
@@ -237,6 +226,8 @@ class UbpContractAssembler(
         val alwaysOpenType = context.exploreLayoutContext.alwaysOpenType
 
         // Map the modifyLiteStoreCollection() when-chain to UBP steps
+        // Two coarse steps: MODEL_SCORING wraps scoredCollections() (Sibyl + score modifiers, atomic)
+        //                    RANKING_SORT wraps modifyLiteStoreCollection() when(rankingType) dispatch
         val steps = when (rankingType) {
             RankingType.CAROUSEL,
             RankingType.NEW_VERTICAL_CAROUSEL,
@@ -244,19 +235,14 @@ class UbpContractAssembler(
             RankingType.INFLATION_MULTIPLIER_CAROUSEL,
             RankingType.RETENTION_RECOMMENDED_CAROUSEL -> listOf(
                 StepConfig("score", "MODEL_SCORING", scoringParams),
-                StepConfig("boost", "SCORE_MODIFIER",
-                    OBJECT_MAPPER_RELAX.valueToTree(ScoreModifierParams(
+                StepConfig("rank", "RANKING_SORT",
+                    OBJECT_MAPPER_RELAX.valueToTree(RankingSortParams(
+                        rankingType = rankingType.name,
                         boostEnabled = boostEnabled,
                         businessMultipliers = businessBoosts,
                         storeMultipliers = storeBoosts,
-                    ))),
-                StepConfig("campaign", "CAMPAIGN_SORT",
-                    OBJECT_MAPPER_RELAX.valueToTree(CampaignSortParams(
                         campaignStoreOrder = campaignSortOrders.map { it.storeId },
                         businessSortOverrides = businessSortOverrides,
-                    ))),
-                StepConfig("rules", "BUSINESS_RULES_SORT",
-                    OBJECT_MAPPER_RELAX.valueToTree(BusinessRulesSortParams(
                         applyOpenClosed = true,
                         alwaysOpenType = alwaysOpenType,
                     ))),
@@ -268,8 +254,9 @@ class UbpContractAssembler(
                     .getMxLogoPriorityVerticalIds()[collection.id] ?: emptyList()
                 listOf(
                     StepConfig("score", "MODEL_SCORING", scoringParams),
-                    StepConfig("rules", "BUSINESS_RULES_SORT",
-                        OBJECT_MAPPER_RELAX.valueToTree(BusinessRulesSortParams(
+                    StepConfig("rank", "RANKING_SORT",
+                        OBJECT_MAPPER_RELAX.valueToTree(RankingSortParams(
+                            rankingType = rankingType.name,
                             applyOpenClosed = true,
                             alwaysOpenType = alwaysOpenType,
                             priorityBusinessIds = priorityBizIds,
@@ -279,28 +266,41 @@ class UbpContractAssembler(
             }
             RankingType.PICKUP_STORE_FEED,
             RankingType.MAP_CAROUSEL -> listOf(
-                StepConfig("rules", "BUSINESS_RULES_SORT",
-                    paramNode("sort_by", "DISTANCE")),
+                StepConfig("rank", "RANKING_SORT",
+                    OBJECT_MAPPER_RELAX.valueToTree(RankingSortParams(
+                        rankingType = rankingType.name,
+                        sortBy = "DISTANCE",
+                    ))),
             )
             RankingType.BOOKMARKS -> listOf(
-                StepConfig("rules", "BUSINESS_RULES_SORT",
-                    paramNode("sort_by", "SAVELIST_ORDER")),
+                StepConfig("rank", "RANKING_SORT",
+                    OBJECT_MAPPER_RELAX.valueToTree(RankingSortParams(
+                        rankingType = rankingType.name,
+                        sortBy = "SAVELIST_ORDER",
+                    ))),
             )
             RankingType.DISTANCE_DECAYED_POPULARITY,
             RankingType.CATEGORY_AND_DISTANCE_DECAYED_POPULARITY -> listOf(
-                StepConfig("rules", "BUSINESS_RULES_SORT",
-                    paramNode("sort_by", "DISTANCE_DECAYED_POPULARITY")),
+                StepConfig("rank", "RANKING_SORT",
+                    OBJECT_MAPPER_RELAX.valueToTree(RankingSortParams(
+                        rankingType = rankingType.name,
+                        sortBy = "DISTANCE_DECAYED_POPULARITY",
+                    ))),
             )
             RankingType.WHOLE_ORDER_REORDER -> listOf(
                 StepConfig("score", "MODEL_SCORING", scoringParams),
-                StepConfig("order_rerank", "ORDER_HISTORY_RERANK",
-                    paramNode("enabled", true)),
+                StepConfig("rank", "RANKING_SORT",
+                    OBJECT_MAPPER_RELAX.valueToTree(RankingSortParams(
+                        rankingType = rankingType.name,
+                        orderHistoryRerankEnabled = true,
+                    ))),
             )
             RankingType.NOOP -> emptyList()
             else -> listOf(
                 StepConfig("score", "MODEL_SCORING", scoringParams),
-                StepConfig("rules", "BUSINESS_RULES_SORT",
-                    OBJECT_MAPPER_RELAX.valueToTree(BusinessRulesSortParams(
+                StepConfig("rank", "RANKING_SORT",
+                    OBJECT_MAPPER_RELAX.valueToTree(RankingSortParams(
+                        rankingType = rankingType.name,
                         applyOpenClosed = true,
                         alwaysOpenType = alwaysOpenType,
                     ))),
@@ -347,46 +347,42 @@ class UbpContractAssembler(
 ### New Params Classes for Assembly
 
 ```kotlin
-/** Captures Boosting.kt logic: deal multiplier + boost-by-position enforcement. */
-data class PositionBoostingParams(
-    @JsonProperty("deal_carousel_multiplier")
-    val dealCarouselMultiplier: Double = 1.0,
+/** Vertical: wraps getBoostBundle() + getRankingBundle() + getRankableContent(). */
+data class BoostAndRankParams(
+    @JsonProperty("boost_by_position_enabled")
+    val boostByPositionEnabled: Boolean = false,
+    @JsonProperty("deal_carousel_score_multiplier")
+    val dealCarouselScoreMultiplier: Double = 1.0,
     @JsonProperty("boost_by_position_allow_list")
     val boostByPositionAllowList: List<String> = emptyList(),
-    @JsonProperty("nv_unpin_enabled")
-    val nvUnpinEnabled: Boolean = false,
 ) : StepParams
 
-/** Captures per-business/store score multipliers from runtime JSON. */
-data class ScoreModifierParams(
+/** Horizontal: wraps modifyLiteStoreCollection() when(rankingType) dispatch. */
+data class RankingSortParams(
+    @JsonProperty("ranking_type")
+    val rankingType: String,
     @JsonProperty("boost_enabled")
     val boostEnabled: Boolean = false,
     @JsonProperty("business_multipliers")
     val businessMultipliers: Map<String, Double> = emptyMap(),
     @JsonProperty("store_multipliers")
     val storeMultipliers: Map<String, Double> = emptyMap(),
-) : StepParams
-
-/** Captures campaign-based sort orders and business priority overrides. */
-data class CampaignSortParams(
     @JsonProperty("campaign_store_order")
     val campaignStoreOrder: List<String> = emptyList(),
     @JsonProperty("business_sort_overrides")
     val businessSortOverrides: List<String> = emptyList(),
-) : StepParams
-
-/** Captures the full comparator chain inputs for BUSINESS_RULES_SORT. */
-data class BusinessRulesSortParams(
     @JsonProperty("apply_open_closed")
     val applyOpenClosed: Boolean = true,
     @JsonProperty("sort_by")
-    val sortBy: String? = null,  // "DISTANCE", "SAVELIST_ORDER", "DISTANCE_DECAYED_POPULARITY"
+    val sortBy: String? = null,
     @JsonProperty("always_open_type")
     val alwaysOpenType: String = "CONTROL",
     @JsonProperty("priority_business_ids")
     val priorityBusinessIds: List<String> = emptyList(),
     @JsonProperty("priority_vertical_ids")
     val priorityVerticalIds: List<Long> = emptyList(),
+    @JsonProperty("order_history_rerank_enabled")
+    val orderHistoryRerankEnabled: Boolean = false,
 ) : StepParams
 ```
 
@@ -434,33 +430,24 @@ ubp_assembled_contract
       },
       "vertical_pipeline": {
         "steps": [
-          { "id": "score", "type": "MODEL_SCORING", "params": { "predictor_ref": "p_act" } },
-          {
-            "id": "blend", "type": "MULTIPLIER_BOOST",
-            "params": {
+          { "id": "score", "type": "MODEL_SCORING", "params": {
+              "predictor_ref": "p_act",
               "calibration_config": { "calibration_entries": [...], "default_multiplier": 1.0 },
               "intent_scoring_config": { "feature_configs": [...], "score_lookup_entries": [...], "default_score": 1.0 },
               "vertical_boost_weights": {
                 "boosting_multipliers": [{ "vertical_ids": [2], "multiplier": 1.2 }],
-                "default_multiplier": 1.0,
-                "item_carousel_boosting_multipliers": [{ "vertical_ids": [10], "multiplier": 0.9 }],
-                "item_carousel_default_multiplier": 1.0
-              }
+                "default_multiplier": 1.0
+              },
+              "diversity_enabled": false,
+              "diversity_scoring_params": { "weight": 0.0 }
             }
           },
-          { "id": "diversity", "type": "DIVERSITY_RERANK", "params": { "enabled": false, "diversity_scoring_params": { "weight": 0.0 } } },
-          {
-            "id": "boost", "type": "POSITION_BOOSTING",
-            "params": {
-              "deal_carousel_multiplier": 1.0,
-              "boost_by_position_allow_list": ["dt:some_carousel", "nv_carousel"],
-              "nv_unpin_enabled": false
+          { "id": "boost_and_rank", "type": "BOOST_AND_RANK", "params": {
+              "boost_by_position_enabled": true,
+              "deal_carousel_score_multiplier": 1.0,
+              "boost_by_position_allow_list": ["dt:some_carousel", "nv_carousel"]
             }
-          },
-          { "id": "pin", "type": "FIXED_PINNING", "params": { "rules": [
-            { "row_id": "taste_of_dashpass", "position": 3 },
-            { "row_id": "member_pricing", "position": 0 }
-          ] } }
+          }
         ]
       }
     }
@@ -485,9 +472,13 @@ ubp_assembled_contract
       "horizontal_pipeline": {
         "steps": [
           { "id": "score", "type": "MODEL_SCORING", "params": { "predictor_name": "feed_ranking_fw", "model_name": "store_ranker_fw_v4" } },
-          { "id": "boost", "type": "SCORE_MODIFIER", "params": { "boost_enabled": true, "business_multipliers": {"biz_123": 1.3}, "store_multipliers": {} } },
-          { "id": "campaign", "type": "CAMPAIGN_SORT", "params": { "campaign_store_order": [], "business_sort_overrides": ["biz_456", "biz_789"] } },
-          { "id": "rules", "type": "BUSINESS_RULES_SORT", "params": { "apply_open_closed": true, "always_open_type": "SCHEDULE_AHEAD_AFTER_ASAP" } }
+          { "id": "rank", "type": "RANKING_SORT", "params": {
+              "ranking_type": "CAROUSEL",
+              "boost_enabled": true, "business_multipliers": {"biz_123": 1.3}, "store_multipliers": {},
+              "campaign_store_order": [], "business_sort_overrides": ["biz_456", "biz_789"],
+              "apply_open_closed": true, "always_open_type": "SCHEDULE_AHEAD_AFTER_ASAP"
+            }
+          }
         ]
       }
     }
@@ -503,7 +494,8 @@ ubp_assembled_contract
       "horizontal_pipeline": {
         "steps": [
           { "id": "score", "type": "MODEL_SCORING", "params": { "predictor_name": "feed_ranking", "model_name": "store_ranker_v1" } },
-          { "id": "rules", "type": "BUSINESS_RULES_SORT", "params": {
+          { "id": "rank", "type": "RANKING_SORT", "params": {
+            "ranking_type": "MX_LOGO_CAROUSEL",
             "apply_open_closed": true,
             "priority_business_ids": ["biz_100", "biz_200"],
             "priority_vertical_ids": [2, 10]
@@ -522,7 +514,7 @@ ubp_assembled_contract
     "control": {
       "horizontal_pipeline": {
         "steps": [
-          { "id": "rules", "type": "BUSINESS_RULES_SORT", "params": { "sort_by": "DISTANCE" } }
+          { "id": "rank", "type": "RANKING_SORT", "params": { "ranking_type": "PICKUP_STORE_FEED", "sort_by": "DISTANCE" } }
         ]
       }
     }
@@ -640,28 +632,28 @@ return scoredCollections.map { collection ->
 
 ---
 
-## New Step Types Discovered
+## Step Decomposition
 
-The code audit revealed vertical and horizontal ranking logic that doesn't map to the original
-4 step types. New step types needed:
+We are NOT boiling the ocean. This is step 1. Finer decomposition is a future iteration once
+interfaces are proven.
 
-### Vertical
+### Vertical (2 steps)
 
-| Step type | What it captures | Replaces today |
+| Step type | What it wraps | Replaces today |
 |---|---|---|
-| `POSITION_BOOSTING` | Deal carousel multiplier + boost-by-position enforcement + NV unpinning | `Boosting.kt` logic after blending |
+| `MODEL_SCORING` | `getScoreBundle()` — Sibyl gRPC + `BlendingUtil.blendBundle()` including diversity rerank (all one atomic call) | `EntityRankerConfiguration.getScoreBundleWithWorkflowHelper()` + `BlendingUtil` |
+| `BOOST_AND_RANK` | `getBoostBundle()` + `getRankingBundle()` + `getRankableContent()` — score assignment to domain objects, position boosting, deal multiplier, pin vs flow sort order, reassembly (all one atomic flow) | `Boosting.kt` + `BoostingBundle.boosted()` + `RankingBundle.ranked()` |
 
-### Horizontal
+### Horizontal (2 steps)
 
-| Step type | What it captures | Replaces today |
+| Step type | What it wraps | Replaces today |
 |---|---|---|
-| `SCORE_MODIFIER` | Per-business/store score multipliers from runtime JSON | `getScoreModifierMap()` in `StoreCollectionScorer.kt` |
-| `CAMPAIGN_SORT` | Campaign-positioned stores + business sort order overrides | `StoreCarouselService.sortStoreEntitiesForCarousels()` campaign logic |
-| `BUSINESS_RULES_SORT` | Open/closed sort + AlwaysOpen type + priority business/vertical reordering | `StoreCarouselService` comparator chain + `StoreStatusComparator` |
-| `ORDER_HISTORY_RERANK` | S1/S2/S3 reranking by order history | `WholeOrderReorderFilterUtil.getGoToOrders()` |
+| `MODEL_SCORING` | `scoredCollections()` — Sibyl + score modifiers (atomic) | `StoreCollectionScorer` |
+| `RANKING_SORT` | `modifyLiteStoreCollection()` `when(rankingType)` dispatch — all ranking-type-specific logic in one step | `DefaultHomePageStoreRanker.modifyLiteStoreCollection()` when-chain |
 
-**Note:** These step types are for assembly/logging first. Whether they become real engine steps
-depends on what the assembled contracts reveal. Some may collapse into existing steps.
+**Note:** These are intentionally coarse. The old 5-step decomposition (SCORE_MODIFIER,
+CAMPAIGN_SORT, BUSINESS_RULES_SORT, ORDER_HISTORY_RERANK) was premature — those are internal
+details of `RANKING_SORT`. Finer decomposition happens in a future iteration.
 
 ---
 
@@ -671,8 +663,8 @@ depends on what the assembled contracts reveal. Some may collapse into existing 
 Phase A: Assembly + Visual Inspection
   Shadow assembles contracts per request, logs them.
   You grep/query the logs, inspect contract JSONs visually.
-  Identify: "the shape is stable — vertical always has 5 steps,
-  horizontal has 4 default + per-carousel overrides."
+  Identify: "the shape is stable — vertical always has 2 steps,
+  horizontal has 2 default + per-carousel overrides."
   KEY: experimentMap logged alongside → explains every decision.
 
 Phase B: Freeze into Static control.json
@@ -708,10 +700,8 @@ Phase A is where you spend time. Phases B-D are mechanical.
 |---|---|
 | New | `libraries/common/.../ubp/shadow/UbpContractAssembler.kt` |
 | New | `libraries/common/.../ubp/shadow/AssembledContract.kt` |
-| New | `libraries/common/.../ubp/vertical/steps/PositionBoostingStep.kt` (params class) |
-| New | `libraries/common/.../ubp/horizontal/params/ScoreModifierParams.kt` |
-| New | `libraries/common/.../ubp/horizontal/params/CampaignSortParams.kt` |
-| New | `libraries/common/.../ubp/horizontal/params/BusinessRulesSortParams.kt` |
+| New | `libraries/common/.../ubp/vertical/steps/BoostAndRankStep.kt` (step + params class) |
+| New | `libraries/common/.../ubp/horizontal/steps/RankingSortStep.kt` (step + params class) |
 | Modify | `DefaultHomePagePostProcessor.kt` — add shadow assembler call after old path |
 | Modify | `DefaultHomePageStoreRanker.kt` — add shadow assembler call after old path |
 
@@ -731,8 +721,8 @@ before the engine exists. This is the fast path to visual feedback.
 - Assembler runs on sandbox and emits `ubp_assembled_contract` logs for both layers
 - **experimentMap snapshot** logged with every contract
 - You can grep a `request_id` and see the full vertical + horizontal contract JSONs
-- Vertical contracts show: predictor, blending params, diversity state, **boosting state**, pin rules
-- Horizontal contracts show: per-carousel step sequences, **score modifiers**, **campaign sort orders**, **business overrides**, ranking type mappings, AlwaysOpen type
+- Vertical contracts show: predictor, blending params (including diversity), boost-and-rank params
+- Horizontal contracts show: per-carousel step sequences, MODEL_SCORING params, RANKING_SORT params with ranking type mappings
 - Contract shape has stabilized across 1000+ requests
 - Static `control.json` written from representative assembled contract
 - Shadow with static `control.json` shows `divergence_count = 0`

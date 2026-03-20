@@ -161,12 +161,8 @@ Add `FeedRowRanker`, `UbpContractAssembler`, and `UbpTraceEmitter` to the DI mod
 @Provides @Singleton
 fun provideStepRegistry(
     modelScoringStep: ModelScoringStep,
-    multiplierBoostStep: MultiplierBoostStep,
-    diversityRerankStep: DiversityRerankStep,
-    fixedPinningStep: FixedPinningStep,
-): StepRegistry = buildStepRegistry(
-    modelScoringStep, multiplierBoostStep, diversityRerankStep, fixedPinningStep,
-)
+    boostAndRankStep: BoostAndRankStep,
+): StepRegistry = buildStepRegistry(modelScoringStep, boostAndRankStep)
 
 @Provides @Singleton
 fun provideUbpRuntimeUtil(
@@ -278,7 +274,7 @@ fun `FeedRowRanker rank with ResolvedPipeline uses same dispatch as rank with ex
 
 - Part 1: Shadow branch + `UbpContractAssembler` exists in both pipeline files
 - Part 2: `toFeedRows()` and `applyRankedRows()` helpers defined
-- Part 3: All 4 step implementations (`ModelScoringStep`, `MultiplierBoostStep`, `DiversityRerankStep`, `FixedPinningStep`)
+- Part 3: Both step implementations (`ModelScoringStep`, `BoostAndRankStep`)
 - Part 4: `FeedRowRanker` and `buildStepRegistry()` implemented
 - Part 5: `UbpRuntimeUtil`, `ResolvedPipeline`, and config data classes in place
 

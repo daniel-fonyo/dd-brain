@@ -11,9 +11,7 @@ Each `VerticalProcessor` is a Strategy. The engine doesn't know or care which al
 ```
 VerticalProcessor (interface)
     ├── ModelScoringProcessor
-    ├── MultiplierBoostProcessor
-    ├── DiversityRerankProcessor
-    └── FixedPinningProcessor
+    └── BoostAndRankProcessor
 ```
 
 The config JSON picks which strategies run and in what order. The engine dispatches.
@@ -25,10 +23,10 @@ The config JSON picks which strategies run and in what order. The engine dispatc
 Each step receives the component list, does its work, and passes it to the next. The step order is **hardcoded in the engine** — it is determined by the semantics of each step and never needs to change:
 
 ```
-components → [MODEL_SCORING] → [MULTIPLIER_BOOST] → [DIVERSITY_RERANK] → [FIXED_PINNING] → sorted result
+components → [MODEL_SCORING] → [BOOST_AND_RANK] → sorted result
 ```
 
-There is no valid experiment where this order would be different: you can't boost before you have scores, can't diversity-rerank before you've boosted, can't pin before final scores exist. MLEs configure params within each step, not the sequence itself.
+There is no valid experiment where this order would be different: you can't boost before you have scores. MLEs configure params within each step, not the sequence itself.
 
 ---
 
@@ -93,11 +91,10 @@ EV(c, k) = pImp(k) × pAct(c) × vAct(c)
 **Where each variable is computed in the pipeline:**
 
 ```
-MODEL_SCORING     → calls Sibyl → writes pAct(c) to component.score
-MULTIPLIER_BOOST  → multiplies score by calibration + boost weights
-                    (approximates vAct today; becomes explicit in Phase 3)
-DIVERSITY_RERANK  → adjusts scores to enforce page diversity constraints
-FIXED_PINNING     → overrides score for hard-pinned components
+MODEL_SCORING     → calls Sibyl → BlendingUtil.blendBundle() including diversity rerank
+                    → writes pAct(c) × vAct(c) approximation to component.score
+BOOST_AND_RANK    → score assignment to domain objects, position boosting, deal multiplier,
+                    pin vs flow sort order, reassembly
 final sort        → sorts by component.score descending = sorts by EV descending
 ```
 
@@ -149,7 +146,7 @@ Step order is hardcoded in the engine. MLEs configure only the knobs:
 }
 ```
 
-The engine always runs: `MODEL_SCORING → MULTIPLIER_BOOST → DIVERSITY_RERANK → FIXED_PINNING`.
+The engine always runs: `MODEL_SCORING → BOOST_AND_RANK`.
 MLEs never configure the sequence — they configure what each step does.
 
 ### What MLEs never touch
@@ -173,22 +170,20 @@ The key difference: carousels have different ranking needs. Favorites needs orde
 | Root cause | Current code | UBP fix |
 |---|---|---|
 | Each carousel type owns its ranking logic | `FavoritesCarousel`, `DVCarousel`, `TasteCarousel` each have bespoke `when` chains in `modifyLiteStoreCollection()` | `HorizontalProcessor` registry + `carousel_overrides` in config |
-| S1/S2/S3 reranking is invisible | `rerankDecoratedEntities()` runs after Iguazu fires — logged positions ≠ positions users see | `ORDER_HISTORY_RERANK` step, auto-traced like any other |
+| S1/S2/S3 reranking is invisible | `rerankDecoratedEntities()` runs after Iguazu fires — logged positions ≠ positions users see | `RANKING_SORT` step (includes order history rerank), auto-traced like any other |
 | Same config fragmentation | Predictor selection across 5+ DVs, feature construction hardcoded in `StoreCollectionScorer` | Same `p_act` + `steps` contract as vertical |
 
 ### Horizontal step types
 
-| Step type | What it does | Replaces in current code |
+| Step type | What it wraps | Replaces in current code |
 |---|---|---|
-| `MODEL_SCORING` | Call Sibyl, assign score to each store/item | `StoreCollectionScorer.regressionContext()` |
-| `MULTIPLIER_BOOST` | Strategic boost (NV, DashPass, campaign) | `getScoreModifierMap()` inside scorer |
-| `BUSINESS_RULES_SORT` | Apply open/closed, priority biz, campaign pin rules | `modifyLiteStoreCollection()` when-chain |
-| `ORDER_HISTORY_RERANK` | S1/S2/S3 tier reranking by order history | `FavoritesCarousel.rerankDecoratedEntities()` |
+| `MODEL_SCORING` | `scoredCollections()` — Sibyl + score modifiers (atomic) | `StoreCollectionScorer` |
+| `RANKING_SORT` | `modifyLiteStoreCollection()` `when(rankingType)` dispatch | `DefaultHomePageStoreRanker.modifyLiteStoreCollection()` when-chain |
 
 ### Minimal horizontal JSON
 
-Step order is hardcoded: `MODEL_SCORING → MULTIPLIER_BOOST → BUSINESS_RULES_SORT → ORDER_HISTORY_RERANK`.
-`carousel_overrides` lets specific carousels opt in/out of steps that don't apply to them.
+Step order is hardcoded: `MODEL_SCORING → RANKING_SORT`.
+`carousel_overrides` lets specific carousels configure different ranking-type-specific params.
 
 ```json
 {
@@ -229,4 +224,4 @@ Step order is hardcoded: `MODEL_SCORING → MULTIPLIER_BOOST → BUSINESS_RULES_
 
 Per-carousel param overrides on top of the defaults. The engine applies the default config first, then merges the carousel-specific override for that carousel type. This keeps carousel-specific logic (S1/S2/S3 only on FAVORITES, NV boost only on NV) declared explicitly rather than hardcoded inside carousel classes.
 
-The `ORDER_HISTORY_RERANK` step is notable: today it runs silently after Iguazu fires, so logged positions ≠ positions users see. Under UBP it's a declared step — auto-traced, logged positions are accurate.
+Order history reranking (now part of the `RANKING_SORT` step) is notable: today it runs silently after Iguazu fires, so logged positions ≠ positions users see. Under UBP it's inside a declared step — auto-traced, logged positions are accurate.

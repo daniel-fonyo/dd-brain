@@ -81,120 +81,25 @@ data class ModelScoringParams(
 The `predictor_ref` string in config JSON is resolved by `FeedRowRanker` (not here). By the
 time `step.process()` is called, `ModelScoringParams` contains the full `PredictorConfig`.
 
-### MultiplierBoostParams
+### BoostAndRankParams
 
-Mirrors the existing `VerticalBlendingConfig` structure exactly — because `MULTIPLIER_BOOST`
-wraps `BlendingUtil.blendBundle()` which reads these same fields from
-`hp_vertical_blending_config.json`. **Structural alignment is required for shadow comparison
-to produce zero divergence.**
-
-```kotlin
-// In MultiplierBoostStep.kt
-data class MultiplierBoostParams(
-    @JsonProperty("calibration_config")
-    val calibrationConfig: CalibrationConfig = CalibrationConfig(),
-
-    @JsonProperty("intent_scoring_config")
-    val intentScoringConfig: IntentScoringConfig = IntentScoringConfig(),
-
-    @JsonProperty("vertical_boost_weights")
-    val verticalBoostWeights: VerticalBoostWeights = VerticalBoostWeights(),
-) : StepParams
-
-data class CalibrationConfig(
-    @JsonProperty("calibration_entries")
-    val calibrationEntries: List<CalibrationEntry> = emptyList(),
-    @JsonProperty("default_multiplier")
-    val defaultMultiplier: Double = 1.0,
-)
-
-data class CalibrationEntry(
-    @JsonProperty("vertical_ids")
-    val verticalIds: List<Long> = emptyList(),
-    @JsonProperty("piecewise_multipliers")
-    val piecewiseMultipliers: List<PiecewiseMultiplier> = emptyList(),
-)
-
-data class PiecewiseMultiplier(
-    @JsonProperty("min_score")  val minScore: Double,
-    @JsonProperty("max_score")  val maxScore: Double,
-    @JsonProperty("multiplier") val multiplier: Double,
-)
-
-data class IntentScoringConfig(
-    @JsonProperty("feature_configs")
-    val featureConfigs: List<Any> = emptyList(),       // complex nested — preserve as-is from existing config
-    @JsonProperty("score_lookup_entries")
-    val scoreLookupEntries: List<Any> = emptyList(),
-    @JsonProperty("default_score")
-    val defaultScore: Double = 1.0,
-)
-
-data class VerticalBoostWeights(
-    @JsonProperty("boosting_multipliers")
-    val boostingMultipliers: List<BoostingMultiplier> = emptyList(),
-    @JsonProperty("default_multiplier")
-    val defaultMultiplier: Double = 1.0,
-    @JsonProperty("item_carousel_boosting_multipliers")
-    val itemCarouselBoostingMultipliers: List<BoostingMultiplier> = emptyList(),
-    @JsonProperty("item_carousel_default_multiplier")
-    val itemCarouselDefaultMultiplier: Double = 1.0,
-)
-
-data class BoostingMultiplier(
-    @JsonProperty("vertical_ids") val verticalIds: List<Long>,
-    @JsonProperty("multiplier")   val multiplier: Double,
-)
-```
-
-### DiversityRerankParams
-
-Mirrors the existing `RerankingParams` from `hp_vertical_blending_config.json`.
+Replaces the old `MultiplierBoostParams`, `DiversityRerankParams`, `PositionBoostingParams`,
+and `FixedPinningParams`. The `BOOST_AND_RANK` step wraps `getBoostBundle()` +
+`getRankingBundle()` + `getRankableContent()` as one atomic flow.
 
 ```kotlin
-// In DiversityRerankStep.kt
-data class DiversityRerankParams(
-    @JsonProperty("enabled")
-    val enabled: Boolean = false,
+// In BoostAndRankStep.kt
+data class BoostAndRankParams(
+    @JsonProperty("boost_by_position_enabled")
+    val boostByPositionEnabled: Boolean = false,
 
-    @JsonProperty("diversity_scoring_params")
-    val diversityScoringParams: DiversityScoringParams = DiversityScoringParams(),
+    @JsonProperty("deal_carousel_score_multiplier")
+    val dealCarouselScoreMultiplier: Double = 1.0,
+
+    @JsonProperty("boost_by_position_allow_list")
+    val boostByPositionAllowList: List<String> = emptyList(),
 ) : StepParams
-
-data class DiversityScoringParams(
-    @JsonProperty("weight")
-    val weight: Double = 0.0,
-    @JsonProperty("coefficient_for_non_rx")
-    val coefficientForNonRx: Double = 1.0,
-    @JsonProperty("local_window_size_for_non_rx")
-    val localWindowSizeForNonRx: Int = 1,
-    @JsonProperty("local_coefficient_for_non_rx")
-    val localCoefficientForNonRx: Double = 1.0,
-)
 ```
-
-### FixedPinningParams
-
-```kotlin
-// In FixedPinningStep.kt
-data class FixedPinningParams(
-    @JsonProperty("rules")
-    val rules: List<PinRule> = emptyList(),
-) : StepParams
-
-data class PinRule(
-    @JsonProperty("row_id")
-    val rowId: String? = null,           // pin specific carousel by exact ID (e.g. "pad_carousel")
-    @JsonProperty("row_type")
-    val rowType: String? = null,         // pin first carousel of this RowType.name
-    @JsonProperty("position")
-    val position: Int,                   // required — 0-indexed
-    @JsonProperty("hard_pin")
-    val hardPin: Boolean = true,
-)
-```
-
-Validated at step entry: `require(rule.rowId != null || rule.rowType != null)`.
 
 ---
 
@@ -486,23 +391,15 @@ the seed is correct (target: `divergence_count = 0`).
     },
     "vertical_pipeline": {
       "steps": [
-        { "id": "score",     "type": "MODEL_SCORING",    "params": { "predictor_ref": "p_act" } },
+        { "id": "score", "type": "MODEL_SCORING", "params": { "predictor_ref": "p_act" } },
         {
-          "id": "blend", "type": "MULTIPLIER_BOOST",
+          "id": "boost_and_rank", "type": "BOOST_AND_RANK",
           "params": {
-            "calibration_config":    { "calibration_entries": [], "default_multiplier": 1.0 },
-            "intent_scoring_config": { "feature_configs": [], "score_lookup_entries": [], "default_score": 1.0 },
-            "vertical_boost_weights": {
-              "boosting_multipliers": [], "default_multiplier": 1.0,
-              "item_carousel_boosting_multipliers": [], "item_carousel_default_multiplier": 1.0
-            }
+            "boost_by_position_enabled": false,
+            "deal_carousel_score_multiplier": 1.0,
+            "boost_by_position_allow_list": []
           }
-        },
-        {
-          "id": "diversity", "type": "DIVERSITY_RERANK",
-          "params": { "enabled": false, "diversity_scoring_params": { "weight": 0.0 } }
-        },
-        { "id": "pin", "type": "FIXED_PINNING", "params": { "rules": [] } }
+        }
       ]
     },
     "output_config": { "emit_trace": false, "max_feed_rows": 20 }
@@ -539,50 +436,25 @@ the seed is correct (target: `divergence_count = 0`).
 Pipeline steps are unchanged. Only `p_act` is overridden. The `MODEL_SCORING` step's
 `predictor_ref: "p_act"` resolves to this new `PredictorConfig`.
 
-### Mode 1: Adjust NV boost weight
+### Mode 1: Adjust boost-and-rank params
 
 ```json
 {
-  "treatment_nv_1_5x": {
+  "treatment_boost_enabled": {
     "extends": "control",
     "step_params": {
-      "blend": {
-        "vertical_boost_weights": {
-          "boosting_multipliers": [{ "vertical_ids": [10], "multiplier": 1.5 }],
-          "default_multiplier": 1.0,
-          "item_carousel_boosting_multipliers": [],
-          "item_carousel_default_multiplier": 1.0
-        }
+      "boost_and_rank": {
+        "boost_by_position_enabled": true,
+        "deal_carousel_score_multiplier": 1.5,
+        "boost_by_position_allow_list": ["dt:some_carousel", "nv_carousel"]
       }
     }
   }
 }
 ```
 
-The entire `vertical_boost_weights` object is replaced (shallow merge replaces the top-level
-key). If only `boosting_multipliers` needs changing, the full `vertical_boost_weights` object
-must be re-declared — intentional, prevents partial-override stale-value bugs.
-
-### Mode 1: Enable diversity reranking
-
-```json
-{
-  "treatment_diversity_v1": {
-    "extends": "control",
-    "step_params": {
-      "diversity": {
-        "enabled": true,
-        "diversity_scoring_params": {
-          "weight": 0.4,
-          "coefficient_for_non_rx": 0.6,
-          "local_window_size_for_non_rx": 3,
-          "local_coefficient_for_non_rx": 0.3
-        }
-      }
-    }
-  }
-}
-```
+The entire `boost_and_rank` params object is replaced (shallow merge replaces the top-level
+key). Intentional — prevents partial-override stale-value bugs.
 
 ---
 
@@ -593,13 +465,14 @@ in Phase 1 — there is no single "value function step."
 
 | Component | Phase 1 approximation | Step |
 |---|---|---|
-| `pAct(c)` — P(user acts given they see carousel c) | Sibyl model output | `MODEL_SCORING` |
-| `vAct(c)` — value of that action | calibration × intent × boost weight | `MULTIPLIER_BOOST` |
+| `pAct(c)` — P(user acts given they see carousel c) | Sibyl model output + blending (calibration, intent, boost, diversity) | `MODEL_SCORING` |
+| `vAct(c)` — value of that action | score assignment, position boosting, deal multiplier | `BOOST_AND_RANK` |
 | `pImp(k)` — P(user sees position k) | **1.0 — not implemented** | deferred to Phase 3 |
 
-**Step order is load-bearing:** `MODEL_SCORING` sets the base score; `MULTIPLIER_BOOST`
-multiplies into it. Pipeline config should enforce this order. Phase 3 introduces an explicit
-`VALUE_FUNCTION` step that computes `pImp × pAct × vAct` with position decay.
+**Step order is load-bearing:** `MODEL_SCORING` sets the base score (Sibyl + blending);
+`BOOST_AND_RANK` handles post-scoring operations. Pipeline config should enforce this order.
+Phase 3 introduces an explicit `VALUE_FUNCTION` step that computes `pImp × pAct × vAct`
+with position decay.
 
 ---
 
@@ -612,9 +485,8 @@ prod ranking output. The five requirements for `divergence_count = 0`:
 |---|---|---|
 | `p_act.predictor_name` matches prod | `EntityRankerConfiguration` | Read the predictor currently in use, set in `control.json` |
 | `p_act.model_name` matches prod | Same | Same |
-| `MULTIPLIER_BOOST` params match prod | `hp_vertical_blending_config.json` | Bootstrap from `P13nRuntimeUtil.getVerticalBlendingConfigMap()` |
-| `DIVERSITY_RERANK.enabled` matches prod | `RerankingParams.enabled` in same file | Default is `false` — verify before deploying |
-| `FIXED_PINNING.rules` match prod | `pinned_carousel_ranking_order.json` | Bootstrap from `PinnedCarouselUtil` |
+| `MODEL_SCORING` blending params match prod | `hp_vertical_blending_config.json` | Bootstrap from `P13nRuntimeUtil.getVerticalBlendingConfigMap()` |
+| `BOOST_AND_RANK` params match prod | `Boosting.kt` config | Bootstrap from existing boost config |
 
 **Bootstrap approach (from plan.md):** At init time, read the existing runtime JSON files and
 construct `control.json` values from them. Do not hand-author param values — any drift between
@@ -662,9 +534,8 @@ No pod restart needed for param changes.
 class UbpRuntimeUtilTest {
 
     private val controlSteps = listOf(
-        StepConfig("score",     "MODEL_SCORING",    paramNode("predictor_ref", "p_act")),
-        StepConfig("blend",     "MULTIPLIER_BOOST", emptyNode()),
-        StepConfig("diversity", "DIVERSITY_RERANK",  paramNode("enabled", false)),
+        StepConfig("score",          "MODEL_SCORING",  paramNode("predictor_ref", "p_act")),
+        StepConfig("boost_and_rank", "BOOST_AND_RANK", emptyNode()),
     )
     private val controlPredictors = mapOf(
         "p_act" to PredictorConfig(predictorName = "feed_ranking", modelName = "v1")
@@ -684,12 +555,12 @@ class UbpRuntimeUtilTest {
 
     @Test
     fun `resolve Mode 1 merges step_params on top of control`() {
-        val config = addTreatment("treatment_div", TreatmentConfig(
+        val config = addTreatment("treatment_boost", TreatmentConfig(
             extends = "control",
-            stepParams = mapOf("diversity" to paramNode("enabled", true)),
+            stepParams = mapOf("boost_and_rank" to paramNode("boost_by_position_enabled", true)),
         ))
-        val result = util(config).resolve("exp1", "treatment_div")
-        assertTrue(result.steps.first { it.id == "diversity" }.rawParams.get("enabled").booleanValue())
+        val result = util(config).resolve("exp1", "treatment_boost")
+        assertTrue(result.steps.first { it.id == "boost_and_rank" }.rawParams.get("boost_by_position_enabled").booleanValue())
     }
 
     @Test
@@ -708,7 +579,7 @@ class UbpRuntimeUtilTest {
             verticalPipeline = PipelineConfig(steps = listOf(StepConfig("score", "MODEL_SCORING", emptyNode()))),
         ))
         val result = util(config).resolve("exp1", "treatment_m2")
-        assertEquals(1, result.steps.size)   // only the declared step, not control's 3
+        assertEquals(1, result.steps.size)   // only the declared step, not control's 2
     }
 }
 ```
@@ -727,7 +598,6 @@ class UbpRuntimeUtilTest {
 
 - All data classes parse the sample JSON correctly (Jackson deserialization unit tests pass)
 - `UbpRuntimeUtil.resolve()` passes all 4 unit tests above
-- `control.json` exists with all 4 steps (score → blend → diversity → pin)
-- `control.json` values bootstrapped from `hp_vertical_blending_config.json` at init time
-- `StepParams` sealed interface defined; all 4 `*Params` classes defined in their step files
-- `MultiplierBoostParams` struct matches `VerticalBlendingConfig` field-for-field
+- `control.json` exists with 2 steps (score → boost_and_rank)
+- `control.json` values bootstrapped from existing config at init time
+- `StepParams` sealed interface defined; `ModelScoringParams` and `BoostAndRankParams` defined in their step files

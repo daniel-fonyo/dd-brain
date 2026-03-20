@@ -86,7 +86,7 @@ None of this is possible without clean interfaces. You cannot make ranking confi
 
 ## Goals
 
-1. **Introduce vertical interfaces** — `FeedRow` + 9 adapters, `FeedRowRankingStep` + 5 step wrappers, `FeedRowRanker` engine.
+1. **Introduce vertical interfaces** — `FeedRow` + 9 adapters, `FeedRowRankingStep` + 2 step wrappers, `FeedRowRanker` engine.
 2. **Introduce horizontal interfaces** — `RowItem` + adapters, `RowItemRankingStep` + 2 step wrappers, `RowItemRanker` engine.
 3. **Align on these as the stable contract** — these interfaces and their typed params are the API surface all future UBP work builds on. They must be right.
 4. **Shadow validate both layers** — prove each new path produces identical results to the old path before any traffic migrates.
@@ -96,7 +96,7 @@ None of this is possible without clean interfaces. You cannot make ranking confi
 
 | Not doing | Why |
 | :---- | :---- |
-| Rewriting ranking logic | Steps call the same existing methods — `EntityScorer.score()`, `BlendingUtil.blendBundle()`, etc. |
+| Rewriting ranking logic | Steps call the same existing methods — `getScoreBundle()`, `getBoostBundle()`, etc. |
 | Changing experiment behavior or traffic | This is pure infrastructure — no user-visible change |
 | Self-service MLE experiments | Future work built on these interfaces |
 | Unified value function | Future work — requires calibration infrastructure |
@@ -120,7 +120,7 @@ None of this is possible without clean interfaces. You cannot make ranking confi
 | Phase | What | Duration |
 | :---- | :---- | :---- |
 | **0. Characterization tests** | Lock down current vertical + horizontal ranking behavior with golden master tests | 1 week |
-| **1. Vertical interfaces** | `FeedRow`, `FeedRowRankingStep`, 5 step wrappers, `FeedRowRanker` engine — all pure additions | 2 weeks |
+| **1. Vertical interfaces** | `FeedRow`, `FeedRowRankingStep`, 2 step wrappers, `FeedRowRanker` engine — all pure additions | 2 weeks |
 | **2. Horizontal interfaces** | `RowItem`, `RowItemRankingStep`, 2 step wrappers, `RowItemRanker` engine — mirrors vertical | 1-2 weeks |
 | **3. Shadow validation** | Wire shadow paths in `PostProcessor` (vertical) and `StoreRanker` (horizontal). Run both paths, compare sort orders, log divergences. Target: `divergence_count = 0` | 2 weeks |
 | **4. Rollout** | DV-gated gradual migration per layer: 1% → 5% → 25% → 50% → 100% | 2-3 weeks |
@@ -261,7 +261,10 @@ Adapters hold the domain object via `val` (immutable reference). `StepParams` su
 
 ### Vertical Steps: `FeedRowRankingStep`
 
-Each inline ranking method gets a step wrapper. The step calls the **same existing method** — same class, same arguments, same logic. The step is a thin delegation layer that makes the method independently configurable and testable.
+The existing `BaseEntityRankerConfiguration.rank()` template method has 4 sub-calls, but code analysis shows they collapse into **2 separable units**:
+
+- `getScoreBundle()` is atomic: Sibyl scoring + `BlendingUtil.blendBundle()` (which includes calibration, intent, boost weights, AND diversity rerank) are all inside one method.
+- `getBoostBundle()` + `getRankingBundle()` + `getRankableContent()` are one atomic flow: score assignment to 9 domain types, position boosting, deal multiplier, pin vs flow sort order, and reassembly. These share mutable state and cannot be reordered.
 
 ```kotlin
 interface FeedRowRankingStep {
@@ -275,13 +278,10 @@ interface FeedRowRankingStep {
 
 | Step | Type | Wraps (existing method) | Params |
 | :---- | :---- | :---- | :---- |
-| `ModelScoringStep` | `MODEL_SCORING` | `EntityScorer.score()` → Sibyl gRPC | `ModelScoringParams(predictorRef, predictorName, modelName)` |
-| `MultiplierBoostStep` | `MULTIPLIER_BOOST` | `BlendingUtil.blendBundle()` | `MultiplierBoostParams(calibrationConfig, intentScoringConfig, verticalBoostWeights)` |
-| `DiversityRerankStep` | `DIVERSITY_RERANK` | `BlendingUtil.rerankEntitiesWithDiversity()` | `DiversityRerankParams(enabled, diversityScoringParams)` |
-| `PositionBoostingStep` | `POSITION_BOOSTING` | Position boost + deal multiplier logic | `PositionBoostingParams(dealCarouselMultiplier, boostByPositionAllowList, nvUnpinEnabled)` |
-| `FixedPinningStep` | `FIXED_PINNING` | `BoostingBundle.boosted()` | `FixedPinningParams(rules: List<PinRule>)` |
+| `ModelScoringStep` | `MODEL_SCORING` | `getScoreBundle()` — Sibyl gRPC + `blendBundle()` (calibration × intent × boost weights + diversity rerank, all one atomic call) | `ModelScoringParams(predictorRef, predictorName, modelName)` |
+| `BoostAndRankStep` | `BOOST_AND_RANK` | `getBoostBundle()` + `getRankingBundle()` + `getRankableContent()` — score assignment to domain objects, position boosting, deal multiplier, pin vs flow sort order, reassembly | `BoostAndRankParams(boostByPositionEnabled, dealCarouselScoreMultiplier, boostByPositionAllowList)` |
 
-Each `StepParams` subclass uses real field names from existing feed-service data classes (`VerticalBlendingConfig`, `CalibrationConfig`, `IntentScoringConfig`, `VerticalBoostWeights`, `DiversityScoringParams`). No new config schema — the params mirror what already exists, just structured.
+**Why only 2 steps?** The code analysis of `EntityRankerConfiguration` shows that blending, diversity rerank, and scoring are entangled inside `getScoreBundleWithWorkflowHelper()` (lines 95-171). Position boosting, pinning, and reassembly share mutable state across `getBoostBundle()` (274-531), `getRankingBundle()` (533-562), and `getRankableContent()` (564-603). Splitting these into finer steps would require rearchitecting the existing code — which defeats the purpose of wrapping. Finer decomposition is a future iteration once the interfaces are proven and the old code can be refactored safely behind them.
 
 ### Horizontal Steps: `RowItemRankingStep`
 
@@ -293,7 +293,7 @@ interface RowItemRankingStep {
 }
 ```
 
-The horizontal pipeline is structurally different from vertical. Vertical has 5 distinct phases that can be separated into individual steps. Horizontal has two atomic phases that cannot be decomposed further without rearchitecting existing sort logic:
+Both layers have the same structure: 2 atomic steps that wrap existing code without rearchitecting it.
 
 | Step | Type | Wraps (existing method) | Params |
 | :---- | :---- | :---- | :---- |
@@ -390,48 +390,24 @@ classDiagram
         +predictorName: String?
         +modelName: String?
     }
-    class MultiplierBoostParams {
-        +calibrationConfig: CalibrationConfig
-        +intentScoringConfig: IntentScoringConfig
-        +verticalBoostWeights: VerticalBoostWeights
-    }
-    class DiversityRerankParams {
-        +enabled: Boolean
-        +diversityScoringParams: DiversityScoringParams
-    }
-    class PositionBoostingParams {
-        +dealCarouselMultiplier: Double
+    class BoostAndRankParams {
+        +boostByPositionEnabled: Boolean
+        +dealCarouselScoreMultiplier: Double
         +boostByPositionAllowList: List~String~
-        +nvUnpinEnabled: Boolean
-    }
-    class FixedPinningParams {
-        +rules: List~PinRule~
     }
 
     StepParams <|.. ModelScoringParams
-    StepParams <|.. MultiplierBoostParams
-    StepParams <|.. DiversityRerankParams
-    StepParams <|.. PositionBoostingParams
-    StepParams <|.. FixedPinningParams
+    StepParams <|.. BoostAndRankParams
 
     class ModelScoringStep
-    class MultiplierBoostStep
-    class DiversityRerankStep
-    class PositionBoostingStep
-    class FixedPinningStep
+    class BoostAndRankStep
 
     FeedRowRankingStep <|.. ModelScoringStep
-    FeedRowRankingStep <|.. MultiplierBoostStep
-    FeedRowRankingStep <|.. DiversityRerankStep
-    FeedRowRankingStep <|.. PositionBoostingStep
-    FeedRowRankingStep <|.. FixedPinningStep
+    FeedRowRankingStep <|.. BoostAndRankStep
     FeedRowRankingStep --> StepParams : params
 
     ModelScoringStep --> ModelScoringParams
-    MultiplierBoostStep --> MultiplierBoostParams
-    DiversityRerankStep --> DiversityRerankParams
-    PositionBoostingStep --> PositionBoostingParams
-    FixedPinningStep --> FixedPinningParams
+    BoostAndRankStep --> BoostAndRankParams
 
     class FeedRowRanker {
         -stepRegistry: Map~String, FeedRowRankingStep~
@@ -540,8 +516,8 @@ Once the UBP path is the primary path (old path off), there is no duplication. E
 | Operation | Additional latency |
 | :---- | :---- |
 | `FeedRow` / `RowItem` adapter conversion | ~1-2ms |
-| Step registry lookup (5 steps × 2 layers) | ~0.1ms |
-| `StepParams` deserialization (10 steps total) | ~1ms |
+| Step registry lookup (2 steps × 2 layers) | ~0.1ms |
+| `StepParams` deserialization (4 steps total) | ~0.5ms |
 | Trace emission (when enabled) | ~2-3ms |
 | **Total additional overhead vs current path** | **<5ms** |
 
@@ -596,13 +572,13 @@ This is why this RFC exists — not just to get code reviewed, but to get alignm
 | `RowItem` | Same field set for horizontal | Every horizontal step and every carousel-level ranking integration depends on this shape |
 | `RowType` enum | 9 entries today | Adding is easy; removing or renaming is a breaking change across all adapters and any step that filters by type |
 | `FeedRowRankingStep` / `RowItemRankingStep` | `process(rows, context, params)` signature | Every step implementation, every engine dispatch, and every future partner step depends on this signature |
-| `StepParams` subclasses | Field names and types (`ModelScoringParams`, `MultiplierBoostParams`, etc.) | All experiment configs, all MLE-facing tooling, and all config validation depends on these field names |
+| `StepParams` subclasses | Field names and types (`ModelScoringParams`, `BoostAndRankParams`, `RankingSortParams`) | All experiment configs, all MLE-facing tooling, and all config validation depends on these field names |
 
 **What can change later:** New `RowType` entries. New `StepParams` subclasses. New step types registered in the engine. New fields added to existing params (with defaults). These are additive and non-breaking.
 
 **What cannot change without migration:** Removing `FeedRow` fields. Changing the `process()` signature. Renaming `StepParams` fields that experiments already reference. Removing `RowType` entries.
 
-**Open question for reviewers:** Are `FeedRow` and `RowItem` the right names? Are the 5 fields on each (`id`, `type`, `score`, `metadata`, `applyBackTo()`) the right surface? This is the time to debate — not after 20 adapters and 10 step implementations depend on them.
+**Open question for reviewers:** Are `FeedRow` and `RowItem` the right names? Are the 5 fields on each (`id`, `type`, `score`, `metadata`, `applyBackTo()`) the right surface? This is the time to debate — not after 12 adapters and 4 step implementations depend on them.
 
 ---
 
@@ -706,14 +682,11 @@ EV(c, k) = pImp(k) × pAct(c) × vAct(c)
 
 | Step | Formula component | Status |
 | :---- | :---- | :---- |
-| `MODEL_SCORING` | Sets `pAct(c)` — the Sibyl model score | Explicit |
-| `MULTIPLIER_BOOST` | Approximates `vAct(c)` via calibration × intent × boost weights | Implicit — becomes explicit when value weights are configurable |
-| `DIVERSITY_RERANK` | Adjusts scores to enforce page diversity constraints | Orthogonal to formula — a post-hoc constraint |
-| `POSITION_BOOSTING` | Deal carousel multiplier + position enforcement | Operational — not part of the theoretical formula |
-| `FIXED_PINNING` | Hard-pin overrides | Operational — overrides formula output |
+| `MODEL_SCORING` | Sets `pAct(c)` via Sibyl + approximates `vAct(c)` via calibration × intent × boost weights + enforces diversity constraints | Currently one atomic step — scoring, blending, and diversity are entangled in `getScoreBundle()` |
+| `BOOST_AND_RANK` | Deal carousel multiplier, position enforcement, pin vs flow sort order | Operational — not part of the theoretical formula |
 | `pImp(k)` | Not yet modeled | Post-POC — steps are position-unaware during scoring |
 
-The interfaces don't commit to a value function. They make it possible to add one incrementally by introducing new step types (e.g., `CALIBRATION`, `VALUE_WEIGHTING`) without changing the engine.
+Today `MODEL_SCORING` does too much — it combines `pAct`, `vAct` approximation, and diversity in one call because that's how the existing code works. As the interfaces mature, this can be decomposed into separate scoring, calibration, and diversity steps. The interfaces don't commit to a value function. They make it possible to add one incrementally by introducing new step types (e.g., `CALIBRATION`, `VALUE_WEIGHTING`, `DIVERSITY`) without changing the engine.
 
 ---
 
@@ -724,11 +697,10 @@ The interfaces don't commit to a value function. They make it possible to add on
 | Vertical ranking entry point | `DefaultHomePagePostProcessor.reOrderGlobalEntitiesV2()` | Incision point for `FeedRowRanker` |
 | Current ranking skeleton | `BaseEntityRankerConfiguration.rank()` | Template Method being replaced |
 | Carousel type flattening (9 types) | `EntityRankerConfiguration.getEntities()` | What `FeedRow` adapters replace |
-| Sibyl ML scoring | `SibylRegressor.kt` | Wrapped by `ModelScoringStep` |
-| Blending logic | `VerticalBlending.kt`, `BlendingUtil` | Wrapped by `MultiplierBoostStep` + `DiversityRerankStep` |
-| Boosting / pinning | `BoostingBundle`, `RankingBundle` | Wrapped by `PositionBoostingStep` + `FixedPinningStep` |
-| Blending config (vertical) | `VerticalBlendingConfig.kt` | Source of truth for `MultiplierBoostParams` field names |
-| Step params (already in prod) | `StepParams.kt` | Production data classes — `ModelScoringParams`, `MultiplierBoostParams`, etc. |
+| Sibyl ML scoring + blending | `EntityRankerConfiguration.getScoreBundleWithWorkflowHelper()` | Wrapped by `ModelScoringStep` (scoring + blendBundle + diversity — one atomic call) |
+| Boosting / pinning / reassembly | `EntityRankerConfiguration.getBoostBundle()` + `getRankingBundle()` + `getRankableContent()` | Wrapped by `BoostAndRankStep` (one atomic flow) |
+| Blending config (vertical) | `VerticalBlendingConfig.kt` | Config fields used by `ModelScoringStep` internally |
+| Step params (already in prod) | `StepParams.kt` | Production data classes — `ModelScoringParams`, etc. |
 | Horizontal ranking entry point | `DefaultHomePageStoreRanker.rank()` | Incision point for `RowItemRanker` |
 | Horizontal sort dispatch | `DefaultHomePageStoreRanker.modifyLiteStoreCollection()` | `when(rankingType)` dispatch wrapped by `RankingSortStep` |
 | Horizontal comparator chain | `StoreCarouselService.sortDiscoveryStoresWithBizRules()` | Atomic 5-level comparator — called within `RankingSortStep` |

@@ -29,22 +29,13 @@ The control is the canonical definition of production behavior. HP owns it. All 
         }
       },
       {
-        "id": "calibrate",
-        "type": "CALIBRATION",
-        "params": { "calibration_table": "default_piecewise_v1" }
-      },
-      {
-        "id": "blend",
-        "type": "MULTIPLIER_BOOST",
+        "id": "boost_and_rank",
+        "type": "BOOST_AND_RANK",
         "params": {
-          "vertical_boost_weights": { "1": 1.0, "10": 1.2 },
-          "intent_lookup_table": "default_intent_v1"
+          "boost_by_position_enabled": false,
+          "deal_carousel_score_multiplier": 1.0,
+          "boost_by_position_allow_list": []
         }
-      },
-      {
-        "id": "pin",
-        "type": "FIXED_PINNING",
-        "params": { "pinning_rules": "default_pinned_order" }
       }
     ]
   }
@@ -84,23 +75,31 @@ DV: `ubp_hp_vertical_fw_v4` → `treatment_fw_v4`
 
 ---
 
-## Case 2: Adjust a Boost Weight
+## Case 2: Adjust Boost-and-Rank Params
 
-Testing whether a different NV boost improves metrics.
+Testing whether different boost settings improve metrics.
 
 ```json
 // ubp/experiments/nv_vertical_boost.json
 {
-  "treatment_nv_1_5x": {
+  "treatment_boost_enabled": {
     "extends": "control",
     "step_params": {
-      "blend": { "vertical_boost_weights": { "1": 1.0, "10": 1.5 } }
+      "boost_and_rank": {
+        "boost_by_position_enabled": true,
+        "deal_carousel_score_multiplier": 1.5,
+        "boost_by_position_allow_list": ["dt:some_carousel"]
+      }
     }
   },
-  "treatment_nv_2x": {
+  "treatment_boost_2x": {
     "extends": "control",
     "step_params": {
-      "blend": { "vertical_boost_weights": { "1": 1.0, "10": 2.0 } }
+      "boost_and_rank": {
+        "boost_by_position_enabled": true,
+        "deal_carousel_score_multiplier": 2.0,
+        "boost_by_position_allow_list": ["dt:some_carousel"]
+      }
     }
   }
 }
@@ -134,7 +133,8 @@ Testing exploration bonus for under-exposed stores.
 
 ## Case 4: New Intent Model
 
-Testing a new intent model that requires its own calibration table and intent lookup.
+Testing a new intent model. Under the new 2-step decomposition, model scoring params
+(including intent) are part of the `MODEL_SCORING` step.
 
 ```json
 // ubp/experiments/hp_vertical_intent_v3.json
@@ -143,26 +143,20 @@ Testing a new intent model that requires its own calibration table and intent lo
     "extends": "control",
     "step_params": {
       "score": {
-        "intent_model": "intent_v3_model_id"
-      },
-      "calibrate": {
-        "calibration_table": "intent_v3_calibration"
-      },
-      "blend": {
-        "intent_lookup_table": "intent_v3_lookup"
+        "model_name": "intent_v3_model_id"
       }
     }
   }
 }
 ```
 
-Three step overrides, but still a param-only experiment — no change to pipeline shape.
+Single step override — no change to pipeline shape.
 
 ---
 
 ## Case 5: New Primary Model + Intent Together
 
-Two variables changed in one treatment.
+Two variables changed in one treatment. Both are MODEL_SCORING params under the new decomposition.
 
 ```json
 // ubp/experiments/hp_vertical_fw_v4_intent_v3.json
@@ -171,13 +165,8 @@ Two variables changed in one treatment.
     "extends": "control",
     "step_params": {
       "score": {
-        "primary_model": "store_ranker_fw_v4",
-        "intent_model": "intent_v3_model_id",
-        "ucb_enabled": true,
-        "ucb_model": "ucb_v2"
-      },
-      "calibrate": { "calibration_table": "intent_v3_calibration" },
-      "blend":     { "intent_lookup_table": "intent_v3_lookup" }
+        "model_name": "store_ranker_fw_v4"
+      }
     }
   }
 }
@@ -187,53 +176,33 @@ Two variables changed in one treatment.
 
 ## Case 6: New Pipeline Step (Structural Change)
 
-Testing diversity reranking, which does not exist in control. The step sequence changes, so the full pipeline must be declared.
+Testing a new step type (e.g. MERCH_PLACEMENT) that does not exist in control. The step
+sequence changes, so the full pipeline must be declared.
 
 ```json
-// ubp/experiments/hp_vertical_diversity.json
+// ubp/experiments/hp_vertical_merch.json
 {
-  "treatment_diversity_v1": {
+  "treatment_merch_v1": {
     "vertical_pipeline": {
       "steps": [
         {
           "id": "score",
           "type": "MODEL_SCORING",
+          "params": { "predictor_ref": "p_act" }
+        },
+        {
+          "id": "boost_and_rank",
+          "type": "BOOST_AND_RANK",
           "params": {
-            "primary_predictor": "feed_ranking_fw",
-            "primary_model": "store_ranker_fw_v3",
-            "multiplier_predictor": "universal_ranker_multiplier",
-            "multiplier_model": "multiplier_v3",
-            "ucb_enabled": false,
-            "mab_enabled": false,
-            "intent_predictor": "vertical_intent",
-            "intent_model": ""
+            "boost_by_position_enabled": false,
+            "deal_carousel_score_multiplier": 1.0,
+            "boost_by_position_allow_list": []
           }
         },
         {
-          "id": "calibrate",
-          "type": "CALIBRATION",
-          "params": { "calibration_table": "default_piecewise_v1" }
-        },
-        {
-          "id": "blend",
-          "type": "MULTIPLIER_BOOST",
-          "params": {
-            "vertical_boost_weights": { "1": 1.0, "10": 1.2 },
-            "intent_lookup_table": "default_intent_v1"
-          }
-        },
-        {
-          "id": "diversity",
-          "type": "DIVERSITY_RERANK",
-          "params": {
-            "weight": 0.4,
-            "rx_nrx_balance": 0.6
-          }
-        },
-        {
-          "id": "pin",
-          "type": "FIXED_PINNING",
-          "params": { "pinning_rules": "default_pinned_order" }
+          "id": "merch",
+          "type": "MERCH_PLACEMENT",
+          "params": { "campaign_boost": 1.3 }
         }
       ]
     }
@@ -241,7 +210,7 @@ Testing diversity reranking, which does not exist in control. The step sequence 
 }
 ```
 
-If `DIVERSITY_RERANK` is a new processor type not yet registered, a BE engineer adds it to the registry once. After that, any experiment can use it via config.
+If `MERCH_PLACEMENT` is a new processor type not yet registered, a BE engineer adds it to the registry once. After that, any experiment can use it via config.
 
 ---
 
@@ -264,8 +233,8 @@ If a treatment declares `vertical_pipeline` directly, it takes full precedence �
 | What you're changing | Use |
 |---|---|
 | New primary model version | Case 1: one line in `step_params.score` |
-| Adjust a boost weight | Case 2: one entry in `step_params.blend` |
+| Adjust boost-and-rank params | Case 2: override `step_params.boost_and_rank` |
 | Enable/disable UCB or MAB | Case 3: toggle + model in `step_params.score` |
-| New intent model | Case 4: intent model + calibration + lookup across 3 step_params |
+| New intent model | Case 4: override model in `step_params.score` |
 | Multiple things at once | Case 5: combine step_params entries |
 | New step type (new pipeline stage) | Case 6: declare full `vertical_pipeline`; may need BE to register processor |

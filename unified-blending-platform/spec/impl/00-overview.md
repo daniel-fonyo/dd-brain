@@ -29,7 +29,7 @@ engineers shared vocabulary for review and onboarding.
 
 **Naming:**
 - Interface names are nouns describing what the thing IS: `FeedRow`, `RowItem`, `FeedRowRankingStep`
-- Implementation names describe what the thing DOES: `ModelScoringStep`, `DiversityRerankStep`
+- Implementation names describe what the thing DOES: `ModelScoringStep`, `BoostAndRankStep`
 - No `I` prefix on interfaces (Kotlin convention)
 - No `Impl` suffix on implementations — use descriptive names
 
@@ -57,7 +57,7 @@ Part 5: UnifiedExperimentConfig + UbpRuntimeUtil
   ↓  (config must exist before engine can read it)
 Part 2: FeedRow Interface + Adapters
   ↓  (interface must exist before steps can operate on it)
-Part 3: FeedRowRankingStep Interface + 4 Implementations
+Part 3: FeedRowRankingStep Interface + 2 Implementations
   ↓  (steps must exist before engine can dispatch to them)
 Part 4: FeedRowRanker Engine + Registry
   ↓  (engine must exist before it can be wired in)
@@ -80,7 +80,7 @@ You build Parts 2–7 knowing the contract shape is already validated from real 
 |---|---|---|
 | 1 | Shadow branch + `UbpContractAssembler` — assembles equivalent UBP JSON per request from prod decisions, logs it, compares sort orders | Integration test: assembled contract parses; shadow produces same output |
 | 2 | `FeedRow` interface, `RowType` enum, 9 adapter classes | Unit tests per adapter: `toFeedRow()` + `applyBackTo()` roundtrip |
-| 3 | `FeedRowRankingStep` interface, 4 step classes | Unit tests per step with injected params, no DV reads |
+| 3 | `FeedRowRankingStep` interface, 2 step classes | Unit tests per step with injected params, no DV reads |
 | 4 | `FeedRowRanker`, `stepRegistry` wiring | Unit test: known steps execute in order; unknown step skipped |
 | 5 | `UnifiedExperimentConfig` data classes, `UbpRuntimeUtil` | Unit test: `extends` merge semantics, fallback to control |
 | 6 | Branch in `reOrderGlobalEntitiesV2()` and `rank()` | Integration test: no regression on non-UBP traffic |
@@ -116,9 +116,8 @@ They are not MLE-configurable and do not belong in experiment config JSON.
 | Color bleed reordering | Presentation constraint — adjacent same-brand color prevention, not ranking |
 | Immersive content spacing | Presentation constraint — gap rules between immersive content types, not ranking |
 
-**`FIXED_PINNING` step scope**: The `FIXED_PINNING` step in UBP is only for MLE-configured pins
-declared in experiment JSON (e.g. "for this diversity experiment, hold NV_CAROUSEL at position 0").
-It does NOT replace the hardcoded NV post-checkout pinning or PAD positioning above.
+**`BOOST_AND_RANK` step scope**: The `BOOST_AND_RANK` step in UBP handles score assignment to
+domain objects, position boosting, deal multiplier, pin vs flow sort order, and reassembly. MLE-configured pins declared in experiment JSON (e.g. "for this diversity experiment, hold NV_CAROUSEL at position 0") are part of this step. It does NOT replace the hardcoded NV post-checkout pinning or PAD positioning above.
 
 ### Ads — post-POC scope
 
@@ -130,13 +129,12 @@ organic store and carousel ranking. Ads integration comes after the POC proves t
 ```
 Full EV  = pImp(k) × pAct(c) × vAct(c)
 
-Phase 1  =    1.0  ×  MODEL_SCORING  ×  MULTIPLIER_BOOST
+Phase 1  =    1.0  ×  MODEL_SCORING  ×  BOOST_AND_RANK
 ```
 
 - `pImp(k)` (position decay) is **not implemented in Phase 1** — steps run before final position
   is known
-- `MODEL_SCORING` computes `pAct(c)` — the Sibyl CTR/CVR/order probability
-- `MULTIPLIER_BOOST` approximates `vAct(c)` — boost weights encode business value differences
-  between content types at equal model score
-- Step order in config matters: `MODEL_SCORING` must precede `MULTIPLIER_BOOST`
+- `MODEL_SCORING` computes `pAct(c)` — the Sibyl CTR/CVR/order probability (wraps `getScoreBundle()` including Sibyl gRPC + `BlendingUtil.blendBundle()` + diversity rerank as one atomic call)
+- `BOOST_AND_RANK` approximates `vAct(c)` — handles score assignment to domain objects, position boosting, deal multiplier, pin vs flow sort order, and reassembly
+- Step order in config matters: `MODEL_SCORING` must precede `BOOST_AND_RANK`
 - Phase 3 introduces explicit `pImp` decay and explicit `vAct` weight config

@@ -155,15 +155,14 @@ MLEs don't write pipeline configs or step sequences. That's internal.
 - `FeedRowRankingStep` / `RowItemRankingStep` — one step in the ranking pipeline
 - `FeedRowRanker` / `RowItemRanker` — config-driven orchestrator
 
-### Vertical step types
+### Vertical step types (2 steps)
 
-| Step type | What it does | Replaces in current code |
+We are NOT boiling the ocean. Finer decomposition is a future iteration once interfaces are proven.
+
+| Step type | What it wraps | Replaces in current code |
 |---|---|---|
-| `MODEL_SCORING` | Call Sibyl with predictor + features | `EntityRankerConfiguration.getScoreBundleWithWorkflowHelper()` |
-| `MULTIPLIER_BOOST` | Calibration x intent x vertical boost weights | `BlendingUtil.blendBundle()` |
-| `DIVERSITY_RERANK` | Greedy rerank penalizing non-Rx density | `BlendingUtil.rerankEntitiesWithDiversity()` |
-| `POSITION_BOOSTING` | Deal multiplier + boost-by-position + NV unpin | `Boosting.kt` |
-| `FIXED_PINNING` | MLE-configured position pins | `BoostingBundle.boosted()` |
+| `MODEL_SCORING` | `getScoreBundle()` — Sibyl gRPC + `BlendingUtil.blendBundle()` including diversity rerank (all one atomic call) | `EntityRankerConfiguration.getScoreBundleWithWorkflowHelper()` + `BlendingUtil` |
+| `BOOST_AND_RANK` | `getBoostBundle()` + `getRankingBundle()` + `getRankableContent()` — score assignment, position boosting, deal multiplier, pin vs flow sort order, reassembly (all one atomic flow) | `Boosting.kt` + `BoostingBundle.boosted()` + `RankingBundle.ranked()` |
 
 ### Config fragmentation this solves
 
@@ -228,10 +227,8 @@ Any code that branches on carousel type can start using it.
 
 | Step class | Step type | Wraps |
 |---|---|---|
-| `ModelScoringStep` | `MODEL_SCORING` | `entityScorer.score()` + Sibyl RPC |
-| `MultiplierBoostStep` | `MULTIPLIER_BOOST` | `BlendingUtil.blendBundle()` |
-| `DiversityRerankStep` | `DIVERSITY_RERANK` | `BlendingUtil.rerankEntitiesWithDiversity()` |
-| `FixedPinningStep` | `FIXED_PINNING` | `BoostingBundle.boosted()` |
+| `ModelScoringStep` | `MODEL_SCORING` | `getScoreBundle()` (Sibyl gRPC + BlendingUtil.blendBundle() + diversity rerank — all one atomic call) |
+| `BoostAndRankStep` | `BOOST_AND_RANK` | `getBoostBundle()` + `getRankingBundle()` + `getRankableContent()` (score assignment, position boosting, deal multiplier, pin vs flow sort, reassembly — all one atomic flow) |
 
 **Critical rule:** `params` injected from config. Steps do NOT read DV keys internally.
 
@@ -249,7 +246,7 @@ interface FeedRowRankingStep {
 
 **Key files:**
 - New: `libraries/common/.../ubp/vertical/FeedRowRankingStep.kt`
-- New: `libraries/common/.../ubp/vertical/steps/` (4 implementations)
+- New: `libraries/common/.../ubp/vertical/steps/` (2 implementations)
 
 **Why second:** Steps consume FeedRow (depends on Step 1). Extraction is the scratch-refactoring
 approach: move logic into step classes, verify behavior is preserved, formalize.
@@ -382,7 +379,7 @@ Once FeedRow exists, the onboarding process for a new carousel type becomes:
 
 ```
 1. Write FeedRowAdapter for the new type (1 class)
-2. Stage 1 — Pin: configure FIXED_PINNING step with guaranteed position
+2. Stage 1 — Pin: configure BOOST_AND_RANK step with guaranteed position
 3. Stage 2 — Explore: enable UCB_EXPLORATION step for the new type
 4. Stage 3 — Organic: remove pin, let MODEL_SCORING rank naturally
 ```
@@ -415,7 +412,7 @@ between stages can be defined in config (min impressions, min MAB trials, etc.).
 
 **Abstractions (ship first — independently valuable)**
 - [ ] Step 1: `FeedRow` interface + adapters for all 9 carousel types
-- [ ] Step 2: `FeedRowRankingStep` interface + 4 step implementations
+- [ ] Step 2: `FeedRowRankingStep` interface + 2 step implementations (`ModelScoringStep`, `BoostAndRankStep`)
 
 **Traffic Management (parallel with abstractions)**
 - [ ] Step 3: `UbpExperimentRegistry` + `UbpTrafficRouter` (hash-based bucketing)
