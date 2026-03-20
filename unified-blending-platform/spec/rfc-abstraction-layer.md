@@ -418,6 +418,118 @@ classDiagram
     FeedRowRanker --> FeedRow : operates on
 ```
 
+### Horizontal Class Diagram
+
+The full type hierarchy for the horizontal layer. Same architecture as vertical — `RowItem` mirrors `FeedRow`, `RowItemRankingStep` mirrors `FeedRowRankingStep`. The horizontal layer operates on stores *within* a carousel, while the vertical layer operates on carousels themselves.
+
+```mermaid
+classDiagram
+    direction TB
+
+    class RowItem {
+        <<interface>>
+        +id: String
+        +type: RowItemType
+        +score: Double
+        +metadata: Map~String, Any~
+        +applyBackTo()
+    }
+
+    class RowItemType {
+        <<enum>>
+        STORE_ENTITY
+        ITEM_STORE_ENTITY
+        DEAL_STORE
+    }
+
+    class StoreEntityRowItem {
+        -store: DiscoveryStore
+        +applyBackTo()
+    }
+    class ItemStoreEntityRowItem {
+        -entity: ItemStoreEntity
+        +applyBackTo()
+    }
+    class DealStoreRowItem {
+        -store: DealStore
+        +applyBackTo()
+    }
+
+    RowItem <|.. StoreEntityRowItem
+    RowItem <|.. ItemStoreEntityRowItem
+    RowItem <|.. DealStoreRowItem
+    RowItem --> RowItemType
+
+    class RowItemRankingStep {
+        <<interface>>
+        +stepType: String
+        +paramsClass: Class~StepParams~
+        +process(rows, context, params)
+    }
+
+    class StepParams {
+        <<sealed interface>>
+    }
+
+    class ModelScoringParams {
+        +predictorRef: String?
+        +predictorName: String?
+        +modelName: String?
+    }
+    class RankingSortParams {
+        +rankingType: RankingType
+    }
+
+    StepParams <|.. ModelScoringParams
+    StepParams <|.. RankingSortParams
+
+    class ModelScoringStep {
+        -scorers: Map~RankingType, StoreScorer~
+        +process(rows, context, params)
+    }
+    class RankingSortStep {
+        -storeCarouselService: StoreCarouselService
+        +process(rows, context, params)
+    }
+
+    RowItemRankingStep <|.. ModelScoringStep
+    RowItemRankingStep <|.. RankingSortStep
+    RowItemRankingStep --> StepParams : params
+
+    ModelScoringStep --> ModelScoringParams
+    RankingSortStep --> RankingSortParams
+
+    class RankingType {
+        <<enum>>
+        CAROUSEL
+        CAMPAIGN
+        ITEM_CAROUSEL
+        PICKUP_STORE_FEED
+        BOOKMARKS
+        MAP_CAROUSEL
+        CONTEXTUAL_TASTE_CAROUSEL
+        RETENTION_RECOMMENDED_CAROUSEL
+        WHOLE_ORDER_REORDER
+        ... 20+ more
+    }
+
+    RankingSortParams --> RankingType
+
+    class RowItemRanker {
+        -stepRegistry: Map~String, RowItemRankingStep~
+        +rank(rows, pipeline, context): List~RowItem~
+    }
+
+    RowItemRanker --> RowItemRankingStep : dispatches to
+    RowItemRanker --> RowItem : operates on
+```
+
+**Key differences from vertical:**
+- Only 3 adapters (vs 9 vertical) — horizontal operates on stores within a single carousel type
+- `RankingSortParams` takes a `RankingType` — this determines which sort branch from the current `when(rankingType)` dispatch to apply
+- `ModelScoringStep` dispatches to different scorers based on collection type (StoreCollectionScorer for standard carousels, ContextualStoreScorer for taste carousels, RetentionStoreScorer for retention carousels)
+- `ModelScoringParams` is shared between vertical and horizontal — same struct, same predictor ref semantics
+
 ### Both Layers Side by Side
 
 Same architecture, different types. Vertical proven first, horizontal mirrors it.
