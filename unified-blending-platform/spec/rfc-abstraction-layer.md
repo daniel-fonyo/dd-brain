@@ -224,17 +224,17 @@ flowchart LR
 
 ## Architecture
 
-### Interface 1: `FeedRow` — uniform type for all carousel kinds
+### Vertical Adapter: `FeedRow`
 
-Today, every ranking stage branches on carousel type because there is no shared interface. With `FeedRow`, we adapt once at the boundary — and everything downstream operates on a single type.
+Today, every ranking stage branches on carousel type because there is no shared interface. With `FeedRow`, we adapt once at the boundary — everything downstream operates on a single type.
 
 ```kotlin
 interface FeedRow {
-    val id: String
-    val type: RowType
-    var score: Double
-    val metadata: MutableMap<String, Any>
-    fun applyBackTo()  // writes final score back to the original domain object
+    val id: String            // immutable — set once by adapter
+    val type: RowType         // immutable — set once by adapter
+    var score: Double         // mutable — steps write scores in-place
+    val metadata: MutableMap<String, Any>  // mutable — inter-step data passing
+    fun applyBackTo()         // writes final score back to the original domain object
 }
 
 enum class RowType {
@@ -244,270 +244,22 @@ enum class RowType {
 }
 ```
 
-One adapter class per carousel type — 9 total. Each wraps the domain object, exposes it as `FeedRow`, and writes scores back via `applyBackTo()`. The domain objects are unchanged.
+One adapter class per carousel type — 9 total. Each wraps the domain object via `val` reference, exposes it as `FeedRow`, and writes scores back via `applyBackTo()`. Domain objects are unchanged.
 
-**What this eliminates:** Type-check branching at every ranking stage. Before: 9 branches × 4 stages = 36 type-checks scattered across files. After: 0 type-checks in the pipeline.
+**What this eliminates:** 9 branches x 4 stages = 36 type-checks scattered across files. After: 0 type-checks in the pipeline.
 
-**What this enables:** Adding a new carousel type goes from touching 10+ files to writing 1 adapter class. The engine and all steps work with it automatically.
+**What this enables:** New carousel type = 1 adapter class instead of 10+ file changes.
 
-```
-New files (pure additions):
-  ubp/vertical/FeedRow.kt              — interface
-  ubp/vertical/RowType.kt              — enum
-  ubp/vertical/adapters/*.kt           — 9 adapter classes
+### Horizontal Adapter: `RowItem`
 
-Existing files modified: NONE
-```
-
-### Interface 2: `FeedRowRankingStep` — named, testable ranking stages
-
-Each inline ranking method gets a step wrapper. The step calls the **same existing method** — same class, same arguments, same logic. The step is a thin delegation layer that makes the method independently configurable and testable.
-
-```kotlin
-interface FeedRowRankingStep {
-    val stepType: String
-    val paramsClass: Class<out StepParams>
-    suspend fun process(rows: MutableList<FeedRow>, context: RankingContext, params: StepParams)
-}
-```
-
-Parameters are typed data classes injected from config — steps never read DVs internally. This is the key architectural constraint: **all tunable behavior flows through `params`**.
-
-| Step | Type | Wraps (existing method) | Params |
-| :---- | :---- | :---- | :---- |
-| `ModelScoringStep` | `MODEL_SCORING` | `EntityScorer.score()` → Sibyl gRPC | `ModelScoringParams(predictorRef, predictorName, modelName)` |
-| `MultiplierBoostStep` | `MULTIPLIER_BOOST` | `BlendingUtil.blendBundle()` | `MultiplierBoostParams(calibrationConfig, intentScoringConfig, verticalBoostWeights)` |
-| `DiversityRerankStep` | `DIVERSITY_RERANK` | `BlendingUtil.rerankEntitiesWithDiversity()` | `DiversityRerankParams(enabled, diversityScoringParams)` |
-| `PositionBoostingStep` | `POSITION_BOOSTING` | Position boost + deal multiplier logic | `PositionBoostingParams(dealCarouselMultiplier, boostByPositionAllowList, nvUnpinEnabled)` |
-| `FixedPinningStep` | `FIXED_PINNING` | `BoostingBundle.boosted()` | `FixedPinningParams(rules: List<PinRule>)` |
-
-Each `StepParams` subclass uses real field names from existing feed-service data classes (`VerticalBlendingConfig`, `CalibrationConfig`, `IntentScoringConfig`, `VerticalBoostWeights`, `DiversityScoringParams`). No new config schema to learn — the params mirror what already exists, just structured.
-
-```
-New files (pure additions):
-  ubp/vertical/FeedRowRankingStep.kt         — interface
-  ubp/vertical/StepParams.kt                 — sealed interface + 5 data classes
-  ubp/vertical/steps/ModelScoringStep.kt
-  ubp/vertical/steps/MultiplierBoostStep.kt
-  ubp/vertical/steps/DiversityRerankStep.kt
-  ubp/vertical/steps/PositionBoostingStep.kt
-  ubp/vertical/steps/FixedPinningStep.kt
-
-Existing files modified: NONE
-```
-
-### Interface 3: `FeedRowRanker` — config-driven dispatch engine
-
-The engine reads a step sequence from config, looks up each step in a registry, deserializes its params, and calls `process()`. Zero business logic — pure dispatch.
-
-```kotlin
-class FeedRowRanker(
-    private val stepRegistry: Map<String, FeedRowRankingStep>,
-    private val traceEmitter: UbpTraceEmitter?,
-) {
-    suspend fun rank(rows: MutableList<FeedRow>, pipeline: ResolvedPipeline, context: RankingContext): List<FeedRow> {
-        for (stepConfig in pipeline.steps) {
-            val step = stepRegistry[stepConfig.type] ?: continue  // skip unknown + warn
-            val params = deserialize(stepConfig.rawParams, step.paramsClass)
-            step.process(rows, context, params)
-            traceEmitter?.recordStep(rows, stepConfig.id)  // auto-trace when enabled
-        }
-        return rows.sortedByDescending { it.score }
-    }
-}
-```
-
-```
-New files (pure additions):
-  ubp/vertical/FeedRowRanker.kt        — engine
-  ubp/vertical/StepRegistry.kt         — step lookup
-
-Existing files modified: NONE
-```
-
-### Class diagram
-
-```mermaid
-classDiagram
-    direction TB
-
-    class FeedRow {
-        <<interface>>
-        +id: String
-        +type: RowType
-        +score: Double
-        +metadata: Map~String, Any~
-        +applyBackTo()
-    }
-
-    class RowType {
-        <<enum>>
-        STORE_CAROUSEL
-        ITEM_CAROUSEL
-        DEAL_CAROUSEL
-        STORE_COLLECTION
-        COLLECTION_V2
-        ITEM_COLLECTION
-        MAP_CAROUSEL
-        REELS_CAROUSEL
-        STORE_ENTITY
-    }
-
-    class StoreCarouselRow {
-        -carousel: StoreCarousel
-        +applyBackTo()
-    }
-    class ItemCarouselRow {
-        -carousel: ItemCarousel
-        +applyBackTo()
-    }
-    class DealCarouselRow {
-        -carousel: DealCarousel
-        +applyBackTo()
-    }
-
-    FeedRow <|.. StoreCarouselRow
-    FeedRow <|.. ItemCarouselRow
-    FeedRow <|.. DealCarouselRow
-    FeedRow --> RowType
-    note for FeedRow "9 adapter classes total\n(6 more omitted for brevity)"
-
-    class FeedRowRankingStep {
-        <<interface>>
-        +stepType: String
-        +paramsClass: Class~StepParams~
-        +process(rows, context, params)
-    }
-
-    class StepParams {
-        <<sealed interface>>
-    }
-
-    class ModelScoringParams {
-        +predictorRef: String?
-        +predictorName: String?
-        +modelName: String?
-    }
-    class MultiplierBoostParams {
-        +calibrationConfig: CalibrationConfig
-        +intentScoringConfig: IntentScoringConfig
-        +verticalBoostWeights: VerticalBoostWeights
-    }
-    class DiversityRerankParams {
-        +enabled: Boolean
-        +diversityScoringParams: DiversityScoringParams
-    }
-    class PositionBoostingParams {
-        +dealCarouselMultiplier: Double
-        +boostByPositionAllowList: List~String~
-        +nvUnpinEnabled: Boolean
-    }
-    class FixedPinningParams {
-        +rules: List~PinRule~
-    }
-
-    StepParams <|.. ModelScoringParams
-    StepParams <|.. MultiplierBoostParams
-    StepParams <|.. DiversityRerankParams
-    StepParams <|.. PositionBoostingParams
-    StepParams <|.. FixedPinningParams
-
-    class ModelScoringStep {
-        +process(rows, context, params)
-    }
-    class MultiplierBoostStep {
-        +process(rows, context, params)
-    }
-    class DiversityRerankStep {
-        +process(rows, context, params)
-    }
-    class PositionBoostingStep {
-        +process(rows, context, params)
-    }
-    class FixedPinningStep {
-        +process(rows, context, params)
-    }
-
-    FeedRowRankingStep <|.. ModelScoringStep
-    FeedRowRankingStep <|.. MultiplierBoostStep
-    FeedRowRankingStep <|.. DiversityRerankStep
-    FeedRowRankingStep <|.. PositionBoostingStep
-    FeedRowRankingStep <|.. FixedPinningStep
-    FeedRowRankingStep --> StepParams : params
-
-    ModelScoringStep --> ModelScoringParams
-    MultiplierBoostStep --> MultiplierBoostParams
-    DiversityRerankStep --> DiversityRerankParams
-    PositionBoostingStep --> PositionBoostingParams
-    FixedPinningStep --> FixedPinningParams
-
-    class FeedRowRanker {
-        -stepRegistry: Map~String, FeedRowRankingStep~
-        -traceEmitter: UbpTraceEmitter
-        +rank(rows, pipeline, context): List~FeedRow~
-    }
-
-    FeedRowRanker --> FeedRowRankingStep : dispatches to
-    FeedRowRanker --> FeedRow : operates on
-```
-
-### Safe delivery: Shadow → Rollout
-
-We never put users at risk. The migration has two phases:
-
-**Shadow mode:** The old path always runs and always returns the result. The new path runs in parallel (when DV-enabled), its result is discarded, and sort orders are compared. We log every divergence. Target: `divergence_count = 0` across sustained traffic before proceeding.
-
-**Rollout mode:** Once shadow proves zero divergence, a rollout DV gates the new path as primary. Ramped gradually: 1% → 5% → 25% → 50% → 100%. The old path is the `else` branch — compiles and runs identically.
-
-```mermaid
-flowchart TB
-    subgraph shadow["Phase 1: Shadow Mode"]
-        direction TB
-        R1["Request"] --> PP1["PostProcessor"]
-        PP1 --> OLD1["Old Path — always runs"]
-        OLD1 --> RESULT1["Result → User"]
-        PP1 --> DV1{"ubpShadowEnabled?"}
-        DV1 -->|Yes| NEW1["UBP Engine"]
-        DV1 -->|No| SKIP1["Skip"]
-        NEW1 --> CMP["Compare sort orders
-        Log divergences"]
-        CMP --> DISCARD["Discard shadow result"]
-    end
-
-    subgraph rollout["Phase 2: Rollout Mode"]
-        direction TB
-        R2["Request"] --> PP2["PostProcessor"]
-        PP2 --> DV2{"ubpRolloutEnabled?"}
-        DV2 -->|Yes| NEW2["UBP Engine"]
-        DV2 -->|No| OLD2["Old Path (unchanged)"]
-        NEW2 --> RESULT2a["Result → User"]
-        OLD2 --> RESULT2b["Result → User"]
-    end
-
-    shadow -.->|"divergence_count = 0
-    sustained"| rollout
-
-    style shadow fill:#fff8e6,stroke:#cc8800
-    style rollout fill:#e6fff0,stroke:#00aa44
-    style DISCARD fill:#ffcccc,stroke:#cc0000
-```
-
-**Characterization tests with UBP flag OFF must remain green at every stage** — proving the old path is untouched.
-
-### Horizontal Interfaces: `RowItem`, `RowItemRankingStep`, `RowItemRanker`
-
-Horizontal ranking (store/item ordering within each carousel) uses the same architecture as vertical. The interfaces are defined alongside vertical and shipped together. Both layers share the same engine pattern and the same contract guarantees.
-
-#### Interface 4: `RowItem` — uniform type for stores and items within a carousel
-
-Today, each carousel type has its own bespoke sort logic scattered across `StoreRanker`, `CampaignRanker`, and `StoreCarouselService`. With `RowItem`, stores from any carousel are adapted to a single type.
+Same pattern for within-carousel ranking. Each carousel type has bespoke sort logic scattered across `StoreRanker`, `CampaignRanker`, and `StoreCarouselService`. `RowItem` unifies store/item types.
 
 ```kotlin
 interface RowItem {
-    val id: String
-    val type: RowItemType
-    var score: Double
-    val metadata: MutableMap<String, Any>
+    val id: String            // immutable
+    val type: RowItemType     // immutable
+    var score: Double         // mutable — steps write scores in-place
+    val metadata: MutableMap<String, Any>  // mutable — inter-step data passing
     fun applyBackTo()
 }
 
@@ -518,9 +270,49 @@ enum class RowItemType {
 }
 ```
 
-The current horizontal codebase handles stores via `LiteStoreCollection` containing `StoreEntity` objects, with `DealStore` and `ItemStoreEntity` as variants. Each adapter wraps the store object and writes scores back via `applyBackTo()`.
+The current horizontal codebase handles stores via `LiteStoreCollection` containing `StoreEntity` objects, with `DealStore` and `ItemStoreEntity` as variants.
 
-#### Interface 5: `RowItemRankingStep` — horizontal ranking stages
+### Immutability Design
+
+Both `FeedRow` and `RowItem` follow the same immutability contract:
+
+| Field | Mutable? | Why |
+| :---- | :---- | :---- |
+| `id` | No (`val`) | Identity — never changes |
+| `type` | No (`val`) | Set once by adapter |
+| `score` | Yes (`var`) | Steps write scores in-place — this is the pipeline's output |
+| `metadata` | Yes (`MutableMap`) | Inter-step data passing (e.g., score factors for downstream steps) |
+| `applyBackTo()` | N/A | Write-once at pipeline exit — pushes final score to domain object |
+
+Adapters hold the domain object via `val` (immutable reference). `StepParams` subclasses are immutable `data class` instances — all fields are `val`. Steps and engines are stateless — no shared mutable state between requests.
+
+**Mutation is confined to two controlled points:** `score` (the pipeline's output) and `metadata` (inter-step communication). Everything else is immutable by construction.
+
+### Vertical Steps: `FeedRowRankingStep`
+
+Each inline ranking method gets a step wrapper. The step calls the **same existing method** — same class, same arguments, same logic. The step is a thin delegation layer that makes the method independently configurable and testable.
+
+```kotlin
+interface FeedRowRankingStep {
+    val stepType: String                    // immutable — identifies step type
+    val paramsClass: Class<out StepParams>  // immutable — used by engine to deserialize
+    suspend fun process(rows: MutableList<FeedRow>, context: RankingContext, params: StepParams)
+}
+```
+
+**All tunable behavior flows through `params`** — steps never read DVs internally. This is the key architectural constraint.
+
+| Step | Type | Wraps (existing method) | Params |
+| :---- | :---- | :---- | :---- |
+| `ModelScoringStep` | `MODEL_SCORING` | `EntityScorer.score()` → Sibyl gRPC | `ModelScoringParams(predictorRef, predictorName, modelName)` |
+| `MultiplierBoostStep` | `MULTIPLIER_BOOST` | `BlendingUtil.blendBundle()` | `MultiplierBoostParams(calibrationConfig, intentScoringConfig, verticalBoostWeights)` |
+| `DiversityRerankStep` | `DIVERSITY_RERANK` | `BlendingUtil.rerankEntitiesWithDiversity()` | `DiversityRerankParams(enabled, diversityScoringParams)` |
+| `PositionBoostingStep` | `POSITION_BOOSTING` | Position boost + deal multiplier logic | `PositionBoostingParams(dealCarouselMultiplier, boostByPositionAllowList, nvUnpinEnabled)` |
+| `FixedPinningStep` | `FIXED_PINNING` | `BoostingBundle.boosted()` | `FixedPinningParams(rules: List<PinRule>)` |
+
+Each `StepParams` subclass uses real field names from existing feed-service data classes (`VerticalBlendingConfig`, `CalibrationConfig`, `IntentScoringConfig`, `VerticalBoostWeights`, `DiversityScoringParams`). No new config schema — the params mirror what already exists, just structured.
+
+### Horizontal Steps: `RowItemRankingStep`
 
 ```kotlin
 interface RowItemRankingStep {
@@ -535,35 +327,36 @@ interface RowItemRankingStep {
 | `ModelScoringStep` | `MODEL_SCORING` | `StoreCollectionScorer.regressionContext()` → Sibyl gRPC | `ModelScoringParams(predictorRef, predictorName, modelName)` |
 | `ScoreModifierStep` | `SCORE_MODIFIER` | `getScoreModifierMap()` in `StoreCollectionScorer` | `ScoreModifierParams(boostEnabled, businessMultipliers, storeMultipliers)` |
 | `CampaignSortStep` | `CAMPAIGN_SORT` | `StoreCarouselService.sortStoreEntitiesForCarousels()` | `CampaignSortParams(campaignStoreOrder, businessSortOverrides)` |
-| `BusinessRulesSortStep` | `BUSINESS_RULES_SORT` | `StoreCarouselService` comparator chain + `StoreStatusComparator` | `BusinessRulesSortParams(applyOpenClosed, sortBy, alwaysOpenType, priorityBusinessIds, priorityVerticalIds)` |
+| `BusinessRulesSortStep` | `BUSINESS_RULES_SORT` | `StoreCarouselService` comparator chain | `BusinessRulesSortParams(applyOpenClosed, sortBy, alwaysOpenType, priorityBusinessIds, priorityVerticalIds)` |
 | `OrderHistoryRerankStep` | `ORDER_HISTORY_RERANK` | `WholeOrderReorderFilterUtil.getGoToOrders()` | `OrderHistoryRerankParams(enabled)` |
 
-`ModelScoringParams` is shared between vertical and horizontal — same struct, same predictor ref semantics. The remaining params are horizontal-specific.
+`ModelScoringParams` is shared between vertical and horizontal — same struct, same predictor ref semantics.
 
-#### Interface 6: `RowItemRanker` — horizontal dispatch engine
+### Ranking Engines: `FeedRowRanker` and `RowItemRanker`
 
-Identical engine shape to `FeedRowRanker`, operating on `MutableList<RowItem>` instead of `MutableList<FeedRow>`.
+Both engines share the same shape: read a step sequence from config, look up each step in a registry, deserialize its params, call `process()`. Zero business logic — pure dispatch. The engine architecture also enables per-step request tracing in a future iteration (score snapshots before/after each step).
 
 ```kotlin
-class RowItemRanker(
-    private val stepRegistry: Map<String, RowItemRankingStep>,
-    private val traceEmitter: UbpTraceEmitter?,
+class FeedRowRanker(
+    private val stepRegistry: Map<String, FeedRowRankingStep>,  // immutable registry
 ) {
-    suspend fun rank(rows: MutableList<RowItem>, pipeline: ResolvedPipeline, context: RankingContext): List<RowItem> {
+    suspend fun rank(rows: MutableList<FeedRow>, pipeline: ResolvedPipeline, context: RankingContext): List<FeedRow> {
         for (stepConfig in pipeline.steps) {
-            val step = stepRegistry[stepConfig.type] ?: continue
+            val step = stepRegistry[stepConfig.type] ?: continue  // skip unknown + warn
             val params = deserialize(stepConfig.rawParams, step.paramsClass)
             step.process(rows, context, params)
-            traceEmitter?.recordStep(rows, stepConfig.id)
         }
         return rows.sortedByDescending { it.score }
     }
 }
 ```
 
-**Incision point:** `DefaultHomePageStoreRanker.rank()`, replacing each `modifyLiteStoreCollection()` call.
+`RowItemRanker` is identical, operating on `MutableList<RowItem>`.
 
-#### Both layers side by side
+**Vertical incision point:** `DefaultHomePagePostProcessor.reOrderGlobalEntitiesV2()`
+**Horizontal incision point:** `DefaultHomePageStoreRanker.rank()` → each `modifyLiteStoreCollection()` call
+
+### Both layers side by side
 
 ```mermaid
 flowchart LR
@@ -609,32 +402,54 @@ flowchart LR
     style horizontal fill:#f0e6ff,stroke:#7700cc
 ```
 
-```
-New files (pure additions):
-  ubp/horizontal/RowItem.kt                    — interface
-  ubp/horizontal/RowItemType.kt                — enum
-  ubp/horizontal/adapters/*.kt                 — adapter classes
-  ubp/horizontal/RowItemRankingStep.kt         — interface
-  ubp/horizontal/StepParams.kt                 — sealed interface + 5 data classes
-  ubp/horizontal/steps/ModelScoringStep.kt
-  ubp/horizontal/steps/ScoreModifierStep.kt
-  ubp/horizontal/steps/CampaignSortStep.kt
-  ubp/horizontal/steps/BusinessRulesSortStep.kt
-  ubp/horizontal/steps/OrderHistoryRerankStep.kt
-  ubp/horizontal/RowItemRanker.kt              — engine
+### Safe Delivery: Shadow → Rollout
 
-Existing files modified: NONE
+We never put users at risk. The migration has two phases:
+
+**Shadow mode:** The old path always runs and always returns the result. The new path runs **in parallel** (via coroutine, when DV-enabled), its result is discarded, and sort orders are compared. We log every divergence. Target: `divergence_count = 0` across sustained traffic before proceeding.
+
+**Rollout mode:** Once shadow proves zero divergence, a rollout DV gates the new path as primary. Ramped gradually: 1% → 5% → 25% → 50% → 100%. The old path is the `else` branch — compiles and runs identically.
+
+```mermaid
+flowchart TB
+    subgraph shadow["Phase 1: Shadow Mode"]
+        direction TB
+        R1["Request"] --> PP1["PostProcessor"]
+        PP1 --> OLD1["Old Path"]
+        PP1 --> DV1{"ubpShadowEnabled?"}
+        DV1 -->|Yes| NEW1["UBP Engine
+        (parallel coroutine)"]
+        DV1 -->|No| SKIP1["Skip"]
+        OLD1 --> RESULT1["Result → User"]
+        NEW1 --> CMP["Compare sort orders
+        Log divergences
+        Discard shadow result"]
+    end
+
+    subgraph rollout["Phase 2: Rollout Mode"]
+        direction TB
+        R2["Request"] --> PP2["PostProcessor"]
+        PP2 --> DV2{"ubpRolloutEnabled?"}
+        DV2 -->|Yes| NEW2["UBP Engine"]
+        DV2 -->|No| OLD2["Old Path (unchanged)"]
+        NEW2 --> RESULT2a["Result → User"]
+        OLD2 --> RESULT2b["Result → User"]
+    end
+
+    shadow -.->|"divergence_count = 0
+    sustained"| rollout
+
+    style shadow fill:#fff8e6,stroke:#cc8800
+    style rollout fill:#e6fff0,stroke:#00aa44
 ```
+
+**Characterization tests with UBP flag OFF must remain green at every stage** — proving the old path is untouched.
 
 ### Dependencies
 
-**Upstream:** None. This change is internal to feed-service post-processing. Retrieval, grouping, and Sibyl are untouched.
+**Upstream:** None. Internal to feed-service post-processing. Retrieval, grouping, and Sibyl are untouched.
 
-**Downstream:** None. The API response shape is identical. Client apps (iOS, Android, web) see no change. Analytics logging fires from the same callsites with the same data.
-
-### Interface
-
-No new external APIs. All changes are internal to `feed-service`. The UBP engine is called from the same `DefaultHomePagePostProcessor.reOrderGlobalEntitiesV2()` entry point that exists today.
+**Downstream:** None. API response shape is identical. Client apps see no change.
 
 ## Service Level Objectives (SLO)
 
@@ -656,23 +471,25 @@ Once the UBP path is the primary path (old path off), there is no duplication. E
 
 ### Latency — Shadow Mode (Temporary)
 
-Shadow mode runs both the old path and the new path in parallel. This has a real cost:
+Shadow mode runs old and new paths **in parallel** via coroutines. The user-facing response returns as soon as the old path completes — shadow never blocks the response.
 
-**Sibyl calls double during shadow.** The old path makes its Sibyl call as it does today. The UBP `MODEL_SCORING` step makes its own Sibyl call. For vertical ranking, this means 2 Sibyl calls per request instead of 1. For horizontal ranking (per carousel), each carousel's shadow also doubles.
+**Wall-clock latency impact:** Minimal. Since both paths run concurrently, the request duration is `max(old_path, new_path)`, not the sum. The new path wraps the same methods as the old path, so it takes roughly the same time. In practice, shadow adds near-zero wall-clock latency to the user-facing response.
+
+**Sibyl QPS doubles during shadow.** This is the real cost. The old path makes its Sibyl call. The parallel UBP `MODEL_SCORING` step makes its own Sibyl call. For shadow-enabled traffic, Sibyl sees 2x the call volume.
 
 | Shadow impact | Cost | Mitigation |
 | :---- | :---- | :---- |
-| Vertical: +1 Sibyl gRPC call per request | ~15-30ms latency, ~2x vertical Sibyl QPS | Shadow only on small % of traffic (start at 1%). Monitor Sibyl p99 before ramping. |
-| Horizontal: +1 Sibyl call per carousel × N carousels | ~15-30ms × N latency per request | Shadow vertical first. Shadow horizontal separately, at low %. Never shadow both layers simultaneously at high %. |
-| Compute (adapter conversion, step dispatch, comparison) | ~5-15ms | Negligible — local in-memory |
+| Vertical: +1 Sibyl gRPC call per request | ~2x vertical Sibyl QPS for shadow traffic | Shadow only on small % (start at 1%). Monitor Sibyl p99 before ramping. |
+| Horizontal: +1 Sibyl call per carousel | ~2x horizontal Sibyl QPS for shadow traffic | Shadow vertical first, horizontal second. Never shadow both at high %. |
+| Compute (adapter conversion, step dispatch, comparison) | ~5-15ms CPU per request | Parallel — does not block response |
 
 **Mitigations:**
-1. **Ramp shadow % slowly** — start at 1%, monitor Sibyl QPS and p99 latency before increasing.
-2. **Shadow one layer at a time** — validate vertical shadow first, then horizontal. Avoid doubling both simultaneously.
-3. **Consider score reuse** — the shadow `MODEL_SCORING` step could reuse scores from the old path's `ScoreWithFactors` instead of making an independent Sibyl call. This eliminates the Sibyl doubling entirely but means we cannot validate the scoring step independently. **Decision: start with independent calls at low %, switch to score reuse if Sibyl capacity is a concern.**
-4. **Shadow is temporary** — once `divergence_count = 0` is sustained, rollout replaces shadow. The old path turns off and Sibyl QPS returns to baseline.
+1. **Sampling** — shadow does not need to run on every request. A low sample rate (e.g., 1-5% of traffic) is sufficient to validate divergence = 0. This caps the Sibyl QPS overhead to `baseline × sample_rate`.
+2. **Shadow one layer at a time** — validate vertical shadow first, then horizontal. Never double both simultaneously.
+3. **Consider score reuse** — the shadow `MODEL_SCORING` step could reuse scores from the old path's `ScoreWithFactors` instead of making an independent Sibyl call. This eliminates the Sibyl doubling entirely but means we cannot validate the scoring step independently. **Decision: start with independent calls at low sample rate, switch to score reuse if dependency capacity is a concern.**
+4. **Shadow is temporary** — once `divergence_count = 0` is sustained, rollout replaces shadow. The old path turns off and dependency QPS returns to baseline.
 
-**User-facing response is never affected by shadow.** Shadow results are discarded. Shadow latency is additive to wall-clock time but the user-facing response returns as soon as the old path completes.
+**Dependency impact during shadow:** The primary dependency affected is **Sibyl** (gRPC scoring). Other dependencies (runtime config caches, DV reads) are local in-memory reads with no network cost — doubling these is negligible. The QPS impact on Sibyl is bounded by the shadow sample rate. See SLO section for current feed-service dependency QPS baseline (TBD — pending research).
 
 ### Expected QPS
 
@@ -843,22 +660,8 @@ The interfaces don't commit to a value function. They make it possible to add on
 
 ---
 
-## E. Trace Event Schema
+## E. Per-Step Tracing (Future Iteration)
 
-Emitted automatically after every step when `emit_trace: true`. Steps have zero tracing code — the engine observes and emits.
+The engine architecture is designed to support per-step request tracing in a future iteration. Because the engine dispatches to named steps sequentially, it can snapshot scores before and after each step — giving full visibility into how each step affected each row's score.
 
-```protobuf
-message UbpFeedRowRankingTrace {
-  string request_id    = 1;
-  string experiment_id = 2;
-  string treatment     = 3;
-  string step_id       = 4;
-  string row_id        = 5;
-  string row_type      = 6;
-  double score_before  = 7;
-  double score_after   = 8;
-  int64  timestamp_ms  = 9;
-}
-```
-
-One event per (row, step) pair. 20 rows × 5 steps = 100 events per request. Enable in treatment arms only; leave off in control to manage volume. Queryable in Snowflake.
+This is not part of the current proposal. The tracing infrastructure, schema, and storage will be designed in a follow-up RFC once the interfaces are in production. The key point: **the engine's step-by-step dispatch loop is what makes this possible.** Without it, per-step observability requires ad hoc logging scattered across utility methods.
