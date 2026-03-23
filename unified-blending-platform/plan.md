@@ -312,13 +312,33 @@ After UBP: implement `Scorable` on one class, done.
 
 ---
 
+## UBP Naming Conventions
+
+Resolves naming collisions with existing monorepo types:
+
+| UBP name | Old name | Collision it resolved |
+|---|---|---|
+| `Rankable` | `Scorable` | sdk-core's `Scorable` (ML feature extraction interface) |
+| `rankableId()` | `scorableId()` | — |
+| `RankingPipeline` | `Ranker` | sdk-p13n's `abstract class Ranker` |
+| `toRankableList()` | `toScorableList()` | — |
+| `RankingStep` | — | unchanged |
+| `RankingHandler` | — | unchanged (`fun interface`) |
+
+Chain-of-responsibility uses immutable constructor injection (`StepHandler` takes `next: RankingHandler?` as constructor param, built via `foldRight`).
+
+Branch: `feed-service: refactor/ubp-phase1-naming-fixes`
+
+---
+
 ## Progress Tracker
 
 **Phase 1: Interfaces + Abstractions (ship first — independently valuable)**
-- [x] Step 1: `Scorable` interface on 9 vertical domain types — `feed-service: feat/vertical-ranking-abstraction-phase1`
-- [x] Step 2: `RankingStep` + `RankingHandler` + `Ranker` engine + vertical `RANK_ALL` step
+- [x] Step 1: `Rankable` interface on 9 vertical domain types — `feed-service: feat/vertical-ranking-abstraction-phase1`
+- [x] Step 2: `RankingStep` + `RankingHandler` + `RankingPipeline` engine + vertical `RANK_ALL` step
 - [x] Step 3: Wire vertical engine into `DefaultHomePagePostProcessor.rankContent()` (shadow mode, gated by `ubp_shadow_vertical_ranking`)
 - [x] Step 3b: Parallelize shadow — `coroutineScope { async(shadowCoroutineContext) {} }` with 5s timeout safeguard — `feed-service: feat/parallel-shadow-vertical-ranking`
+- [x] Phase 1 naming fixes: `Scorable`→`Rankable`, `Ranker`→`RankingPipeline`, immutable chain — `feed-service: refactor/ubp-phase1-naming-fixes`
 - [ ] Step 4: Shadow validation — prove identical output (enable experiment, validate in sandbox)
 - [ ] Step 5: Standardized tracing
 - [ ] Step 6: Horizontal `RANK_ALL` step (same pattern, `DefaultHomePagePostProcessor.reOrderGlobalEntitiesV2`)
@@ -335,4 +355,4 @@ After UBP: implement `Scorable` on one class, done.
 **Future: Advanced**
 - [ ] `CalibrationStep` (`PIECEWISE`, `ISOTONIC`)
 - [ ] `ValueFunctionStep` (pImp x pAct x vAct)
-- [ ] Ads/organic fair competition via unified Scorable
+- [ ] Ads/organic fair competition via unified Rankable

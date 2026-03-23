@@ -10,13 +10,16 @@ Design a unified blending platform for the feed-service homepage pipeline.
 ## Source of Truth (read these first)
 - `context/Unified Blending Platform Vision.md` — Yu Zhang's RFC, the canonical vision
 - `context/Unified Blending Platform 1 Pager.md` — executive summary
-- `context/poc-generic-ranking.md` — POC engine design (Scorable/RankingStep/Ranker)
 
-## Naming Convention (from poc-generic-ranking.md)
-- `Scorable` — unified interface for all rankable types
-- `RankingStep<S>` — domain logic contract (items in → items out)
-- `RankingHandler` — infrastructure wrapper (metrics, conditions, shadow)
-- `Ranker<S>` — config-driven engine that assembles handler chains
+## Naming Conventions (Phase 1)
+
+| UBP type | What it is | NOT to be confused with |
+|---|---|---|
+| `Rankable` | UBP shared interface for ranked content | sdk-core `Scorable` (ML feature extraction) |
+| `RankingPipeline` | UBP chain-of-responsibility engine | sdk-p13n `Ranker` (abstract ranking class) |
+| `RankingStep<S>` | Domain logic contract (items in → items out) | — |
+| `RankingHandler` | Infrastructure wrapper (fun interface) | — |
+| `toRankableList()` / `toRankableContent()` | Bridge functions between `RankableContent` and `List<Rankable>` | — |
 
 ## Context Files
 - `plan.md` — current plan and progress tracker
