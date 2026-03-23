@@ -402,9 +402,9 @@ classDiagram
     RankingPipeline --> Rankable : operates on
 ```
 
-## Phase 1.5: Intra-Carousel Ranking (Extensibility Proof)
+## Intra-Carousel Ranking (Extensibility)
 
-Carousel ranking ranks *carousels against each other* on the page. Intra-carousel ranking ranks *stores within a single carousel*. Phase 1.5 applies the same interfaces to intra-carousel ranking — proving the engine is reusable without modification.
+Carousel ranking ranks *carousels against each other* on the page. Intra-carousel ranking ranks *stores within a single carousel*. The same interfaces apply to both — proving the engine is reusable without modification.
 
 ### How intra-carousel ranking works today
 
@@ -428,18 +428,18 @@ Key differences from carousel ranking:
 - **Granularity**: runs *per carousel* (each carousel has its own `RankingType` determining sort rules), not once per page
 - **Scores**: ML scores live in `LiteStoreCollection.storePredictionScoresMap` (a side-map), not directly on the entity
 
-### How Phase 1.5 maps to the same interfaces
+### How intra-carousel maps to the same interfaces
 
-|                       | Carousel Rank (Phase 1)                 | Intra-Carousel Rank (Phase 1.5)                       |
+|                       | Carousel Rank                           | Intra-Carousel Rank                                   |
 | --------------------- | --------------------------------------- | ----------------------------------------------------- |
-| **`Rankable` type**   | `StoreCarousel`, `ItemCarousel`, etc.   | `StoreEntity` (already implements `Rankable`)         |
+| **`Rankable` type**   | `StoreCarousel`, `ItemCarousel`, etc.   | `StoreEntity` (implements `Rankable`)                 |
 | **Step type enum**    | `CarouselRankStepType { RANK_ALL }`     | `IntraCarouselRankStepType { RANK_ALL }`              |
 | **RANK_ALL step**     | Wraps `RankerConfiguration.rank()`      | Wraps `DefaultHomePageStoreRanker` per-carousel logic |
 | **Pipeline**          | `RankingPipeline<CarouselRankStepType>` | `RankingPipeline<IntraCarouselRankStepType>`          |
 | **Engine changes**    | —                                       | None                                                  |
 | **Interface changes** | —                                       | None                                                  |
 
-`StoreEntity` already implements `Rankable` — it has `rankableId()`, `predictionScore`, and `withPredictionScore()`. No new interface work needed.
+`StoreEntity` will implement `Rankable` — it already has `id` and `predictionScore` fields, so the implementation is the same `override` + `copy()` pattern used for carousel types.
 
 ### What gets built
 
