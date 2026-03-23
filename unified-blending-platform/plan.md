@@ -318,6 +318,7 @@ After UBP: implement `Scorable` on one class, done.
 - [x] Step 1: `Scorable` interface on 9 vertical domain types — `feed-service: feat/vertical-ranking-abstraction-phase1`
 - [x] Step 2: `RankingStep` + `RankingHandler` + `Ranker` engine + vertical `RANK_ALL` step
 - [x] Step 3: Wire vertical engine into `DefaultHomePagePostProcessor.rankContent()` (shadow mode, gated by `ubp_shadow_vertical_ranking`)
+- [x] Step 3b: Parallelize shadow — `coroutineScope { async(shadowCoroutineContext) {} }` with 5s timeout safeguard — `feed-service: feat/parallel-shadow-vertical-ranking`
 - [ ] Step 4: Shadow validation — prove identical output (enable experiment, validate in sandbox)
 - [ ] Step 5: Standardized tracing
 - [ ] Step 6: Horizontal `RANK_ALL` step (same pattern, `DefaultHomePagePostProcessor.reOrderGlobalEntitiesV2`)
