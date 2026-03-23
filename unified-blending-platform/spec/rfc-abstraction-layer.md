@@ -465,13 +465,10 @@ The DV gate is the final safety net. Even if tests miss a behavioral difference,
 **1. Build UBP end-to-end in one shot.**
 Too much risk. The full UBP vision includes value functions, calibration, ads integration, and traffic management. Shipping all at once on the homepage (the front page of every DoorDash session) is too risky for a system with zero test coverage. Interfaces first, then incremental capabilities.
 
-**2. Use adapter wrapper classes instead of interface inheritance.**
-The original design proposed wrapper classes around domain types. But the fields (`id`, `predictionScore`) already exist on the domain types. Wrapper classes add 9 new files, mutable `var score`, and `applyBackTo()` writeback complexity, all unnecessary when interface inheritance formalizes existing fields into a contract with zero new classes.
-
-**3. Wait for Pedregal (next-gen serving platform) and build on that.**
+**2. Wait for Pedregal (next-gen serving platform) and build on that.**
 Pedregal timeline is uncertain and addresses a different layer (retrieval/serving). The ranking abstraction problem exists independently of the serving platform. These interfaces work on the current system and transfer cleanly to any future platform.
 
-**4. Refactor the existing code without interfaces.**
+**3. Refactor the existing code without interfaces.**
 Without a shared type (`Rankable`) and a step contract (`RankingStep`), any refactoring still results in wrapper adapters and inline method chains. Interfaces are the minimum structural change needed to unlock composability.
 
 ---
