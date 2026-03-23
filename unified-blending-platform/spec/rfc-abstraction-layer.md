@@ -28,6 +28,10 @@
 
 # What?
 
+The **Unified Blending Platform (UBP)** is a long-term initiative to make homepage ranking composable, testable, and config-driven — enabling MLE experiment velocity, partner self-service, and whole-page optimization. Today none of that is possible because the ranking code has no interfaces, no shared types, and no separation between stages.
+
+This RFC proposes the **first step toward UBP**: three small interfaces that insert clean boundaries into the existing ranking pipeline. No behavior changes. No new services. Just compile-time contracts that make the code extensible.
+
 ## Before: no seams
 
 Today the homepage ranking pipeline is a chain of inline method calls with no interfaces between them:
