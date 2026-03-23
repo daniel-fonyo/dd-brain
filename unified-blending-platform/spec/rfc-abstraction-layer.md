@@ -402,42 +402,6 @@ classDiagram
     RankingPipeline --> Rankable : operates on
 ```
 
-## Both Layers Side by Side
-
-Same architecture, different step type enums. Carousel ranking proven first, intra-carousel mirrors it.
-
-```mermaid
-flowchart LR
-    subgraph vertical["Carousel Ranking (inter-carousel)"]
-        direction TB
-        V_INC["PostProcessor
-        .rankContent()"]
-        V_ENG["RankingPipeline&lt;CarouselRankStepType&gt;"]
-        V_IF["Rankable"]
-        V_STEP["CarouselRankAllStep"]
-
-        V_INC --> V_ENG
-        V_ENG --> V_IF
-        V_ENG --> V_STEP
-    end
-
-    subgraph intracarousel["Intra-Carousel Ranking (within-carousel)"]
-        direction TB
-        H_INC["StoreRanker
-        .modifyLiteStoreCollection()"]
-        H_ENG["RankingPipeline&lt;IntraCarouselRankStepType&gt;"]
-        H_IF["Rankable"]
-        H_STEP["IntraCarouselRankAllStep"]
-
-        H_INC --> H_ENG
-        H_ENG --> H_IF
-        H_ENG --> H_STEP
-    end
-
-    style vertical fill:#e6f0ff,stroke:#0055cc
-    style intracarousel fill:#f0e6ff,stroke:#7700cc
-```
-
 ## Phase 1.5: Intra-Carousel Ranking (Extensibility Proof)
 
 Carousel ranking ranks *carousels against each other* on the page. Intra-carousel ranking ranks *stores within a single carousel*. Phase 1.5 applies the same interfaces to intra-carousel ranking — proving the engine is reusable without modification.
