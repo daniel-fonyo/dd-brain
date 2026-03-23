@@ -193,6 +193,10 @@ Initially, all existing logic stays in a single step type (`RANK_ALL`), preservi
 ```kotlin
 enum class CarouselRankStepType {
     RANK_ALL,
+    // MODEL_SCORING,
+    // MULTIPLIER_BOOST,
+    // DIVERSITY_RERANK,
+    // FIXED_PINNING,
 }
 ```
 
