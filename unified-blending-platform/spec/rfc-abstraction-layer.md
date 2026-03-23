@@ -1,13 +1,13 @@
 # [RFC] Ranking Abstraction Layer for Homepage Blending
 
-| *Metadata* |  |
-| :---- | :---- |
-| **Author(s):** | Daniel Fonyo, Yu Zhang |
-| **Status:** | Draft |
-| **Origin:** | New |
-| **History:** | Drafted: Mar 20, 2026 · Rewritten: Mar 23, 2026 (aligned with shipped implementation) |
-| **Keywords:** | Homepage, ranking, blending, abstraction, interfaces, feed-service |
-| **References:** | [Draft] Unified Blending Platform (Yu Zhang, Feb 2026) |
+| *Metadata*      |                                                                                       |
+| :-------------- | :------------------------------------------------------------------------------------ |
+| **Author(s):**  | Daniel Fonyo, Yu Zhang                                                                |
+| **Status:**     | Draft                                                                                 |
+| **Origin:**     | New                                                                                   |
+| **History:**    | Drafted: Mar 20, 2026 · Rewritten: Mar 23, 2026 (aligned with shipped implementation) |
+| **Keywords:**   | Homepage, ranking, blending, abstraction, interfaces, feed-service                    |
+| **References:** | [Draft] Unified Blending Platform (Yu Zhang, Feb 2026)                                |
 
 **Reviewers**
 
@@ -94,8 +94,6 @@ Scoring, boosting, blending, and pinning are inline method calls through utility
 
 **3. No test coverage on the ranking pipeline.**
 There are zero tests covering the end-to-end ranking behavior. Changes are "edit and pray." There is no safe way to refactor or extend the pipeline.
-
----
 
 ## Goals
 
@@ -510,6 +508,10 @@ Shadow mode runs old and new paths **in parallel** via coroutines. The user-faci
 2. **Shadow one layer at a time** — validate vertical first, then horizontal.
 3. **Score reuse** — shadow `RANK_ALL` could reuse scores from old path instead of independent Sibyl call. Eliminates doubling but cannot validate scoring independently. Decision: start independent, switch if needed.
 4. **Shadow is temporary** — once `divergence_count = 0` sustained, rollout replaces shadow.
+
+### Expected QPS
+
+No new QPS. This adds no new services or RPCs. The only incremental load is during shadow mode: +1 Sibyl gRPC call per shadowed request (mitigated by sampling at 1-5% of traffic). See Latency — Shadow Mode above.
 
 ### Failure
 
