@@ -2,6 +2,30 @@
 
 **Status**: Draft — needs review
 **Target table**: `cx_cross_vertical_homepage_feed` (Snowflake, via Iguazu)
+**Urgency**: High — GenAI V1 is live on 60% of orders; Dipali needs 1+ week of data before experiments can start.
+
+## What to Log
+
+Per meeting agreement (2026-03-20):
+
+| Signal | Granularity | Priority |
+|--------|-------------|----------|
+| Embedding similarity score | Per store, per carousel, per consumer | **Must have** |
+| Alpha (ranker score exponent) | Per carousel (from DV) | **Must have** |
+| Beta (embedding score exponent) | Per carousel (from DV) | **Must have** |
+| Future formula params (gamma, etc.) | TBD | **Design for extensibility** |
+
+The store ranker score (`finalScore`) is already logged as `horizontal_element_score` — confirm it populates for GenAI programmatic carousels.
+
+## Approach: Extensible JSON Field vs Dedicated Proto Fields
+
+Dipali wants a scalable approach — she'll change the formula over time (add VP, gamma, etc.) and doesn't want to re-plumb each time.
+
+**Option A — Dedicated proto fields**: One field per signal. Clean SQL queries but requires proto change for every new param.
+
+**Option B — JSON in `carousel_details`**: Extend the existing `carousel_details` JSON (already has `carousel_rank`, `day_part`) with ranking params. Extensible but harder to query.
+
+**Option C (Recommended) — Hybrid**: Dedicated proto field for `embedding_similarity_score` (high-value, per-store, queried frequently) + extend `carousel_details` JSON with `alpha`, `beta`, and future formula params (per-carousel, less frequently queried individually). This balances queryability with extensibility.
 
 ## Step 1: Proto Change (services-protobuf)
 
@@ -45,13 +69,29 @@ Add `LoggedValue.EMBEDDING_SIMILARITY_SCORE` to the child (per-store) logged val
 
 **Location**: `ContainerEventsGenerator.kt`, child logging list (~line 266-311)
 
-## Step 5: Populate the Score in the Logging Map
+## Step 5: Add Alpha/Beta to carousel_details (or trackingPayload)
+
+Extend the `trackingPayload` in `GeneratedRecommendationDataService.createGeneratedRecommendationCarousels()` to include `alpha` and `beta` values read from DV. These will flow through to `carousel_details` JSON automatically.
+
+```kotlin
+val trackingPayload = mapOf(
+    "carousel_rank" to carousel.rank,
+    "day_part" to retrievalContext.dayPart,
+    "last_update_date" to (carousel.lastUpdateDate ?: ""),
+    "reranker_alpha" to alpha,
+    "reranker_beta" to beta,
+)
+```
+
+**Location**: `GeneratedRecommendationDataService.kt` or `GeneratedRecommendationCarouselService.kt` (where DV values are read).
+
+## Step 6: Populate the Embedding Score in the Logging Map
 
 During collection building or store decoration, set the embedding score in the store's logging data map. The score is available in `LiteStoreCollection.generatedRecommendationStoreInfoMap[storeId].embeddingScore`.
 
 **Likely location**: `StoreCarouselDataAdapterUtil.kt` or wherever store-level logging data is assembled for GenAI carousels. Need to trace exactly where the per-store logging map gets built.
 
-## Step 6: Verify Proto Build & Deploy
+## Step 7: Verify Proto Build & Deploy
 
 1. Build proto in services-protobuf, get new version
 2. Bump proto dependency in feed-service
@@ -60,10 +100,11 @@ During collection building or store decoration, set the embedding score in the s
 
 ## Open Questions
 
-- [ ] Should we also log the **combined reranker score** (`finalScore^alpha * embeddingScore^beta`)? This would be useful for debugging the actual ranking output.
-- [ ] Should we log the VP components separately (pConv, pDasherCost, pCommission) as additional fields or use `score_modifiers`?
+- [x] ~~Should we log alpha/beta?~~ Yes — agreed in meeting.
+- [ ] Confirm `horizontal_element_score` populates for GenAI programmatic carousels (Dipali wasn't sure).
 - [ ] Do we need the same field in `CardView` / `CardClick` protos for client-side logging?
 - [ ] Confirm the exact next available field number in `CrossVerticalHomePageFeedEvent`.
+- [ ] Does Snowflake auto-pick up new proto fields or do we need a data eng request?
 
 ## Blockers / Risks
 
