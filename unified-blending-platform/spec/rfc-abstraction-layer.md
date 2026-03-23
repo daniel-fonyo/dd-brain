@@ -469,9 +469,7 @@ val intraCarouselPipeline = RankingPipeline<IntraCarouselRankStepType>(
 )
 ```
 
-**Design wrinkle — per-carousel invocation:** The pipeline runs once *per carousel*, not once per page. This is fine — the engine doesn't care how often it's called. The caller loops over carousels, invoking `intraCarouselPipeline.rank(storeEntities, listOf(RANK_ALL), context)` for each one with carousel-specific context.
-
-**Design wrinkle — score hydration:** Scores currently live in `LiteStoreCollection.storePredictionScoresMap`, not on `StoreEntity.predictionScore`. The `IntraCarouselRankAllStep` either (a) hydrates `predictionScore` from the map before delegating, or (b) delegates directly to the existing comparator-based sorting which already reads from the map. Option (b) for Phase 1.5 (zero behavior change), option (a) when decomposing into granular steps later.
+The pipeline runs once per carousel, not once per page — the engine is invocation-agnostic. Scores currently live in `LiteStoreCollection.storePredictionScoresMap` rather than on `StoreEntity.predictionScore`, so the `IntraCarouselRankAllStep` delegates directly to the existing comparator-based sorting which already reads from the map.
 
 ### Why this proves extensibility
 
