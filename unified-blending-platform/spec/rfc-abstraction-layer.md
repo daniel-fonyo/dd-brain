@@ -131,11 +131,11 @@ There are zero tests covering the end-to-end ranking behavior. Changes are "edit
 
 | Phase | What | Status |
 | :---- | :---- | :---- |
-| **1. Rankable + engine** | `Rankable` on 9 vertical types, `RankingStep<S>`, `RankingHandler`, `RankingPipeline<S>`, `VerticalRankAllStep` — all pure additions | **Shipped** |
-| **2. Shadow validation** | Wire shadow path in `DefaultHomePagePostProcessor`. Run both paths, compare sort orders, log divergences. Target: `divergence_count = 0` | Next |
-| **3. Horizontal** | Same interfaces applied to within-carousel ranking | After vertical proven |
-| **4. Rollout** | DV-gated gradual migration: 1% → 5% → 25% → 50% → 100% | After shadow proven |
-| **5. Granular steps** | Decompose `RANK_ALL` into composable steps | After rollout stable |
+| **1. Vertical interfaces** | `Rankable` on 9 vertical types, `RankingStep<S>`, `RankingHandler`, `RankingPipeline<S>`, `VerticalRankAllStep` — all pure additions | **Shipped** |
+| **1.5. Horizontal interfaces** | Same engine applied to within-carousel store ranking. `HorizontalStepType`, `HorizontalRankAllStep` wrapping `DefaultHomePageStoreRanker`. Zero engine changes. | Next |
+| **2. Shadow validation** | Wire shadow path for vertical + horizontal. Run both paths, compare sort orders, log divergences. Target: `divergence_count = 0` | After 1.5 |
+| **3. Rollout** | DV-gated gradual migration: 1% → 5% → 25% → 50% → 100% | After shadow proven |
+| **4. Granular steps** | Decompose `RANK_ALL` into composable steps | After rollout stable |
 
 Each phase is independently shippable. If any phase shows risk, we stop and the old path continues serving 100% of traffic.
 
@@ -425,6 +425,86 @@ flowchart LR
     style horizontal fill:#f0e6ff,stroke:#7700cc
 ```
 
+## Phase 1.5: Horizontal Ranking (Extensibility Proof)
+
+Vertical ranking ranks *carousels against each other* on the page. Horizontal ranking ranks *stores within a single carousel*. Phase 1.5 applies the same interfaces to horizontal — proving the engine is reusable without modification.
+
+### How horizontal ranking works today
+
+```
+DefaultHomePageStoreRanker.rank()
+  ├─ scoredCollections()                    — Sibyl ML scoring per carousel
+  │    ├─ StoreCollectionScorer             — most carousel types
+  │    ├─ ContextualStoreScorer             — contextual taste carousels
+  │    └─ RetentionStoreScorer              — retention carousels
+  └─ modifyLiteStoreCollection()            — per-carousel sort + paginate
+       └─ sortDiscoveryStoresWithBizRules()
+            ├─ StoreStatusComparator        — availability
+            ├─ ShipAnywhereComparator       — logistics
+            ├─ StoreListComparator          — prioritized store IDs
+            ├─ StoreSortOrderMapComparator  — manual overrides
+            └─ StoreListComparator          — ML score ranking
+```
+
+Key differences from vertical:
+- **Types**: operates on `StoreEntity` / `DiscoveryStore` (individual stores), not carousel types
+- **Granularity**: runs *per carousel* (each carousel has its own `RankingType` determining sort rules), not once per page
+- **Scores**: ML scores live in `LiteStoreCollection.storePredictionScoresMap` (a side-map), not directly on the entity
+
+### How Phase 1.5 maps to the same interfaces
+
+| | Vertical (Phase 1) | Horizontal (Phase 1.5) |
+|---|---|---|
+| **`Rankable` type** | `StoreCarousel`, `ItemCarousel`, etc. | `StoreEntity` (already implements `Rankable`) |
+| **Step type enum** | `VerticalStepType { RANK_ALL }` | `HorizontalStepType { RANK_ALL }` |
+| **RANK_ALL step** | Wraps `RankerConfiguration.rank()` | Wraps `DefaultHomePageStoreRanker` per-carousel logic |
+| **Pipeline** | `RankingPipeline<VerticalStepType>` | `RankingPipeline<HorizontalStepType>` |
+| **Engine changes** | — | None |
+| **Interface changes** | — | None |
+
+`StoreEntity` already implements `Rankable` — it has `rankableId()`, `predictionScore`, and `withPredictionScore()`. No new interface work needed.
+
+### What gets built
+
+**New files (3, mirroring vertical):**
+
+```kotlin
+// 1. Step type enum
+enum class HorizontalStepType {
+    RANK_ALL,
+}
+
+// 2. RANK_ALL step — wraps existing per-carousel ranking
+class HorizontalRankAllStep(
+    private val storeRanker: DefaultHomePageStoreRanker,
+) : RankingStep<HorizontalStepType> {
+    override val stepType = HorizontalStepType.RANK_ALL
+
+    override suspend fun execute(items: List<Rankable>, context: RankingContext): List<Rankable> {
+        // Delegate to existing modifyLiteStoreCollection() logic
+        // StoreEntity instances pass through as Rankable — no conversion needed
+    }
+}
+
+// 3. Wiring — same RankingPipeline, different type parameter
+val horizontalPipeline = RankingPipeline<HorizontalStepType>(
+    stepRegistry = mapOf(HorizontalStepType.RANK_ALL to horizontalRankAllStep)
+)
+```
+
+**Design wrinkle — per-carousel invocation:** The pipeline runs once *per carousel*, not once per page. This is fine — the engine doesn't care how often it's called. The caller loops over carousels, invoking `horizontalPipeline.rank(storeEntities, listOf(RANK_ALL), context)` for each one with carousel-specific context.
+
+**Design wrinkle — score hydration:** Scores currently live in `LiteStoreCollection.storePredictionScoresMap`, not on `StoreEntity.predictionScore`. The `HorizontalRankAllStep` either (a) hydrates `predictionScore` from the map before delegating, or (b) delegates directly to the existing comparator-based sorting which already reads from the map. Option (b) for Phase 1.5 (zero behavior change), option (a) when decomposing into granular steps later.
+
+### Why this proves extensibility
+
+The engine (`RankingPipeline`), the handler chain (`StepHandler`), and the core interface (`Rankable`) are all **completely unchanged** for horizontal. The only new code is:
+- A new enum (`HorizontalStepType`)
+- A new step implementation (`HorizontalRankAllStep`)
+- Wiring at the entry point
+
+This is the same pattern as vertical, applied at a different granularity. If the interfaces can absorb both vertical (page-level) and horizontal (carousel-level) ranking without modification, they can absorb future UBP capabilities (granular steps, value function, partner self-service) the same way.
+
 ## Safe Delivery: Shadow → Rollout
 
 We never put users at risk. The migration has two phases:
@@ -527,17 +607,20 @@ These are small internal interfaces (3 types, ~10 methods total) within a single
 
 ## Extensibility
 
-The interfaces are designed to absorb UBP capabilities incrementally. Each phase adds step types and implementations — the engine, the interface, and the wiring stay unchanged.
+The interfaces are designed to absorb UBP capabilities incrementally. Each phase adds step types and implementations — the engine, the interface, and the wiring stay unchanged. Phase 1.5 (horizontal) is the first concrete proof — see "Phase 1.5: Horizontal Ranking" above.
 
 ```
-Phase 1 (now):  RANK_ALL
-                └─ wraps entire legacy pipeline in one step
+Phase 1   (shipped):  Vertical RANK_ALL
+                      └─ wraps entire vertical legacy pipeline in one step
 
-Phase 2:        MODEL_SCORING → MULTIPLIER_BOOST → DIVERSITY_RERANK → FIXED_PINNING
-                └─ legacy pipeline decomposed into composable steps
+Phase 1.5 (next):    Horizontal RANK_ALL
+                      └─ wraps per-carousel store ranking — same engine, new step type
 
-Phase 3:        MODEL_SCORING → CALIBRATION → VALUE_FUNCTION → DIVERSITY → PINNING
-                └─ full UBP pipeline with unified value function
+Phase 2:             MODEL_SCORING → MULTIPLIER_BOOST → DIVERSITY_RERANK → FIXED_PINNING
+                      └─ legacy pipeline decomposed into composable steps
+
+Phase 3:             MODEL_SCORING → CALIBRATION → VALUE_FUNCTION → DIVERSITY → PINNING
+                      └─ full UBP pipeline with unified value function
 ```
 
 | Future capability | How it plugs in |
@@ -581,6 +664,10 @@ Rejected. Without a shared type (`Rankable`) and a step contract (`RankingStep`)
 | Carousel type flattening | `EntityRankerConfiguration.getEntities()` | What `Rankable` interface replaces |
 | Sibyl ML scoring + blending | `EntityRankerConfiguration.getScoreBundleWithWorkflowHelper()` | Called by `VerticalRankAllStep` via `RankerConfiguration` |
 | Horizontal ranking entry point | `DefaultHomePageStoreRanker.rank()` | Incision point for `RankingPipeline<HorizontalStepType>` |
+| Horizontal per-carousel sorting | `StoreCarouselService.sortStoreEntitiesForCarousels()` | Comparator chain wrapped by `HorizontalRankAllStep` |
+| Horizontal ML scoring | `StoreCollectionScorer.scoreCollections()` | Sibyl scoring for stores within carousels |
+| Store entity (implements Rankable) | `libraries/platform/.../models/StoreEntity.kt` | `StoreEntity : Rankable` — horizontal ranking target type |
+| Carousel score container | `LiteStoreCollection.storePredictionScoresMap` | Where horizontal ML scores live today |
 | Post-ranking fixups (NOT changing) | `NonRankableHomepageOrderingUtil` | NV pin, PAD=3, member pricing — stays as-is |
 
 ---
