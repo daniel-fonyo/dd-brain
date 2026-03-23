@@ -177,17 +177,6 @@ data class StoreCarousel(
 
 Adding a new carousel type means implementing `Rankable` on one class. No wrappers, no writeback threading.
 
-### Conversion Functions
-
-`RankableContent` (the existing container) converts to/from `List<Rankable>` for pipeline interop:
-
-```kotlin
-fun RankableContent.toRankableList(): List<Rankable>
-fun List<Rankable>.toRankableContent(): RankableContent
-```
-
-Round-trip preserves all items.
-
 ## `RankingStep<S : Enum<S>>`
 
 Each ranking operation is a step: items in, items out. The interface is generic over a step type enum so each ranking layer (vertical, horizontal) has its own taxonomy.
