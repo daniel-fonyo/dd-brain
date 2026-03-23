@@ -49,11 +49,10 @@
 > An MLE declares their experiment (model + layer + traffic %), and UBP handles traffic allocation within the layer and runs the experiment. No DV waterfall, no code changes, no HP engineer involvement.
 
 ### What stays (internal engine architecture)
-- FeedRow / RowItem interfaces + adapters
-- FeedRowRankingStep / RowItemRankingStep interfaces
-- FeedRowRanker / RowItemRanker engines + step registry
-- Step implementations (MODEL_SCORING, BOOST_AND_RANK for vertical; MODEL_SCORING, RANKING_SORT for horizontal)
-- Auto-trace infrastructure
+- `Scorable` interface on domain types (no wrapper classes)
+- `RankingStep<S>` / `RankingHandler` / `Ranker<S>` engine
+- Phase 1: `RANK_ALL` wrapping entire legacy pipeline; Phase 2: granular step decomposition
+- Auto-trace infrastructure (future)
 - control.json as internal production behavior definition
 
 ### What changes (MLE-facing surface)
@@ -80,8 +79,7 @@
 | `plan.md` | Wrong priority order; missing traffic management | Reorder: traffic mgmt first, engine second |
 | `northstar.md` | Vision correct, emphasis shifts | Add traffic management to "done" criteria |
 | `mle-experiment-guide.md` | Over-complex MLE interface | Simplify all cases to model + layer + traffic % |
-| `impl/01-shadow-infra.md` | Assembler still useful | Keep, contract shape simplifies |
-| `impl/02-07` (engine specs) | Still valid as internal architecture | Keep as-is, mark as internal |
+| `spec/impl/*` | Described FeedRow adapter design — never built | Archived to `spec/archive/impl/` (2026-03-23) |
 | `feed-service feat/ubp-shadow-infra` | Config data classes over-engineered | Reassess; assembler still useful, config simplifies |
 
 ---
