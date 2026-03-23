@@ -130,22 +130,13 @@ flowchart LR
     T4 --> A
 
     subgraph pipeline["RankingPipeline"]
-        direction LR
-        subgraph handler1["StepHandler 1"]
+        subgraph handler1["StepHandler"]
             S1["RankingStep: RANK_ALL"]
         end
-        subgraph handler2["StepHandler 2"]
-            S2["RankingStep: ..."]
-        end
-        subgraph handlerN["StepHandler N"]
-            SN["RankingStep: ..."]
-        end
-        handler1 -- "next" --> handler2
-        handler2 -- "next" --> handlerN
     end
 
     A --> handler1
-    handlerN --> WB
+    handler1 --> WB
 
     subgraph writeback["toRankableContent()"]
         WB["List&lt;Rankable&gt; → RankableContent"]
@@ -155,8 +146,6 @@ flowchart LR
     style convert fill:#ffffcc,stroke:#aaaa00
     style pipeline fill:#e6f0ff,stroke:#0055cc
     style handler1 fill:#cce0ff,stroke:#0055cc
-    style handler2 fill:#cce0ff,stroke:#0055cc
-    style handlerN fill:#cce0ff,stroke:#0055cc
     style writeback fill:#ffffcc,stroke:#aaaa00
 ```
 
@@ -164,7 +153,7 @@ Today the pipeline contains a single step (`RANK_ALL`) that wraps all existing r
 
 ## `Rankable` Interface (Implemented, Not Wrapped)
 
-Today, every ranking stage operates through adapter wrapper classes because there is no shared interface on the domain types themselves. With `Rankable`, the existing domain types implement the interface directly. Wrappers disappear, and everything downstream operates on a single type.
+Domain types implement `Rankable` directly, eliminating 9 adapter wrapper classes and their mutable writeback logic. The fields the ranking pipeline needs already exist on these types; `Rankable` formalizes them into a contract.
 
 ```kotlin
 interface Rankable {
@@ -174,7 +163,7 @@ interface Rankable {
 }
 ```
 
-Domain types implement `Rankable` by adding `override` annotations to fields they already have, plus a one-line `withPredictionScore()` via Kotlin's `copy()`:
+Implementation is minimal. Existing fields get `override` annotations, plus a one-line copy method:
 
 ```kotlin
 data class StoreCarousel(
@@ -186,24 +175,22 @@ data class StoreCarousel(
 }
 ```
 
-**What this eliminates:** 9 adapter wrapper classes, each with mutable `var score` and `applyBackTo()` writeback. After: domain types carry their own scores. No adapters, no writeback.
-
-**What this enables:** New carousel type = implement `Rankable` on one class instead of creating a wrapper + threading `applyBackTo()` through every stage.
+Adding a new carousel type means implementing `Rankable` on one class. No wrappers, no writeback threading.
 
 ### Conversion Functions
 
-`RankableContent` (the existing container for all carousel types) converts to/from `List<Rankable>`:
+`RankableContent` (the existing container) converts to/from `List<Rankable>` for pipeline interop:
 
 ```kotlin
 fun RankableContent.toRankableList(): List<Rankable>
 fun List<Rankable>.toRankableContent(): RankableContent
 ```
 
-`toRankableList()` flattens all carousel fields into a single list. `toRankableContent()` reconstructs the typed container by filtering instances back into their original fields. Round-trip preserves all items.
+Round-trip preserves all items.
 
 ## `RankingStep<S : Enum<S>>`
 
-The step interface is generic over a step type enum, allowing different ranking layers (vertical, horizontal) to have their own step type taxonomy:
+Each ranking operation is a step: items in, items out. The interface is generic over a step type enum so each ranking layer (vertical, horizontal) has its own taxonomy.
 
 ```kotlin
 interface RankingStep<S : Enum<S>> {
@@ -212,7 +199,7 @@ interface RankingStep<S : Enum<S>> {
 }
 ```
 
-In this initial refactor, all existing ranking logic stays together inside a single step type (`RANK_ALL`). This preserves current behavior exactly while proving out the interfaces:
+Initially, all existing logic stays in a single step type (`RANK_ALL`), preserving current behavior while proving the interfaces:
 
 ```kotlin
 enum class CarouselRankStepType {
@@ -220,15 +207,13 @@ enum class CarouselRankStepType {
 }
 ```
 
-Because each step type is just an enum value, this design naturally supports decomposition. Once the interfaces are proven, `RANK_ALL` can be broken into distinct, independently testable steps (scoring, boosting, diversity reranking, pinning, etc.) without changing the engine or any other step.
+Once proven, `RANK_ALL` can be decomposed into distinct steps (scoring, boosting, diversity, pinning) without changing the engine.
 
 ## `RankingHandler` and Chain of Responsibility
 
-The ranking engine uses the **Chain of Responsibility** pattern to compose steps into a pipeline.
+The engine uses the **Chain of Responsibility** pattern: each step is wrapped in a handler, and each handler knows the next one in the chain. A handler does its work, then forwards the result. No handler knows about the full chain or its position in it; it only knows how to do its own work and where to send the result. Handlers can be added, removed, or reordered without any handler needing to change.
 
-Chain of Responsibility is a behavioral design pattern where a request passes through a sequence of handlers, each performing its work and then forwarding the result to the next handler in the chain. No handler knows about the full chain or its position in it. Each handler only knows two things: how to do its own work, and where to send the result next. This decoupling is what makes the pattern powerful. Handlers can be added, removed, or reordered without any handler needing to change.
-
-In our design, `RankingHandler` is the handler interface. It defines one operation: take a list of ranked items and a context, do work, return ranked items.
+`RankingHandler` is the handler interface:
 
 ```kotlin
 fun interface RankingHandler {
@@ -236,7 +221,7 @@ fun interface RankingHandler {
 }
 ```
 
-`StepHandler` is the concrete handler that connects a `RankingStep` to the chain. It executes the step's logic, then passes the result to the next handler. If there is no next handler, it returns the result directly.
+`StepHandler` connects a `RankingStep` to the chain. It executes the step, then delegates to the next handler:
 
 ```kotlin
 class StepHandler<S : Enum<S>>(
@@ -250,13 +235,11 @@ class StepHandler<S : Enum<S>>(
 }
 ```
 
-The separation between `RankingStep` and `RankingHandler` is deliberate. Steps contain domain logic (scoring, boosting, reranking) and know nothing about chaining. Handlers own the orchestration: sequencing, delegation, and the link to the next handler. This means step authors write pure ranking logic, and the engine takes care of composition.
-
-This separation is what makes the architecture extensible without modifying existing code. Because every step is wrapped in a handler, cross-cutting concerns can be injected at the handler level, transparently to the steps themselves. Per-step latency metrics become a timing decorator around the handler. Conditional step skipping (e.g., experiment flags) becomes a handler that checks the flag and either delegates to the step or passes through. Circuit-breaking on a slow ML model call becomes a handler that enforces a timeout. None of these require changes to any step implementation.
+The separation is deliberate. Steps contain domain logic and know nothing about chaining. Handlers own orchestration. Step authors write pure ranking logic; the engine takes care of composition. Cross-cutting infrastructure (metrics, tracing, timeouts, experiment gating) can be injected at the handler level without touching any step.
 
 ## `RankingPipeline<S : Enum<S>>` Engine
 
-`RankingPipeline` is the entry point for ranking. It owns a registry of step implementations keyed by step type, and exposes a single `rank()` method. Callers provide items, a list of step types to execute, and a context. The pipeline looks up each requested step type in its registry, assembles the corresponding handler chain, and executes it. All orchestration is internal; callers see one method with clean input and output.
+The entry point for ranking. Owns a registry of steps keyed by type, exposes a single `rank()` method. Looks up requested steps, assembles the handler chain, executes it.
 
 ```kotlin
 class RankingPipeline<S : Enum<S>>(
@@ -268,7 +251,7 @@ class RankingPipeline<S : Enum<S>>(
 }
 ```
 
-The step list is data, not code. It can come from a hardcoded default, a runtime config, or an experiment. Today it is `[RANK_ALL]`. Tomorrow it could be `[MODEL_SCORING, MULTIPLIER_BOOST, DIVERSITY_RERANK, FIXED_PINNING]`. The engine does not change; only the step list does.
+The step list is data, not code. Today it is `[RANK_ALL]`. Tomorrow it could be `[MODEL_SCORING, MULTIPLIER_BOOST, DIVERSITY_RERANK, FIXED_PINNING]`. The engine does not change; only the step list does.
 
 ## `CarouselRankAllStep`: Preserving Existing Behavior
 
@@ -372,6 +355,75 @@ The same interfaces apply to both ranking layers. Each capability below adds ste
 **Intra-carousel (horizontal) ranking.** Store ordering within each carousel today uses a separate ranker with no shared abstraction. `StoreEntity` implements `Rankable`, and a new step type enum (`IntraCarouselRankStepType`) defines the horizontal ranking vocabulary. The engine, handler chain, and step interface are reused identically. Only the step type enum and entry point differ.
 
 **Composable steps via chain of responsibility.** Today the entire ranking pipeline is one monolithic call. Once the interfaces are proven, we decompose `RANK_ALL` into granular steps: `MODEL_SCORING → MULTIPLIER_BOOST → DIVERSITY_RERANK → FIXED_PINNING`. Each step is a `RankingStep` registered by enum key, and the engine dispatches them in order. Adding, removing, or reordering steps is a config change, not a code change.
+
+### Future State: Decomposed Pipeline
+
+```mermaid
+flowchart LR
+    subgraph sources["9 Carousel Types"]
+        direction TB
+        T1["StoreCarousel"]
+        T2["ItemCarousel"]
+        T3["DealCarousel"]
+        T4["...6 more"]
+    end
+
+    subgraph convert["toRankableList()"]
+        A["RankableContent → List&lt;Rankable&gt;"]
+    end
+
+    T1 --> A
+    T2 --> A
+    T3 --> A
+    T4 --> A
+
+    subgraph pipeline["RankingPipeline (config-driven step list)"]
+        direction LR
+        subgraph h1["StepHandler"]
+            S1["MODEL_SCORING"]
+            D1["model: sibyl_v3\nfeatures: [...]"]
+        end
+        subgraph h2["StepHandler"]
+            S2["CALIBRATION"]
+            D2["normalize across\ncontent types"]
+        end
+        subgraph h3["StepHandler"]
+            S3["VALUE_FUNCTION"]
+            D3["EV = pImp × pAct × vAct\nweights: gov, fiv, strategic"]
+        end
+        subgraph h4["StepHandler"]
+            S4["DIVERSITY_RERANK"]
+            D4["diversity constraints\nper category"]
+        end
+        subgraph h5["StepHandler"]
+            S5["FIXED_PINNING"]
+            D5["pinned positions\nfrom config"]
+        end
+        h1 -- "next" --> h2
+        h2 -- "next" --> h3
+        h3 -- "next" --> h4
+        h4 -- "next" --> h5
+    end
+
+    A --> h1
+    h5 --> WB
+
+    subgraph writeback["toRankableContent()"]
+        WB["List&lt;Rankable&gt; → RankableContent"]
+    end
+
+    style sources fill:#fff3f3,stroke:#cc0000
+    style convert fill:#ffffcc,stroke:#aaaa00
+    style pipeline fill:#e6f0ff,stroke:#0055cc
+    style h1 fill:#cce0ff,stroke:#0055cc
+    style h2 fill:#cce0ff,stroke:#0055cc
+    style h3 fill:#cce0ff,stroke:#0055cc
+    style h4 fill:#cce0ff,stroke:#0055cc
+    style h5 fill:#cce0ff,stroke:#0055cc
+    style writeback fill:#ffffcc,stroke:#aaaa00
+```
+
+Each step receives its configuration as data (model names, weight parameters, constraint rules). The engine and interfaces are identical to the current state; only the step list grows.
 
 **Config-driven experimentation.** Each step type is an enum value in the step registry. An experiment can swap one step implementation for another (e.g., a new diversity algorithm) by registering a different `RankingStep` for that enum key. The MLE experiment config drives which steps run and in what order, with no code deployment needed for new ranking experiments.
 
