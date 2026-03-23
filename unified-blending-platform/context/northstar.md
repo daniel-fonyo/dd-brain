@@ -1,6 +1,7 @@
 # Unified Blending Platform — Engineering First Principles
 
 > This is the northstar. When in doubt, return here.
+> Naming follows `poc-generic-ranking.md`. Contract follows `mle-contract.md`.
 
 ---
 
@@ -112,7 +113,7 @@ REQUEST
 
 ## 3. One Value Function for Both Layers
 
-Every ranking decision — whether ranking a store within a carousel or a carousel on the page — answers the same question:
+Every ranking decision answers the same question:
 
 > **What is the expected value of showing this component to this user at this position?**
 
@@ -132,90 +133,80 @@ Expected Value = pImp × pAct × vAct
          Weights are configurable per experiment.
 ```
 
-**Why this matters:** Today organic, ads, merch, and NV each use different scoring functions on incomparable scales. You cannot rank them together. UBP's entire value proposition is making these comparable through calibration and an explicit value function.
+**Variable dictionary:**
+
+| Abbrev | Full name | What it is | Who owns it |
+|---|---|---|---|
+| `EV` | Expected Value | Final ranking score — higher = shown earlier | Engine output |
+| `pImp(k)` | Probability of Impression | P(user sees component at position k). `decay_rate ^ k` | BE — not MLE-configurable |
+| `pAct(c)` | Probability of Action | P(user clicks/orders given they see c). Sibyl model output. | MLE provides model + features |
+| `vAct(c)` | Value of Action | Business worth if action happens: `gov_w × GOV + fiv_w × FIV + strategic_w × Strategic` | MLE provides weights |
+| `GOV` | Gross Order Value | Revenue from the order | BE signal |
+| `FIV` | First Impression Value | Strategic value of first-time NV/vertical exposure | BE signal |
+
+Today `vAct` and `pImp` are implicit — boost weights stand in for value weights with no principled formula. Phase 1 makes `pAct` explicit. Future phases make `vAct` and `pImp` explicit.
 
 ---
 
-## 4. The Two Ranking Engines
+## 4. Core Interfaces (from poc-generic-ranking.md)
 
-Both engines share the same shape: a config-driven pipeline of steps executed in sequence.
-
-```
-INPUT: list of Components (carousels OR stores, depending on layer)
-           │
-           ▼
-    ┌─────────────────────────────┐
-    │  for each step in config:   │
-    │    processor = registry     │
-    │                 [step.type] │
-    │    processor.process(       │
-    │      components,            │
-    │      context,               │
-    │      step.params            │   ← params come from config JSON, not from code
-    │    )                        │
-    │    if emitTrace:            │
-    │      record score snapshot  │   ← automatic, no manual instrumentation
-    └──────────────┬──────────────┘
-                   │
-                   ▼
-OUTPUT: same Components, reordered by final score
-```
-
-**Vertical engine** (Layer 4): components are carousels. Steps: MODEL_SCORING, BOOST_AND_RANK.
-
-**Horizontal engine** (Layer 3): components are stores/items. Steps: MODEL_SCORING, RANKING_SORT.
-
----
-
-## 5. Three Core Interfaces
-
-Everything in UBP is built on three interfaces. If you understand these, you understand the platform.
-
-### Component — the unit being ranked
+### `Scorable` — the unit being ranked
 
 ```kotlin
-interface VerticalComponent {
+interface Scorable {
     val id: String
-    val type: ComponentType          // STORE_CAROUSEL, ITEM_CAROUSEL, NV_CAROUSEL, etc.
-    var score: Double                // mutable — processors update this
-    val metadata: MutableMap<String, Any>
-    fun recordTrace(stepId: String, value: Any)
+    val predictionScore: Double?
+    fun withPredictionScore(score: Double): Scorable
 }
 ```
 
-Today there are 9+ separate typed carousel classes with no shared interface. UBP collapses them to one.
+Not a wrapper — existing domain types implement it directly. 12 types already have `id` and `predictionScore`. Adding `Scorable` = adding `override` keywords + one-line `withPredictionScore` via `copy()`.
 
-### Processor — one step in the pipeline
+### `RankingStep<S>` — domain logic
 
 ```kotlin
-interface VerticalProcessor {
-    val type: String                 // "MODEL_SCORING", "BOOST_AND_RANK", etc.
-
-    suspend fun process(
-        components: MutableList<VerticalComponent>,
-        context: RankingContext,
-        params: Map<String, Any>,   // injected from config, not read internally
-    )
+interface RankingStep<S : Enum<S>> {
+    val stepType: S
+    suspend fun execute(items: List<Scorable>, context: RankingContext): List<Scorable>
 }
 ```
 
-The critical property: `params` are **injected at call time**, not pulled from DV keys inside the processor. This is what makes processors reusable across experiments.
+Items in → items out. Pure function. No mutable state. Parameterized by step type enum for compile-time layer safety.
 
-### Engine — the orchestrator
+### `RankingHandler` — infrastructure (Chain of Responsibility)
 
 ```kotlin
-class VerticalRankingEngine(
-    val processorRegistry: Map<String, VerticalProcessor>,
+interface RankingHandler {
+    suspend fun handle(items: List<Scorable>, context: RankingContext): List<Scorable>
+}
+```
+
+Wraps steps with cross-cutting concerns: metrics, conditions, shadow execution. Steps don't know they're being timed or traced.
+
+### `Ranker<S>` — the engine
+
+```kotlin
+class Ranker<S : Enum<S>>(
+    private val stepRegistry: Map<S, RankingStep<S>>,
+    private val metrics: MetricsClient,
 ) {
-    suspend fun rank(
-        components: MutableList<VerticalComponent>,
-        config: PipelineConfig,
-        context: RankingContext,
-    ): List<VerticalComponent>
+    suspend fun rank(items: List<Scorable>, pipeline: List<S>, ctx: RankingContext): List<Scorable>
 }
 ```
 
-The engine has no business logic. It reads the step list from config and dispatches to processors. New processor = new entry in the registry. Changed pipeline = changed JSON config. No code changes to the engine.
+Assembles handler chain from pipeline config, executes it. Zero business logic. Same engine for vertical and horizontal — only the step enum and step implementation differ.
+
+---
+
+## 5. Design Patterns
+
+| Pattern | Where | Role |
+|---|---|---|
+| **Strategy** | `RankingStep` implementations | Engine dispatches to whichever step the config specifies |
+| **Chain of Responsibility** | `RankingHandler` chain | Steps linked via `next`; metrics/conditions wrap steps transparently |
+| **Adapter** | `Scorable` on domain types | 12 domain types adapted to one interface; engine never type-checks |
+| **Facade** | `Ranker.rank()` | Hides config resolution, handler chain assembly, tracing |
+| **Template Method** (replaced) | `BaseEntityRankerConfiguration.rank()` | The current code's fixed skeleton — replaced by config-driven chain |
 
 ---
 
@@ -233,77 +224,64 @@ This gives N × M experiment cells.
 Experiments are mutually exclusive WITHIN a layer, not ACROSS layers.
 ```
 
-In practice, implemented as independent DV keys:
+In practice, independent DV keys:
 ```
-DV "ubp_hp_horizontal_v2" → "treatment_fw"    (horizontal assignment)
-DV "ubp_hp_vertical_v3"   → "intent_model__v3" (vertical assignment)
+DV "ubp_hp_horizontal_v2" → "treatment_fw"       (horizontal assignment)
+DV "ubp_hp_vertical_v3"   → "intent_model__v3"   (vertical assignment)
 ```
-
-Each DV is read independently. The two assignments don't interfere. The engine for each layer resolves its own config independently from its own DV value.
-
-**This is already how DV works today.** UBP just formalizes it as a first-class property of the platform.
 
 ---
 
 ## 7. The Config Contract
 
-One JSON file per experiment. One DV controls which variant runs. No code changes to run a new experiment variant.
+See `mle-contract.md` for full schema and examples. Summary:
+
+Step order is **hardcoded**: `MODEL_SCORING → BOOST_AND_RANK`. MLEs configure only the knobs.
 
 ```json
-// ubp/experiments/{experiment_id}.json
 {
   "control": {
-    "vertical_pipeline": {
-      "steps": [
-        { "id": "score",          "type": "MODEL_SCORING",  "params": { "predictor_ref": "p_act" } },
-        { "id": "boost_and_rank", "type": "BOOST_AND_RANK", "params": { ... } }
-      ]
-    }
+    "p_act": { "predictor": "feed_ranking_v1", "model": "store_ranker_v1", "features": [...] },
+    "v_act": { "gov": 1.0, "fiv": 0.0, "strategic": 0.0 },
+    "boost_weights": { "nv": 1.0 },
+    "diversity": { "enabled": false, "weight": 0.0 }
   },
-  "treatment_intent_v3": {
-    "vertical_pipeline": {
-      "steps": [
-        { "id": "score",          "type": "MODEL_SCORING",  "params": { "model_name": "vertical_intent_v3" } },
-        { "id": "boost_and_rank", "type": "BOOST_AND_RANK", "params": { ... } }
-      ]
-    }
+  "treatment_nv_boost": {
+    "extends": "control",
+    "v_act": { "gov": 0.8, "strategic": 0.2 },
+    "boost_weights": { "nv": 1.5 }
   }
 }
 ```
 
 **MLE surface:** drop a JSON file, add one DV key. No PR for parameter changes.
-
-**BE surface:** register a new Processor class when a new step type is needed. Everything else is config.
+**BE surface:** register a new `RankingStep` when a new step type is needed. Everything else is config.
 
 ---
 
 ## 8. What "Unified" Means
 
-"Unified" has three concrete meanings:
-
-**1. Unified Component Model**
-Every content type (store carousel, item carousel, NV carousel, ads carousel) implements the same `Component` interface. The ranking engine doesn't know or care what type of content it's ranking. There is no `if (component is StoreCarousel)` in the engine.
+**1. Unified Interface Model**
+Every content type implements `Scorable`. The engine doesn't know or care what type of content it's ranking. No `if (item is StoreCarousel)` in the engine.
 
 **2. Unified Value Function**
-Every content type's score is expressed as `pImp × pAct × vAct` on a comparable, calibrated scale. Organic stores, ads, merch, and NV placements compete on the same scale. No content type gets a separate scoring system or a hardcoded multiplier that can't be measured.
+Every content type's score expressed as `pImp × pAct × vAct` on a comparable, calibrated scale. Organic stores, ads, merch, and NV placements compete on the same scale.
 
 **3. Unified Experiment Platform**
-Both horizontal and vertical ranking are configured through the same JSON contract, the same DV wiring convention, and the same tracing infrastructure. MLEs self-serve both layers through the same interface. No layer requires a different workflow.
+Both horizontal and vertical ranking configured through the same JSON contract, the same DV wiring, and the same tracing infrastructure.
 
 ---
 
 ## 9. What the Current Code Gets Wrong
 
-These are the root causes that UBP addresses:
-
 | Root Cause | Symptom | UBP Fix |
 |---|---|---|
-| Each carousel type owns its own ranking logic | FavoritesCarousel, DVCarousel, TasteCarousel each do ranking differently, no shared interface | `Component` interface collapses all types; `Processor` registry handles step logic |
-| Step params live in 10+ scattered places | Changing one experiment touches 5 DVs + 3 JSON files + hardcoded constants | Single experiment JSON per treatment; params injected at call time |
-| No config seam for step sequence | Adding/removing a step requires code change | Steps declared in config; engine composes from registry at request time |
-| Post-ranking fixups are outside the pipeline | `updateSortOrderOfNVCarousel()` runs after the DAG with no traceability | Business fixups stay outside pipeline; MLE-configurable pins are part of `BOOST_AND_RANK` |
-| Manual per-step Iguazu instrumentation | Each processor manually calls IguazuEventUtil — inconsistent, often missing | Engine auto-calls `recordTrace()` after every step; standard schema |
-| Organic/ads/NV scores are incomparable | Ads inserted AFTER organic ranking — highest-value ads may not be at the top | All content declares `pAct` + `vAct`; calibration service normalizes scores |
+| Each carousel type owns its own ranking logic | 9+ types with no shared interface | `Scorable` interface collapses all types |
+| Step params live in 10+ scattered places | Changing one experiment touches 5 DVs + 3 JSON files | Single experiment JSON; params injected at call time |
+| No config seam for step sequence | Adding/removing a step requires code change | Steps declared in config; engine composes from registry |
+| Post-ranking fixups outside pipeline | `updateSortOrderOfNVCarousel()` runs after DAG with no traceability | Business fixups stay outside; MLE-configurable pins in step params |
+| Manual Iguazu instrumentation | Each step manually calls IguazuEventUtil — inconsistent | Engine auto-traces after every step |
+| Scores are incomparable | Ads inserted AFTER organic ranking on different scale | All content declares `pAct` + `vAct`; calibration normalizes |
 
 ---
 
@@ -331,3 +309,17 @@ What the MLE never touches:
 ```
 
 The day that workflow is possible for both vertical and horizontal ranking, UBP is done.
+
+---
+
+## Horizontal Contract Notes (Phase 2)
+
+Same formula, same pattern — applied to store/item ordering *within* each carousel.
+
+Key difference: carousels have different ranking needs. The contract supports `carousel_overrides` — per-carousel step params on top of defaults.
+
+| Current problem | UBP fix |
+|---|---|
+| Each carousel type owns ranking logic in `modifyLiteStoreCollection()` | `RankingStep` registry + `carousel_overrides` in config |
+| S1/S2/S3 reranking invisible (runs after Iguazu fires) | Part of `RANKING_SORT` step, auto-traced |
+| Same config fragmentation as vertical | Same `p_act` + `v_act` contract |

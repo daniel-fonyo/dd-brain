@@ -194,11 +194,13 @@ unified-blending-platform/
 
 ---
 
-## 10. Priority Actions
+## 10. Actions Taken (2026-03-22)
 
-1. **Delete** `problem-and-approach.md` and `[RFC] Universal Ranker Modeling.txt` (duplicates)
-2. **Archive** 7 raw imports + 3 superseded docs
-3. **Update `plan.md`** to reflect pivot priorities and 2-step model
-4. **Consolidate 4 MLE contract docs** into one canonical `mle-contract.md`
-5. **Fix `northstar.md`** config schema section to match current contract
-6. **Standardize naming** across remaining docs to match `poc-generic-ranking.md`
+1. **Deleted** `problem-and-approach.md` and `[RFC] Universal Ranker Modeling.txt` (duplicates)
+2. **Archived** 6 raw imports to `archive/raw-imports/` + 3 superseded docs to `archive/`
+3. **Rewrote `plan.md`** — aligned with poc-generic-ranking naming (Scorable/RankingStep/Ranker), Phase 1 RANK_ALL model, traffic splitting moved to future
+4. **Consolidated** `mle-vertical-contract.md` + `experiment-config-contract.md` + `mle-experiment-guide.md` + `mle-contract-interview.md` → one canonical `mle-contract.md` (flat schema, open questions preserved)
+5. **Updated `northstar.md`** — merged design-patterns-and-contract.md content, fixed naming + config schema, deleted source doc
+6. **Standardized naming** across plan.md, northstar.md, rfc-feedback.md to Scorable/RankingStep/Ranker
+7. **Cleaned up** rfc-feedback.md (removed "temp" label, updated component names)
+8. **Updated** CLAUDE.md with new file structure and naming convention
