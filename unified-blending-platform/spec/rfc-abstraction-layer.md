@@ -381,23 +381,18 @@ flowchart LR
         direction LR
         subgraph h1["StepHandler"]
             S1["MODEL_SCORING"]
-            D1["model: sibyl_v3\nfeatures: [...]"]
         end
         subgraph h2["StepHandler"]
             S2["CALIBRATION"]
-            D2["normalize across\ncontent types"]
         end
         subgraph h3["StepHandler"]
             S3["VALUE_FUNCTION"]
-            D3["EV = pImp × pAct × vAct\nweights: gov, fiv, strategic"]
         end
         subgraph h4["StepHandler"]
             S4["DIVERSITY_RERANK"]
-            D4["diversity constraints\nper category"]
         end
         subgraph h5["StepHandler"]
             S5["FIXED_PINNING"]
-            D5["pinned positions\nfrom config"]
         end
         h1 -- "next" --> h2
         h2 -- "next" --> h3
