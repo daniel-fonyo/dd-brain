@@ -28,18 +28,51 @@
 
 # What?
 
-Introduce ranking abstraction interfaces into feed-service that create a clean boundary between *what gets ranked* and *how ranking works*. Four interfaces:
+## Before: no seams
 
-- **`Scorable`** — unified interface implemented directly by domain types (`StoreCarousel`, `ItemCarousel`, etc.)
-- **`RankingStep<S : Enum<S>>`** — domain logic contract (items in → items out)
-- **`RankingHandler`** — infrastructure wrapper (chain of responsibility)
-- **`Ranker<S : Enum<S>>`** — config-driven engine that assembles handler chains
+Today the homepage ranking pipeline is a chain of inline method calls with no interfaces between them:
+
+```
+reOrderGlobalEntitiesV2()
+  └─ rankAndDedupeContent()
+       └─ rankAndMergeContent()
+            └─ rankContent()
+                 └─ BaseEntityRankerConfiguration.rank()
+                      ├─ getEntities()         — flatten 9 types via ScorableEntity wrappers
+                      ├─ getScoreBundle()       — Sibyl ML scoring
+                      ├─ getBoostBundle()       — boosting + multipliers
+                      ├─ getRankingBundle()     — pin vs flow separation
+                      └─ getRankableContent()   — re-assemble typed containers
+```
+
+There's no shared type for carousel items, no composable step abstraction, and no way to test or configure one stage independently.
+
+## After: three interfaces insert clean boundaries
+
+```
+reOrderGlobalEntitiesV2()
+  └─ rankAndDedupeContent()
+       └─ rankAndMergeContent()
+            └─ rankContent()
+                 ├─ content.toRankableList()              ← Rankable interface
+                 ├─ RankingPipeline.rank(items, steps)    ← RankingStep + RankingPipeline
+                 │    └─ StepHandler chain
+                 │         └─ VerticalRankAllStep.execute()
+                 │              └─ RankerConfiguration.rank()   (same legacy code)
+                 └─ result.toRankableContent()             ← back to typed containers
+```
+
+Three concepts:
+
+- **`Rankable`** — interface implemented directly by the 9 domain types (`StoreCarousel`, `ItemCarousel`, etc.). No wrapper classes.
+- **`RankingStep<S : Enum<S>>`** — domain logic contract: items in, items out. Identified by a step type enum.
+- **`RankingPipeline<S : Enum<S>>`** — config-driven engine that assembles a handler chain from step types and executes it.
 
 These don't change any ranking behavior — they formalize existing conventions into compile-time contracts so that everything UBP needs can be built on top without rearchitecting.
 
-**Thesis:** The homepage ranking pipeline cannot evolve toward UBP without interfaces. Every future UBP goal — experiment velocity, partner self-service, whole-page optimization — depends on having composable, testable ranking steps that operate on a uniform data type. This RFC proposes the interfaces and a safe delivery plan to get them into production.
+**Thesis:** The homepage ranking pipeline cannot evolve toward UBP without interfaces. Every future UBP goal — experiment velocity, partner self-service, whole-page optimization — depends on composable, testable ranking steps that operate on a uniform data type. This RFC proposes those interfaces and a safe delivery plan to get them into production.
 
-**Phase 1 vertical is shipped.** `Scorable` is implemented on 9 vertical domain types. `Ranker<VerticalStepType>` with a single `RANK_ALL` step wrapping the entire legacy pipeline is wired in at `DefaultHomePagePostProcessor.rankContent()` (shadow mode, gated by `ubp_shadow_vertical_ranking`). This RFC asks for alignment that these are the right abstractions before proceeding to shadow validation and horizontal ranking.
+**Phase 1 vertical is shipped.** `Rankable` is implemented on 9 vertical domain types. `RankingPipeline<VerticalStepType>` with a single `RANK_ALL` step wrapping the entire legacy pipeline is wired in at `DefaultHomePagePostProcessor.rankContent()` (shadow mode, gated by `ubp_shadow_vertical_ranking`). This RFC asks for alignment that these are the right abstractions before proceeding to shadow validation and horizontal ranking.
 
 ---
 
@@ -53,17 +86,8 @@ The result: ranking logic is scattered across utility objects with no shared int
 
 ## Three concrete problems
 
-**1. No shared abstraction for carousel types.**
-The pipeline handles 9 domain types (`StoreCarousel`, `ItemCarousel`, `DealCarousel`, `StoreCollection`, `CollectionV2`, `ItemCollection`, `MapCarousel`, `ReelsCarousel`, `StoreEntity`). These have no common interface. Every ranking stage branches on type:
-
-```
-Score stage  → if StoreCarousel? if ItemCarousel? if DealCarousel? ... (9 branches)
-Blend stage  → if StoreCarousel? if ItemCarousel? if DealCarousel? ... (9 branches)
-Boost stage  → if StoreCarousel? if ItemCarousel? if DealCarousel? ... (9 branches)
-Pin stage    → if StoreCarousel? if ItemCarousel? if DealCarousel? ... (9 branches)
-```
-
-Adding a new carousel type means touching 10+ files across the pipeline.
+**1. Wrapper adapter explosion for carousel types.**
+The pipeline handles 9 domain types (`StoreCarousel`, `ItemCarousel`, `DealCarousel`, `StoreCollection`, `CollectionV2`, `ItemCollection`, `MapCarousel`, `ReelsCarousel`, `StoreEntity`). These have no common interface. To process them uniformly, the existing code wraps each in a `ScorableEntity*` adapter class (`ScorableEntityStoreCarousel`, `ScorableEntityItemCarousel`, etc.) — 9 wrappers, each with mutable `var score` and an `applyBackTo()` method that writes scores back to the original objects. Adding a new carousel type means creating a new wrapper and threading `applyBackTo()` through every stage that touches scoring.
 
 **2. No abstraction for ranking stages.**
 Scoring, boosting, blending, and pinning are inline method calls through utility objects (`BlendingUtil`, `BoostingBundle`, `EntityScorer`). They cannot be tested independently, swapped, or configured without modifying the call chain. Parameters live in 6+ locations (DVs, runtime JSONs, hardcoded constants).
@@ -71,25 +95,12 @@ Scoring, boosting, blending, and pinning are inline method calls through utility
 **3. No test coverage on the ranking pipeline.**
 There are zero tests covering the end-to-end ranking behavior. Changes are "edit and pray." There is no safe way to refactor or extend the pipeline.
 
-## Why this matters for UBP
-
-The Unified Blending Platform vision (Yu Zhang, Feb 2026) proposes a systematic, ML-driven framework replacing fragmented homepage blending with whole-page optimization. It promises:
-
-- **10x experiment velocity** (2-3 weeks → 2-3 days)
-- **Self-service experimentation** for partner teams (NV, Ads, Merch)
-- **Unified value function** across all content types
-- **Per-step observability** for debugging and counterfactual analysis
-
-None of this is possible without clean interfaces. You cannot make ranking config-driven if there is no step abstraction to configure. You cannot let partners self-serve if there is no extension point. You cannot observe per-step scores if there are no steps.
-
-**This RFC is the first step: establish the interfaces that make everything else buildable.**
-
 ---
 
 ## Goals
 
-1. **Introduce `Scorable` interface** — implemented directly by 9 vertical domain types (no wrapper classes). `StoreCarousel`, `ItemCarousel`, etc. implement `Scorable` via `predictionScore` + `withPredictionScore()` copy pattern.
-2. **Introduce ranking engine** — `RankingStep<S>` + `RankingHandler` + `Ranker<S>` with chain-of-responsibility dispatch.
+1. **Introduce `Rankable` interface** — implemented directly by 9 vertical domain types (no wrapper classes). `StoreCarousel`, `ItemCarousel`, etc. implement `Rankable` via `predictionScore` + `withPredictionScore()` copy pattern.
+2. **Introduce ranking engine** — `RankingStep<S>` + `RankingHandler` + `RankingPipeline<S>` with chain-of-responsibility dispatch.
 3. **Align on these as the stable contract** — these interfaces and their signatures are the API surface all future UBP work builds on.
 4. **Shadow validate** — prove the engine produces identical results to the old path before any traffic migrates.
 5. **Preserve all existing behavior** — Phase 1 wraps the entire legacy pipeline in one `RANK_ALL` step. No behavior change.
@@ -122,7 +133,7 @@ None of this is possible without clean interfaces. You cannot make ranking confi
 
 | Phase | What | Status |
 | :---- | :---- | :---- |
-| **1. Scorable + engine** | `Scorable` on 9 vertical types, `RankingStep<S>`, `RankingHandler`, `Ranker<S>`, `VerticalRankAllStep` — all pure additions | **Shipped** |
+| **1. Rankable + engine** | `Rankable` on 9 vertical types, `RankingStep<S>`, `RankingHandler`, `RankingPipeline<S>`, `VerticalRankAllStep` — all pure additions | **Shipped** |
 | **2. Shadow validation** | Wire shadow path in `DefaultHomePagePostProcessor`. Run both paths, compare sort orders, log divergences. Target: `divergence_count = 0` | Next |
 | **3. Horizontal** | Same interfaces applied to within-carousel ranking | After vertical proven |
 | **4. Rollout** | DV-gated gradual migration: 1% → 5% → 25% → 50% → 100% | After shadow proven |
@@ -134,26 +145,9 @@ Each phase is independently shippable. If any phase shows risk, we stop and the 
 
 # Design
 
-## Introduction
+## Architecture Overview
 
-The ranking pipeline today is a chain of inline method calls with no interfaces between them:
-
-```
-reOrderGlobalEntitiesV2()
-  └─ rankAndDedupeContent()
-       └─ rankAndMergeContent()
-            └─ rankContent()
-                 └─ BaseEntityRankerConfiguration.rank()
-                      ├─ getEntities()         — flatten 9 types via type-checks
-                      ├─ getScoreBundle()       — Sibyl ML scoring
-                      ├─ getBoostBundle()       — boosting + multipliers
-                      ├─ getRankingBundle()     — pin vs flow separation
-                      └─ getRankableContent()   — re-assemble typed containers
-```
-
-We introduce four interfaces that create clean boundaries at these seams. The existing methods don't change — they get wrapped by a single step that exposes them through a uniform contract.
-
-The strategy is: **implement interface on existing types, rank uniformly, apply back**.
+The core flow: diverse types converge to one interface, pass through a step chain, and convert back. Domain types implement `Rankable` directly — no adapter wrappers.
 
 ```mermaid
 flowchart LR
@@ -165,8 +159,8 @@ flowchart LR
         T4["...6 more"]
     end
 
-    subgraph convert["toScorableList()"]
-        A["RankableContent → List&lt;Scorable&gt;"]
+    subgraph convert["toRankableList()"]
+        A["RankableContent → List&lt;Rankable&gt;"]
     end
 
     T1 --> A
@@ -174,7 +168,7 @@ flowchart LR
     T3 --> A
     T4 --> A
 
-    subgraph pipeline["Ranker&lt;VerticalStepType&gt;"]
+    subgraph pipeline["RankingPipeline&lt;VerticalStepType&gt;"]
         ENG["RankingStep.execute(items, ctx)
         Phase 1: single RANK_ALL step
         Phase 2: granular step chain"]
@@ -183,7 +177,7 @@ flowchart LR
     A --> ENG
 
     subgraph writeback["toRankableContent()"]
-        WB["List&lt;Scorable&gt; → RankableContent"]
+        WB["List&lt;Rankable&gt; → RankableContent"]
     end
 
     ENG --> WB
@@ -194,71 +188,53 @@ flowchart LR
     style writeback fill:#ffffcc,stroke:#aaaa00
 ```
 
-This diagram shows the core design: diverse types converge to one interface, pass through a step chain, and convert back. Domain types implement `Scorable` directly — no adapter wrappers.
+## `Rankable` Interface (Implemented, Not Wrapped)
 
-## Architecture
-
-### `Scorable` Interface (Implemented, Not Wrapped)
-
-Today, every ranking stage branches on carousel type because there is no shared interface. With `Scorable`, the existing domain types implement the interface directly — everything downstream operates on a single type.
+Today, every ranking stage operates through `ScorableEntity*` wrapper classes because there is no shared interface on the domain types themselves. With `Rankable`, the existing domain types implement the interface directly — wrappers disappear, and everything downstream operates on a single type.
 
 ```kotlin
-interface Scorable {
-    fun scorableId(): String
+interface Rankable {
+    fun rankableId(): String
     val predictionScore: Double?
-    fun withPredictionScore(score: Double): Scorable
+    fun withPredictionScore(score: Double): Rankable
 }
 ```
 
-Domain types implement `Scorable` by adding `override` annotations to fields they already have, plus a one-line `withPredictionScore()` via Kotlin's `copy()`:
+Domain types implement `Rankable` by adding `override` annotations to fields they already have, plus a one-line `withPredictionScore()` via Kotlin's `copy()`:
 
 ```kotlin
 data class StoreCarousel(
     // ... existing fields ...
     override val predictionScore: Double?,
-) : Carousel, BaseCarousel, SortablePlacement, Scorable {
-    override fun scorableId(): String = id
+) : Carousel, BaseCarousel, SortablePlacement, Rankable {
+    override fun rankableId(): String = id
     override fun withPredictionScore(score: Double): StoreCarousel = copy(predictionScore = score)
 }
 ```
 
-**Key design choice: interface inheritance, not adapter wrappers.** The fields (`id`, `predictionScore`) already exist on these types. `Scorable` formalizes an existing convention into a compile-time contract. No wrapper classes, no `applyBackTo()`, no mutable `var score` — `withPredictionScore()` returns an immutable copy.
+**What this eliminates:** 9 `ScorableEntity*` wrapper classes, each with mutable `var score` and `applyBackTo()` writeback. After: domain types carry their own scores. No adapters, no writeback.
 
-**What this eliminates:** 9 branches x 4 stages = 36 type-checks scattered across files. After: 0 type-checks in the pipeline.
-
-**What this enables:** New carousel type = implement `Scorable` on one class instead of 10+ file changes.
+**What this enables:** New carousel type = implement `Rankable` on one class instead of creating a wrapper + threading `applyBackTo()` through every stage.
 
 ### Conversion Functions
 
-`RankableContent` (the existing container for all carousel types) converts to/from `List<Scorable>`:
+`RankableContent` (the existing container for all carousel types) converts to/from `List<Rankable>`:
 
 ```kotlin
-fun RankableContent.toScorableList(): List<Scorable>
-fun List<Scorable>.toRankableContent(): RankableContent
+fun RankableContent.toRankableList(): List<Rankable>
+fun List<Rankable>.toRankableContent(): RankableContent
 ```
 
-`toScorableList()` flattens all carousel fields into a single list. `toRankableContent()` reconstructs the typed container by filtering instances back into their original fields. Round-trip preserves all items.
+`toRankableList()` flattens all carousel fields into a single list. `toRankableContent()` reconstructs the typed container by filtering instances back into their original fields. Round-trip preserves all items.
 
-### Immutability Design
-
-`Scorable` follows Kotlin data class conventions — immutable by default:
-
-| Field | Mutable? | Why |
-| :---- | :---- | :---- |
-| `scorableId()` | No (function) | Identity — never changes |
-| `predictionScore` | No (`val`) | Set via `withPredictionScore()` copy |
-| `withPredictionScore()` | N/A | Returns new instance — original unchanged |
-
-**No mutable state.** Steps produce new lists via `withPredictionScore()`. The engine collects the result. This is safer than the mutable adapter pattern and aligns with Kotlin idioms.
-
-### `RankingStep<S : Enum<S>>`
+## `RankingStep<S : Enum<S>>`
 
 The step interface is generic over a step type enum, allowing different ranking layers (vertical, horizontal) to have their own step type taxonomy:
 
 ```kotlin
 interface RankingStep<S : Enum<S>> {
     val stepType: S
-    suspend fun execute(items: List<Scorable>, context: RankingContext): List<Scorable>
+    suspend fun execute(items: List<Rankable>, context: RankingContext): List<Rankable>
 }
 ```
 
@@ -272,46 +248,47 @@ enum class VerticalStepType {
 
 Phase 2 will add granular types: `MODEL_SCORING`, `MULTIPLIER_BOOST`, `DIVERSITY_RERANK`, `POSITION_BOOSTING`, `FIXED_PINNING`.
 
-### `RankingHandler` (Chain of Responsibility)
+## `RankingHandler` and Chain of Responsibility
 
-Handlers wrap steps with infrastructure concerns (metrics, conditions, shadow validation):
+`RankingHandler` is a `fun interface` (SAM) — a single `handle` method. `StepHandler` wraps a `RankingStep` and chains to the next handler via an immutable constructor parameter:
 
 ```kotlin
-interface RankingHandler {
-    suspend fun handle(items: List<Scorable>, context: RankingContext): List<Scorable>
+fun interface RankingHandler {
+    suspend fun handle(items: List<Rankable>, context: RankingContext): List<Rankable>
 }
 
-abstract class BaseHandler : RankingHandler {
-    var next: RankingHandler? = null
-    protected suspend fun next(items: List<Scorable>, context: RankingContext): List<Scorable>
+class StepHandler<S : Enum<S>>(
+    private val step: RankingStep<S>,
+    private val next: RankingHandler?,
+) : RankingHandler {
+    override suspend fun handle(items: List<Rankable>, context: RankingContext): List<Rankable> {
+        val result = step.execute(items, context)
+        return next?.handle(result, context) ?: result
+    }
 }
-
-class StepHandler<S : Enum<S>>(private val step: RankingStep<S>) : BaseHandler()
 ```
 
-`StepHandler` wraps a `RankingStep` and chains to the next handler. The engine builds the chain; steps don't know about chaining.
+Steps don't know about chaining. The engine builds the chain; each `StepHandler` receives its `next` at construction.
 
-### `Ranker<S : Enum<S>>` Engine
+## `RankingPipeline<S : Enum<S>>` Engine
 
 The engine assembles a handler chain from a step type list and executes it:
 
 ```kotlin
-class Ranker<S : Enum<S>>(
+class RankingPipeline<S : Enum<S>>(
     private val stepRegistry: Map<S, RankingStep<S>>,
 ) {
-    suspend fun rank(
-        items: List<Scorable>,
-        stepTypes: List<S>,
-        context: RankingContext,
-    ): List<Scorable>
+    suspend fun rank(items: List<Rankable>, stepTypes: List<S>, context: RankingContext): List<Rankable>
 
     private fun buildChain(stepTypes: List<S>): RankingHandler
 }
 ```
 
-Zero business logic — pure dispatch. The engine looks up each step type in the registry, wraps it in a `StepHandler`, chains them, and executes. Step order is determined by the `stepTypes` list passed in.
+`buildChain` uses `foldRight` — each `StepHandler` is constructed with its `next` already set. No mutable linking, no dangling nulls. The chain is complete and immutable the moment it's built.
 
-### `VerticalRankAllStep` (Phase 1)
+Zero business logic — pure dispatch. The engine looks up each step type in the registry, wraps it in a `StepHandler`, chains them via `foldRight`, and executes.
+
+## `VerticalRankAllStep` (Phase 1)
 
 The single Phase 1 step delegates to the existing `RankerConfiguration`:
 
@@ -320,23 +297,36 @@ class VerticalRankAllStep(
     private val rankerConfiguration: RankerConfiguration,
 ) : RankingStep<VerticalStepType> {
     override val stepType = VerticalStepType.RANK_ALL
-    override suspend fun execute(items: List<Scorable>, context: RankingContext): List<Scorable>
+
+    override suspend fun execute(items: List<Rankable>, context: RankingContext): List<Rankable> {
+        val content = items.toRankableContent()
+        val ranked = rankerConfiguration.rank(context, content)
+        return ranked.toRankableList()
+    }
 }
 ```
 
 This step calls `rankerConfiguration.rank()` — the same method the old path calls. Identical behavior, different dispatch path.
 
-### Class Diagram
+## Why These Seams?
+
+**Why `Rankable` on domain types (not wrappers)?** The fields (`id`, `predictionScore`) already exist on these types. `Rankable` formalizes an existing convention into a compile-time contract — zero-overhead interface inheritance. The alternative — 9 `ScorableEntity*` wrapper classes with mutable `var score` and `applyBackTo()` writeback — adds files, mutable state, and a writeback coordination problem. Interface inheritance eliminates all of that.
+
+**Why chain-of-responsibility (not a function list)?** Each handler wraps a step with infrastructure concerns — metrics, tracing, conditional execution — transparently. A simple `steps.forEach { it.execute() }` pipeline can't inject cross-cutting concerns between steps without modifying the steps themselves. The handler chain lets us add observability, shadow comparison, or circuit-breaking around any step without that step knowing.
+
+**Why `foldRight` immutable construction?** Avoids a mutable linking loop. Each `StepHandler` receives its `next` as a constructor parameter — it's complete and immutable at construction time. No dangling `next = null` that gets set later, no ordering bugs from mutating a chain after construction.
+
+## Class Diagram
 
 ```mermaid
 classDiagram
     direction TB
 
-    class Scorable {
+    class Rankable {
         <<interface>>
-        +scorableId(): String
+        +rankableId(): String
         +predictionScore: Double?
-        +withPredictionScore(score: Double): Scorable
+        +withPredictionScore(score: Double): Rankable
     }
 
     class StoreCarousel {
@@ -355,15 +345,15 @@ classDiagram
         +withPredictionScore(score): DealCarousel
     }
 
-    Scorable <|.. StoreCarousel
-    Scorable <|.. ItemCarousel
-    Scorable <|.. DealCarousel
-    note for Scorable "9 domain types implement directly\n(6 more omitted for brevity)"
+    Rankable <|.. StoreCarousel
+    Rankable <|.. ItemCarousel
+    Rankable <|.. DealCarousel
+    note for Rankable "9 domain types implement directly\n(6 more omitted for brevity)"
 
     class RankingStep~S~ {
         <<interface>>
         +stepType: S
-        +execute(items, context): List~Scorable~
+        +execute(items, context): List~Rankable~
     }
 
     class VerticalStepType {
@@ -373,40 +363,35 @@ classDiagram
 
     class VerticalRankAllStep {
         -rankerConfiguration: RankerConfiguration
-        +execute(items, context): List~Scorable~
+        +execute(items, context): List~Rankable~
     }
 
     RankingStep <|.. VerticalRankAllStep
     VerticalRankAllStep --> VerticalStepType
 
     class RankingHandler {
-        <<interface>>
-        +handle(items, context): List~Scorable~
-    }
-
-    class BaseHandler {
-        <<abstract>>
-        +next: RankingHandler?
+        <<fun interface>>
+        +handle(items, context): List~Rankable~
     }
 
     class StepHandler~S~ {
         -step: RankingStep~S~
+        -next: RankingHandler?
     }
 
-    RankingHandler <|.. BaseHandler
-    BaseHandler <|-- StepHandler
+    RankingHandler <|.. StepHandler
     StepHandler --> RankingStep : wraps
 
-    class Ranker~S~ {
+    class RankingPipeline~S~ {
         -stepRegistry: Map~S, RankingStep~
-        +rank(items, stepTypes, context): List~Scorable~
+        +rank(items, stepTypes, context): List~Rankable~
     }
 
-    Ranker --> RankingHandler : builds chain of
-    Ranker --> Scorable : operates on
+    RankingPipeline --> RankingHandler : builds chain of
+    RankingPipeline --> Rankable : operates on
 ```
 
-### Both Layers Side by Side
+## Both Layers Side by Side
 
 Same architecture, different step type enums. Vertical proven first, horizontal mirrors it.
 
@@ -416,8 +401,8 @@ flowchart LR
         direction TB
         V_INC["PostProcessor
         .rankContent()"]
-        V_ENG["Ranker&lt;VerticalStepType&gt;"]
-        V_IF["Scorable"]
+        V_ENG["RankingPipeline&lt;VerticalStepType&gt;"]
+        V_IF["Rankable"]
         V_STEP["VerticalRankAllStep"]
 
         V_INC --> V_ENG
@@ -429,8 +414,8 @@ flowchart LR
         direction TB
         H_INC["StoreRanker
         .modifyLiteStoreCollection()"]
-        H_ENG["Ranker&lt;HorizontalStepType&gt;"]
-        H_IF["Scorable"]
+        H_ENG["RankingPipeline&lt;HorizontalStepType&gt;"]
+        H_IF["Rankable"]
         H_STEP["HorizontalRankAllStep"]
 
         H_INC --> H_ENG
@@ -442,7 +427,7 @@ flowchart LR
     style horizontal fill:#f0e6ff,stroke:#7700cc
 ```
 
-### Safe Delivery: Shadow → Rollout
+## Safe Delivery: Shadow → Rollout
 
 We never put users at risk. The migration has two phases:
 
@@ -457,7 +442,7 @@ flowchart TB
         R1["Request"] --> PP1["PostProcessor"]
         PP1 --> OLD1["Old Path"]
         PP1 --> DV1{"ubpShadowEnabled?"}
-        DV1 -->|Yes| NEW1["Ranker engine
+        DV1 -->|Yes| NEW1["RankingPipeline engine
         (parallel coroutine)"]
         DV1 -->|No| SKIP1["Skip"]
         OLD1 --> RESULT1["Result → User"]
@@ -470,7 +455,7 @@ flowchart TB
         direction TB
         R2["Request"] --> PP2["PostProcessor"]
         PP2 --> DV2{"ubpRolloutEnabled?"}
-        DV2 -->|Yes| NEW2["Ranker engine"]
+        DV2 -->|Yes| NEW2["RankingPipeline engine"]
         DV2 -->|No| OLD2["Old Path (unchanged)"]
         NEW2 --> RESULT2a["Result → User"]
         OLD2 --> RESULT2b["Result → User"]
@@ -485,7 +470,7 @@ flowchart TB
 
 **Characterization tests with UBP flag OFF must remain green at every stage** — proving the old path is untouched.
 
-### Dependencies
+## Dependencies
 
 **Upstream:** None. Internal to feed-service post-processing. Retrieval, grouping, and Sibyl are untouched.
 
@@ -503,7 +488,7 @@ Once the UBP path is the primary path (old path off), there is no duplication. `
 
 | Operation | Additional latency |
 | :---- | :---- |
-| `toScorableList()` / `toRankableContent()` conversion | ~1-2ms |
+| `toRankableList()` / `toRankableContent()` conversion | ~1-2ms |
 | Step registry lookup + handler chain build | ~0.1ms |
 | **Total additional overhead vs current path** | **<3ms** |
 
@@ -534,34 +519,32 @@ Shadow mode runs old and new paths **in parallel** via coroutines. The user-faci
 
 **Rollback:** Disable the DV. Immediate. No deploy required.
 
-## Contract Stability
+## Stability
 
-**These interfaces are the long-term contract.** Once approved and shipped, they become the stable API surface that all future UBP work, MLE experiments, and partner integrations build against.
+These are small internal interfaces (3 types, ~10 methods total) within a single service. They don't require the governance overhead of a public API. What can change later without breaking anything: new step type enum values, new `RankingStep` implementations, new `RankingHandler` wrappers — all additive. What would require migration: removing `Rankable` methods or changing the `execute()` signature.
 
-| Interface | What's being committed | Impact of getting it wrong |
-| :---- | :---- | :---- |
-| `Scorable` | `scorableId()`, `predictionScore`, `withPredictionScore()` | Every domain type, every step, and every future consumer of ranking depends on this shape |
-| `RankingStep<S>` | `execute(items, context)` signature | Every step implementation, every engine dispatch depends on this signature |
-| `RankingHandler` | `handle(items, context)` signature | Every infrastructure wrapper (metrics, shadow, tracing) depends on this |
-| `Ranker<S>` | `rank(items, stepTypes, context)` signature | Every wiring point in the pipeline depends on this |
+## Extensibility
 
-**What can change later:** New step type enum values. New `RankingStep` implementations. New `RankingHandler` wrappers. These are additive and non-breaking.
+The interfaces are designed to absorb UBP capabilities incrementally. Each phase adds step types and implementations — the engine, the interface, and the wiring stay unchanged.
 
-**What cannot change without migration:** Removing `Scorable` methods. Changing the `execute()` signature. Removing step type enum values that steps already depend on.
+```
+Phase 1 (now):  RANK_ALL
+                └─ wraps entire legacy pipeline in one step
 
----
+Phase 2:        MODEL_SCORING → MULTIPLIER_BOOST → DIVERSITY_RERANK → FIXED_PINNING
+                └─ legacy pipeline decomposed into composable steps
 
-## What These Interfaces Unlock
+Phase 3:        MODEL_SCORING → CALIBRATION → VALUE_FUNCTION → DIVERSITY → PINNING
+                └─ full UBP pipeline with unified value function
+```
 
-| Future capability | How these interfaces enable it |
+| Future capability | How it plugs in |
 | :---- | :---- |
-| **Config-driven experiments** | `RankingStep` + step type enum = experiments are pipeline config changes, not code changes |
-| **Self-service MLE experimentation** | MLE declares `{model_name, traffic_pct}` — engine resolves to step sequence |
-| **Per-layer traffic management** | Engine supports experiment resolution per layer — replaces DV waterfall |
-| **Per-step observability** | Engine auto-emits `{item_id, step_type, score_before, score_after}` after each step |
-| **Unified value function** | Calibration + value weight steps added as new `RankingStep` types — no engine change |
-| **Partner self-service** | NV/Ads/Merch implement their own `RankingStep` — HP registers it once |
-| **New carousel type onboarding** | Implement `Scorable` on one class instead of 10+ file changes |
+| Config-driven experiments | New step type enum value + new `RankingStep` implementation. No engine change. |
+| Per-step observability | `StepHandler` already wraps each step — add metrics/tracing in one place. |
+| Unified value function | `CALIBRATION` + `VALUE_FUNCTION` steps added to the chain. Engine unchanged. |
+| Partner self-service | NV/Ads/Merch implement their own `RankingStep` — HP registers it. |
+| New carousel type | Implement `Rankable` on one class. No other files change. |
 
 ## Alternative Designs
 
@@ -569,51 +552,38 @@ Shadow mode runs old and new paths **in parallel** via coroutines. The user-faci
 Rejected. Too much risk. The full UBP vision includes value functions, calibration, ads integration, and traffic management. Shipping all at once on the homepage — the front page of every DoorDash session — is unacceptable risk. Interfaces first, then incremental capabilities.
 
 **2. Use adapter wrapper classes instead of interface inheritance.**
-Rejected. The original design proposed `StoreCarouselRow`, `ItemCarouselRow`, etc. as wrapper classes around domain types. But the fields (`id`, `predictionScore`) already exist on the domain types. Wrapper classes add 9 new files, mutable `var score`, and `applyBackTo()` writeback complexity — all unnecessary. Interface inheritance formalizes existing fields into a contract with zero new classes.
+Rejected. The original design proposed `ScorableEntity*` wrapper classes around domain types. But the fields (`id`, `predictionScore`) already exist on the domain types. Wrapper classes add 9 new files, mutable `var score`, and `applyBackTo()` writeback complexity — all unnecessary. Interface inheritance formalizes existing fields into a contract with zero new classes.
 
 **3. Wait for Pedregal (next-gen serving platform) and build on that.**
 Rejected. Pedregal timeline is uncertain and addresses a different layer (retrieval/serving). The ranking abstraction problem exists independently. These interfaces work on the current system and transfer cleanly to any future serving platform.
 
 **4. Refactor the existing code without interfaces.**
-Rejected. Without a shared type (`Scorable`) and a step contract (`RankingStep`), any refactoring still results in scattered type-checks and inline method chains. Interfaces are the minimum structural change needed.
+Rejected. Without a shared type (`Rankable`) and a step contract (`RankingStep`), any refactoring still results in wrapper adapters and inline method chains. Interfaces are the minimum structural change needed.
 
 ---
 
 # Appendix
 
-## A. Design Patterns Used
-
-| Pattern | Where it appears | Why |
-| :---- | :---- | :---- |
-| **Interface inheritance** | Domain types implement `Scorable` directly | Formalizes existing fields into compile-time contract without wrapper overhead |
-| **Strategy** | `RankingStep<S>` implementations | Each step is an interchangeable algorithm — the engine doesn't know which runs |
-| **Chain of Responsibility** | `RankingHandler` chain | Handlers execute sequentially; step order is load-bearing |
-| **Facade** | `Ranker.rank()` | Hides chain assembly, step dispatch, and context passing behind one call |
-| **Template Method** | `BaseEntityRankerConfiguration.rank()` *(being replaced)* | The current pattern — rigid inheritance-based skeleton. UBP replaces with config-driven Chain of Responsibility |
-
-**References:** Gamma et al., *Design Patterns* (1994). Feathers, *Working Effectively with Legacy Code* (2004).
-
----
-
-## B. Existing Code: Key Files Reference
+## A. Existing Code: Key Files Reference
 
 | What | File | Relevance |
 | :---- | :---- | :---- |
-| **Scorable interface** | `libraries/platform/.../models/Scorable.kt` | The core interface |
-| **Ranking engine** | `libraries/common/.../ubp/RankingEngine.kt` | `Ranker`, `RankingStep`, `RankingHandler`, `BaseHandler`, `StepHandler` |
+| **Rankable interface** | `libraries/platform/.../models/Rankable.kt` | The core interface |
+| **Ranking engine** | `libraries/common/.../ubp/RankingEngine.kt` | `RankingPipeline`, `RankingStep`, `RankingHandler`, `StepHandler` |
 | **Vertical step type** | `libraries/common/.../ubp/VerticalStepType.kt` | `enum class VerticalStepType { RANK_ALL }` |
 | **Vertical RANK_ALL step** | `libraries/common/.../ubp/VerticalRankAllStep.kt` | Delegates to `RankerConfiguration.rank()` |
-| **Conversion functions** | `libraries/common/.../ubp/RankableContentConversions.kt` | `toScorableList()` / `toRankableContent()` |
-| Vertical ranking entry point | `DefaultHomePagePostProcessor.reOrderGlobalEntitiesV2()` | Incision point for `Ranker<VerticalStepType>` |
+| **Conversion functions** | `libraries/common/.../ubp/RankableContentConversions.kt` | `toRankableList()` / `toRankableContent()` |
+| **Pipeline integration test** | `libraries/common/.../ubp/VerticalRankingPipelineTest.kt` | End-to-end: RankingPipeline → VerticalRankAllStep → EntityRankerConfiguration |
+| Vertical ranking entry point | `DefaultHomePagePostProcessor.reOrderGlobalEntitiesV2()` | Incision point for `RankingPipeline<VerticalStepType>` |
 | Current ranking skeleton | `BaseEntityRankerConfiguration.rank()` | Template Method being replaced |
-| Carousel type flattening | `EntityRankerConfiguration.getEntities()` | What `Scorable` interface replaces |
+| Carousel type flattening | `EntityRankerConfiguration.getEntities()` | What `Rankable` interface replaces |
 | Sibyl ML scoring + blending | `EntityRankerConfiguration.getScoreBundleWithWorkflowHelper()` | Called by `VerticalRankAllStep` via `RankerConfiguration` |
-| Horizontal ranking entry point | `DefaultHomePageStoreRanker.rank()` | Incision point for `Ranker<HorizontalStepType>` |
+| Horizontal ranking entry point | `DefaultHomePageStoreRanker.rank()` | Incision point for `RankingPipeline<HorizontalStepType>` |
 | Post-ranking fixups (NOT changing) | `NonRankableHomepageOrderingUtil` | NV pin, PAD=3, member pricing — stays as-is |
 
 ---
 
-## C. Value Function Reference
+## B. Value Function Reference
 
 The interfaces support an eventual unified value function:
 
@@ -631,8 +601,21 @@ EV(c, k) = pImp(k) × pAct(c) × vAct(c)
 
 ---
 
+## C. Design Patterns
+
+| Pattern | Where | What it buys us |
+| :---- | :---- | :---- |
+| **Interface inheritance** | Domain types implement `Rankable` | Formalizes existing fields into a compile-time contract. Zero wrapper overhead — unlike the `ScorableEntity*` adapter pattern it replaces. |
+| **Strategy** | `RankingStep<S>` implementations | Each step is an interchangeable algorithm. The engine doesn't know or care which one runs — it just dispatches by enum key. |
+| **Chain of Responsibility** | `StepHandler` → `next` chain | Steps execute sequentially with infrastructure (metrics, tracing) injected between them transparently. Replaces the rigid Template Method skeleton in `BaseEntityRankerConfiguration.rank()`. |
+| **Facade** | `RankingPipeline.rank()` | Hides chain assembly, registry lookup, and context passing behind one call. Callers see `pipeline.rank(items, steps, ctx)` — nothing else. |
+
+The key migration: **Template Method → Chain of Responsibility.** The existing `BaseEntityRankerConfiguration.rank()` uses Template Method — a rigid inheritance skeleton where subclasses override specific steps. This cannot be configured at runtime, tested in isolation, or extended without subclassing. Chain of Responsibility composes steps from a registry, making the pipeline data-driven and each step independently testable.
+
+---
+
 ## D. Per-Step Tracing (Future Iteration)
 
-The engine architecture supports per-step tracing because the engine dispatches to named steps sequentially. It can snapshot `predictionScore` before and after each step — giving full visibility into how each step affected each item's score.
+The engine architecture supports per-step tracing because the engine dispatches to named steps sequentially. `StepHandler` can snapshot `predictionScore` before and after each step — giving full visibility into how each step affected each item's score.
 
 Not part of the current proposal. Will be designed once the interfaces are in production and the step chain has more than one step.
