@@ -5,7 +5,7 @@
 | **Author(s):** | Daniel Fonyo, Yu Zhang |
 | **Status:** | Draft |
 | **Origin:** | New |
-| **History:** | Drafted: Mar 20, 2026 · Rewritten: Mar 23, 2026 (aligned with shipped implementation) |
+| **History:** | Drafted: Mar 20, 2026 · Rewritten: Mar 23, 2026 |
 | **Keywords:** | Homepage, ranking, blending, abstraction, interfaces, feed-service |
 | **References:** | [Draft] Unified Blending Platform (Yu Zhang, Feb 2026) |
 
@@ -17,16 +17,11 @@
 | Frank Zhang | Not started | HP tech lead |
 | Dipali Ranjan | Not started | HP engineering |
 
-**Dependencies**
-
-| Dependency | Team | DRI | Status | Impact |
-| :---- | :---- | :---- | :---- | :---- |
-| feed-service | Homepage | Daniel Fonyo | Phase 1 vertical shipped | All changes live here |
-| Sibyl | ML Platform | — | None | No changes — same gRPC calls |
-
 ---
 
 # What?
+
+The Unified Blending Platform (UBP) is DoorDash's long-term vision for a single, config-driven ranking system across all homepage content — carousels, stores, ads, and future content types. Today the homepage ranking pipeline has no interfaces, no shared types, and no way to compose or test ranking stages independently. This RFC proposes three interfaces that insert clean boundaries into the existing pipeline, creating the foundation everything UBP needs can be built on without rearchitecting.
 
 ## Before: no seams
 
@@ -57,22 +52,22 @@ reOrderGlobalEntitiesV2()
                  ├─ content.toRankableList()              ← Rankable interface
                  ├─ RankingPipeline.rank(items, steps)    ← RankingStep + RankingPipeline
                  │    └─ StepHandler chain
-                 │         └─ VerticalRankAllStep.execute()
+                 │         └─ CarouselRankAllStep.execute()
                  │              └─ RankerConfiguration.rank()   (same legacy code)
                  └─ result.toRankableContent()             ← back to typed containers
 ```
 
-Three concepts:
+Three concepts, applicable to both inter-carousel (vertical) and intra-carousel (horizontal/store) ranking:
 
-- **`Rankable`** — interface implemented directly by the 9 domain types (`StoreCarousel`, `ItemCarousel`, etc.). No wrapper classes.
-- **`RankingStep<S : Enum<S>>`** — domain logic contract: items in, items out. Identified by a step type enum.
-- **`RankingPipeline<S : Enum<S>>`** — config-driven engine that assembles a handler chain from step types and executes it.
+- **`Rankable`** — interface implemented directly by domain types. For vertical ranking: 9 carousel types (`StoreCarousel`, `ItemCarousel`, etc.). For horizontal ranking: `StoreEntity`. No wrapper classes.
+- **`RankingStep<S : Enum<S>>`** — domain logic contract: items in, items out. Identified by a step type enum (`CarouselRankStepType` for vertical, `IntraCarouselRankStepType` for horizontal).
+- **`RankingPipeline<S : Enum<S>>`** — config-driven engine that assembles a handler chain from step types and executes it. Same engine, different step type enum per layer.
 
 These don't change any ranking behavior — they formalize existing conventions into compile-time contracts so that everything UBP needs can be built on top without rearchitecting.
 
 **Thesis:** The homepage ranking pipeline cannot evolve toward UBP without interfaces. Every future UBP goal — experiment velocity, partner self-service, whole-page optimization — depends on composable, testable ranking steps that operate on a uniform data type. This RFC proposes those interfaces and a safe delivery plan to get them into production.
 
-**Phase 1 vertical is shipped.** `Rankable` is implemented on 9 vertical domain types. `RankingPipeline<VerticalStepType>` with a single `RANK_ALL` step wrapping the entire legacy pipeline is wired in at `DefaultHomePagePostProcessor.rankContent()` (shadow mode, gated by `ubp_shadow_vertical_ranking`). This RFC asks for alignment that these are the right abstractions before proceeding to shadow validation and horizontal ranking.
+This RFC asks for alignment that these are the right abstractions before proceeding to implementation, shadow validation, and horizontal ranking.
 
 ---
 
@@ -80,7 +75,7 @@ These don't change any ranking behavior — they formalize existing conventions 
 
 ## The homepage grew faster than its infrastructure
 
-The DoorDash homepage started as a single-vertical product — just restaurants. Over time it grew to serve 9+ content types on the same page: Rx stores, NV stores, item carousels, deal carousels, collections, map carousels, reels, and standalone store entities. Each was bolted on by different teams at different times.
+Over time, with many teams contributing their own disjoint experiments, features, and content types, the homepage grew to serve 9+ content types on the same page. Each was bolted on independently with no shared abstractions.
 
 The result: ranking logic is scattered across utility objects with no shared interface, no clean boundaries, and no way to test or configure one stage independently. Understanding what happens to a carousel's score requires reading 6+ files. Changing one experiment parameter requires touching 10-15 files and 2-3 weeks of HP engineer time.
 
@@ -99,22 +94,21 @@ There are zero tests covering the end-to-end ranking behavior. Changes are "edit
 
 ## Goals
 
-1. **Introduce `Rankable` interface** — implemented directly by 9 vertical domain types (no wrapper classes). `StoreCarousel`, `ItemCarousel`, etc. implement `Rankable` via `predictionScore` + `withPredictionScore()` copy pattern.
+1. **Introduce `Rankable` interface** — implemented directly by domain types (no wrapper classes). `StoreCarousel`, `ItemCarousel`, etc. implement `Rankable` via `predictionScore` + `withPredictionScore()` copy pattern.
 2. **Introduce ranking engine** — `RankingStep<S>` + `RankingHandler` + `RankingPipeline<S>` with chain-of-responsibility dispatch.
 3. **Align on these as the stable contract** — these interfaces and their signatures are the API surface all future UBP work builds on.
 4. **Shadow validate** — prove the engine produces identical results to the old path before any traffic migrates.
-5. **Preserve all existing behavior** — Phase 1 wraps the entire legacy pipeline in one `RANK_ALL` step. No behavior change.
+5. **Roll out** — gradually migrate traffic from old path to new path behind a DV gate.
+6. **Preserve all existing behavior** — preserve the legacy coupled ranking in a single step. Build the abstractions to allow decoupling over time. No behavior change.
 
 ## Non-Goals
 
-| Not doing | Why |
-| :---- | :---- |
-| Rewriting ranking logic | `RANK_ALL` delegates to the same existing methods |
-| Changing experiment behavior or traffic | This is pure infrastructure — no user-visible change |
-| Self-service MLE experiments | Future work built on these interfaces |
-| Unified value function | Future work — requires calibration infrastructure |
-| Ads blending | Post-POC — requires shared scoring scale |
-| Granular step decomposition | Phase 2 — break `RANK_ALL` into `MODEL_SCORING`, `DIVERSITY_RERANK`, etc. once Phase 1 is proven |
+- **Rewriting ranking logic** — the initial step delegates to the same existing methods. No behavior change.
+- **Changing experiment behavior or traffic** — this is pure infrastructure, no user-visible change.
+- **Self-service MLE experiments** — future work built on these interfaces.
+- **Unified value function** — future work, requires calibration infrastructure.
+- **Ads blending** — requires shared scoring scale across content types.
+- **Granular step decomposition** — decomposing into `MODEL_SCORING`, `DIVERSITY_RERANK`, etc. is future work once the interfaces are proven.
 
 ---
 
@@ -133,7 +127,7 @@ There are zero tests covering the end-to-end ranking behavior. Changes are "edit
 
 | Phase | What | Status |
 | :---- | :---- | :---- |
-| **1. Rankable + engine** | `Rankable` on 9 vertical types, `RankingStep<S>`, `RankingHandler`, `RankingPipeline<S>`, `VerticalRankAllStep` — all pure additions | **Shipped** |
+| **1. Rankable + engine** | `Rankable` on 9 vertical types, `RankingStep<S>`, `RankingHandler`, `RankingPipeline<S>`, `CarouselRankAllStep` — all pure additions | **Proposed** |
 | **2. Shadow validation** | Wire shadow path in `DefaultHomePagePostProcessor`. Run both paths, compare sort orders, log divergences. Target: `divergence_count = 0` | Next |
 | **3. Horizontal** | Same interfaces applied to within-carousel ranking | After vertical proven |
 | **4. Rollout** | DV-gated gradual migration: 1% → 5% → 25% → 50% → 100% | After shadow proven |
@@ -168,10 +162,10 @@ flowchart LR
     T3 --> A
     T4 --> A
 
-    subgraph pipeline["RankingPipeline&lt;VerticalStepType&gt;"]
-        ENG["RankingStep.execute(items, ctx)
-        Phase 1: single RANK_ALL step
-        Phase 2: granular step chain"]
+    subgraph pipeline["RankingPipeline (Chain of Responsibility)"]
+        ENG["StepHandler → StepHandler → ... → StepHandler
+        Each wraps a RankingStep.execute(items, ctx)
+        Engine builds chain via foldRight"]
     end
 
     A --> ENG
@@ -241,7 +235,7 @@ interface RankingStep<S : Enum<S>> {
 Phase 1 has one step type (`RANK_ALL`) that wraps the entire legacy pipeline:
 
 ```kotlin
-enum class VerticalStepType {
+enum class CarouselRankStepType {
     RANK_ALL,
 }
 ```
@@ -288,15 +282,15 @@ class RankingPipeline<S : Enum<S>>(
 
 Zero business logic — pure dispatch. The engine looks up each step type in the registry, wraps it in a `StepHandler`, chains them via `foldRight`, and executes.
 
-## `VerticalRankAllStep` (Phase 1)
+## `CarouselRankAllStep` — Phase 1 Vertical Step
 
 The single Phase 1 step delegates to the existing `RankerConfiguration`:
 
 ```kotlin
-class VerticalRankAllStep(
+class CarouselRankAllStep(
     private val rankerConfiguration: RankerConfiguration,
-) : RankingStep<VerticalStepType> {
-    override val stepType = VerticalStepType.RANK_ALL
+) : RankingStep<CarouselRankStepType> {
+    override val stepType = CarouselRankStepType.RANK_ALL
 
     override suspend fun execute(items: List<Rankable>, context: RankingContext): List<Rankable> {
         val content = items.toRankableContent()
@@ -307,14 +301,6 @@ class VerticalRankAllStep(
 ```
 
 This step calls `rankerConfiguration.rank()` — the same method the old path calls. Identical behavior, different dispatch path.
-
-## Why These Seams?
-
-**Why `Rankable` on domain types (not wrappers)?** The fields (`id`, `predictionScore`) already exist on these types. `Rankable` formalizes an existing convention into a compile-time contract — zero-overhead interface inheritance. The alternative — 9 `ScorableEntity*` wrapper classes with mutable `var score` and `applyBackTo()` writeback — adds files, mutable state, and a writeback coordination problem. Interface inheritance eliminates all of that.
-
-**Why chain-of-responsibility (not a function list)?** Each handler wraps a step with infrastructure concerns — metrics, tracing, conditional execution — transparently. A simple `steps.forEach { it.execute() }` pipeline can't inject cross-cutting concerns between steps without modifying the steps themselves. The handler chain lets us add observability, shadow comparison, or circuit-breaking around any step without that step knowing.
-
-**Why `foldRight` immutable construction?** Avoids a mutable linking loop. Each `StepHandler` receives its `next` as a constructor parameter — it's complete and immutable at construction time. No dangling `next = null` that gets set later, no ordering bugs from mutating a chain after construction.
 
 ## Class Diagram
 
@@ -356,18 +342,18 @@ classDiagram
         +execute(items, context): List~Rankable~
     }
 
-    class VerticalStepType {
+    class CarouselRankStepType {
         <<enum>>
         RANK_ALL
     }
 
-    class VerticalRankAllStep {
+    class CarouselRankAllStep {
         -rankerConfiguration: RankerConfiguration
         +execute(items, context): List~Rankable~
     }
 
-    RankingStep <|.. VerticalRankAllStep
-    VerticalRankAllStep --> VerticalStepType
+    RankingStep <|.. CarouselRankAllStep
+    CarouselRankAllStep --> CarouselRankStepType
 
     class RankingHandler {
         <<fun interface>>
@@ -391,133 +377,101 @@ classDiagram
     RankingPipeline --> Rankable : operates on
 ```
 
-## Both Layers Side by Side
+## Intra-Carousel (Horizontal) Ranking
 
-Same architecture, different step type enums. Vertical proven first, horizontal mirrors it.
+The same interfaces apply to within-carousel store ranking. Today, `DefaultHomePageStoreRanker` calls `StoreCollectionScorer` (Sibyl ML scoring) and `StoreCarouselService` (comparator-based sorting) with no shared abstraction. Stores within each carousel have no common ranking interface.
 
-```mermaid
-flowchart LR
-    subgraph vertical["Vertical Ranking"]
-        direction TB
-        V_INC["PostProcessor
-        .rankContent()"]
-        V_ENG["RankingPipeline&lt;VerticalStepType&gt;"]
-        V_IF["Rankable"]
-        V_STEP["VerticalRankAllStep"]
+`StoreEntity` will implement `Rankable`. A new `IntraCarouselRankStepType` enum and `IntraCarouselRankAllStep` will wrap the existing `DefaultHomePageStoreRanker.rank()` call — same pattern as vertical. The engine, handler chain, and step interface are reused. Only the step type enum and incision point differ.
 
-        V_INC --> V_ENG
-        V_ENG --> V_IF
-        V_ENG --> V_STEP
-    end
-
-    subgraph horizontal["Horizontal Ranking"]
-        direction TB
-        H_INC["StoreRanker
-        .modifyLiteStoreCollection()"]
-        H_ENG["RankingPipeline&lt;HorizontalStepType&gt;"]
-        H_IF["Rankable"]
-        H_STEP["HorizontalRankAllStep"]
-
-        H_INC --> H_ENG
-        H_ENG --> H_IF
-        H_ENG --> H_STEP
-    end
-
-    style vertical fill:#e6f0ff,stroke:#0055cc
-    style horizontal fill:#f0e6ff,stroke:#7700cc
-```
+Score hydration (Sibyl scores for stores) happens upstream of `DefaultHomePageStoreRanker`. The intra-carousel `RANK_ALL` step will receive pre-scored `StoreEntity` items and apply the existing sorting logic. No additional Sibyl calls are needed within this step.
 
 ## Safe Delivery: Shadow → Rollout
 
-We never put users at risk. The migration has two phases:
+We follow the **Strangler Fig pattern** (Fowler, 2004): build the new path alongside the old, prove equivalence, then gradually migrate. The old path is never removed until the new path is proven at 100% traffic. Both coexist behind a DV gate. (See Appendix C for details on the Strangler Fig pattern and the Cover-and-Modify discipline from Feathers' *Working Effectively with Legacy Code*.)
 
-**Shadow mode:** The old path always runs and always returns the result. The new path runs **in parallel** (via coroutine, when DV-enabled), its result is discarded, and sort orders are compared. We log every divergence. Target: `divergence_count = 0` across sustained traffic before proceeding.
+**Shadow mode.** When `ubp_shadow_vertical_ranking` is enabled, the new `RankingPipeline` path runs **in parallel** with the legacy path via a dedicated coroutine on a shadow thread pool. The legacy path always returns the user-facing result. The shadow path has a **hard timeout** (5 seconds via `withTimeoutOrNull`) — if it exceeds the timeout, it is cancelled. All shadow exceptions are **caught and swallowed** — the shadow path can never affect the production response under any circumstance.
 
-**Rollout mode:** Once shadow proves zero divergence, a rollout DV gates the new path as primary. Ramped gradually: 1% → 5% → 25% → 50% → 100%. The old path is the `else` branch — compiles and runs identically.
+After both paths complete, we compare results and emit a divergence metric with two dimensions:
 
-```mermaid
-flowchart TB
-    subgraph shadow["Phase 1: Shadow Mode"]
-        direction TB
-        R1["Request"] --> PP1["PostProcessor"]
-        PP1 --> OLD1["Old Path"]
-        PP1 --> DV1{"ubpShadowEnabled?"}
-        DV1 -->|Yes| NEW1["RankingPipeline engine
-        (parallel coroutine)"]
-        DV1 -->|No| SKIP1["Skip"]
-        OLD1 --> RESULT1["Result → User"]
-        NEW1 --> CMP["Compare sort orders
-        Log divergences
-        Discard shadow result"]
-    end
+| Metric dimension | What it captures | Target |
+| :---- | :---- | :---- |
+| **Ranking output** | Compare `rankableId()` ordering of legacy vs shadow results — are the same items in the same order? | `orderMatch = true` for 100% of shadow traffic |
+| **Latency** | Wall-clock time of the shadow path vs legacy path | No regression — shadow path ≤ legacy path p99 |
 
-    subgraph rollout["Phase 2: Rollout Mode"]
-        direction TB
-        R2["Request"] --> PP2["PostProcessor"]
-        PP2 --> DV2{"ubpRolloutEnabled?"}
-        DV2 -->|Yes| NEW2["RankingPipeline engine"]
-        DV2 -->|No| OLD2["Old Path (unchanged)"]
-        NEW2 --> RESULT2a["Result → User"]
-        OLD2 --> RESULT2b["Result → User"]
-    end
+Both dimensions must show zero regression before proceeding to rollout.
 
-    shadow -.->|"divergence_count = 0
-    sustained"| rollout
-
-    style shadow fill:#fff8e6,stroke:#cc8800
-    style rollout fill:#e6fff0,stroke:#00aa44
-```
+**Rollout mode.** Once shadow proves equivalence, a rollout DV gates the new path as primary. Gradual ramp — the old path is the `else` branch, byte-for-byte unchanged. If the engine throws at any point, the DV is ramped down. Rollback is immediate: disable the DV, no deploy required.
 
 **Characterization tests with UBP flag OFF must remain green at every stage** — proving the old path is untouched.
 
-## Dependencies
-
-**Upstream:** None. Internal to feed-service post-processing. Retrieval, grouping, and Sibyl are untouched.
-
-**Downstream:** None. API response shape is identical. Client apps see no change.
-
 ## Service Level Objectives (SLO)
 
-### External vs Internal
+### Rollout Mode
 
-Purely internal. No new services, no new RPCs. All changes are within the existing feed-service process.
+Once the UBP path is the primary path (old path off), there is **zero duplication** of network calls. `CarouselRankAllStep` wraps `RankerConfiguration.rank()` — same Sibyl calls, same downstream RPCs. The only additional overhead is in-process: type conversion (`toRankableList()` / `toRankableContent()`) and handler chain assembly, totaling <3ms.
 
-### Latency — Rollout Mode
+### Shadow Mode — Network Dependency Duplication
 
-Once the UBP path is the primary path (old path off), there is no duplication. `VerticalRankAllStep` wraps `RankerConfiguration.rank()` — same computation, same Sibyl calls, same runtime config reads.
+Shadow mode runs both old and new paths in parallel. Because `RANK_ALL` wraps the entire legacy pipeline, the shadow path re-executes all network calls the old path makes. This is the primary cost of shadow validation.
 
-| Operation | Additional latency |
-| :---- | :---- |
-| `toRankableList()` / `toRankableContent()` conversion | ~1-2ms |
-| Step registry lookup + handler chain build | ~0.1ms |
-| **Total additional overhead vs current path** | **<3ms** |
+**Vertical ranking (`CarouselRankAllStep`) duplicates:**
 
-### Latency — Shadow Mode (Temporary)
-
-Shadow mode runs old and new paths **in parallel** via coroutines. The user-facing response returns as soon as the old path completes — shadow never blocks the response.
-
-**Wall-clock latency impact:** Minimal. Since both paths run concurrently, the request duration is `max(old_path, new_path)`, not the sum. The new path wraps the same methods as the old path, so it takes roughly the same time.
-
-**Sibyl QPS doubles during shadow.** The old path makes its Sibyl call. The parallel `RANK_ALL` step (which calls `RankerConfiguration.rank()`) makes its own Sibyl call.
-
-| Shadow impact | Cost | Mitigation |
+| External dependency | Call | Impact |
 | :---- | :---- | :---- |
-| +1 Sibyl gRPC call per request | ~2x vertical Sibyl QPS for shadow traffic | Shadow only on small % (start at 1%). Monitor Sibyl p99 before ramping. |
-| Compute (conversion, chain build, comparison) | ~5-15ms CPU per request | Parallel — does not block response |
+| **Sibyl Prediction Service** (gRPC) | `regressor.computeRegressionScoresWithMultiPredictors()` — main carousel ML scoring | **~2x vertical Sibyl QPS** for shadow traffic |
+| **Sibyl Multi-Labels** (gRPC) | `sibylMultiLabels.computeMultiLabelScores()` — multi-label classification | ~2x multi-label QPS |
+| **Workflow2** | `workflow.execute()` — orchestrates distributed scoring jobs | ~2x workflow executions |
 
-**Mitigations:**
-1. **Sampling** — shadow at low sample rate (e.g., 1-5% of traffic). Caps Sibyl QPS overhead.
-2. **Shadow one layer at a time** — validate vertical first, then horizontal.
-3. **Score reuse** — shadow `RANK_ALL` could reuse scores from old path instead of independent Sibyl call. Eliminates doubling but cannot validate scoring independently. Decision: start independent, switch if needed.
-4. **Shadow is temporary** — once `divergence_count = 0` sustained, rollout replaces shadow.
+**Horizontal ranking (`IntraCarouselRankAllStep`) duplicates:**
 
-### Failure
+| External dependency | Call | Impact |
+| :---- | :---- | :---- |
+| **Sibyl Prediction Service** (gRPC) | `regressor.computeRegressionScores()` — per-carousel store scoring | **~2x horizontal Sibyl QPS** for shadow traffic (called per carousel) |
+| **Percentage Match Cache** | `percentageMatchCacheRepository.writePercentageMatchToCache()` | ~2x cache writes |
 
-**Shadow mode:** All exceptions caught and swallowed. Shadow can never affect production result.
+> **Note:** Discovery Broker, Merchant Data Service, and Geo-Intelligence Service calls happen *upstream* of ranking (during retrieval/grouping) and are **not duplicated** by the shadow path.
 
-**Rollout mode:** If engine throws, DV is ramped down. Old path is the `else` branch.
+### Mitigations
 
-**Rollback:** Disable the DV. Immediate. No deploy required.
+1. **Sampling** — shadow at low sample rate (start at 1-5% of traffic). Caps all network dependency overhead proportionally.
+2. **Shadow one layer at a time** — validate vertical first, then horizontal. Never double both simultaneously.
+3. **Shadow is temporary** — once `divergence_count = 0` sustained, rollout replaces shadow and duplication drops to zero.
+
+> **TODO:** Determine current Sibyl QPS baseline for vertical and horizontal ranking paths. Use this to calculate the maximum safe shadow sample rate that keeps Sibyl within capacity. This determines how fast we can ramp shadow validation.
+
+### Failure Modes and Mitigations
+
+Every new code path is behind a DV gate. No UBP code executes unless explicitly enabled. The old path is always the `else` branch — byte-for-byte unchanged, compiling and running identically to pre-UBP.
+
+**Shadow mode failures:**
+
+| Failure | Impact | Mitigation |
+| :---- | :---- | :---- |
+| Shadow path throws exception | None — all exceptions caught and swallowed. Legacy result returned. | Logged via `KontextLogger`. Alert on error rate spike. |
+| Shadow path exceeds timeout (5s) | None — `withTimeoutOrNull` cancels the coroutine. Legacy result returned. | Logged as timeout warning. Investigate if timeout rate > threshold. |
+| Ranking output mismatch (`orderMatch = false`) | None to users — shadow result is discarded. | Logged with both orderings. Investigate root cause before proceeding to rollout. Target: 0% mismatch across sustained traffic. |
+| Latency spike (shadow path slower than legacy) | Minimal — shadow runs on dedicated thread pool, does not block response. However, CPU/memory pressure can affect overall service. | Monitor shadow p99 latency. If shadow path is consistently slower, investigate before rollout. Reduce shadow sample rate if service health degrades. |
+| Sibyl QPS overload from double-calling | Increased load on Sibyl during shadow. | Shadow at low sample rate (1-5%). Monitor Sibyl p99 before ramping. |
+
+**Rollout mode failures:**
+
+| Failure | Impact | Mitigation |
+| :---- | :---- | :---- |
+| Engine throws exception | Users on new path see error. | DV ramped down immediately. Old path serves 100%. No deploy required. |
+| Latency regression after rollout | Slower homepage for affected users. | Monitor p50/p99 latency. If regression detected, ramp DV down. |
+| Ranking quality regression | Different carousel ordering for affected users. | Monitor ranking quality metrics (CTR, conversion). Ramp down if regression detected. |
+
+**Rollback:** Disable the DV. Immediate. No deploy, no code change required. The old path is always compiled and ready.
+
+### Test Coverage
+
+The ranking pipeline has **zero test coverage today**. This RFC introduces two layers of testing:
+
+**Characterization tests** (Feathers, *Working Effectively with Legacy Code*): Before modifying any ranking code, we write tests that capture what the code *actually does right now* — not what it should do. These use a **golden master** pattern: run the pipeline with a fixed input and mocked Sibyl scores, capture the exact output ordering, and assert against it. If a later change causes the golden master to fail, behavior shifted — investigate before proceeding. Characterization tests are a temporary safety net, replaced with proper unit tests after refactoring.
+
+**Unit tests for new abstractions:** Each new interface (`Rankable`, `RankingStep`, `RankingPipeline`) gets its own unit tests with injected dependencies. `CarouselRankAllStep` is tested end-to-end: `RankingPipeline` → `CarouselRankAllStep` → `EntityRankerConfiguration` with mocked Sibyl. These tests validate the new dispatch path independently of shadow/rollout.
+
+**What if tests miss something?** The DV gate is the final safety net. Even if characterization tests and unit tests fail to catch a behavioral difference, the shadow metric (`orderMatch`) will detect it in production traffic before any user sees the new path. The progression is: characterization tests → unit tests → shadow validation → rollout. Each layer catches what the previous missed.
 
 ## Stability
 
@@ -525,26 +479,21 @@ These are small internal interfaces (3 types, ~10 methods total) within a single
 
 ## Extensibility
 
-The interfaces are designed to absorb UBP capabilities incrementally. Each phase adds step types and implementations — the engine, the interface, and the wiring stay unchanged.
+The interfaces are designed to absorb the full UBP vision incrementally. Each capability adds step types and implementations — the engine, the interface, and the wiring stay unchanged.
 
-```
-Phase 1 (now):  RANK_ALL
-                └─ wraps entire legacy pipeline in one step
+**Composable steps via chain of responsibility.** Today the entire ranking pipeline is one monolithic call. Once the interfaces are proven, we decompose `RANK_ALL` into granular steps: `MODEL_SCORING → MULTIPLIER_BOOST → DIVERSITY_RERANK → FIXED_PINNING`. Each step is a `RankingStep` registered by enum key — the engine dispatches them in order. Adding, removing, or reordering steps is a config change, not a code change.
 
-Phase 2:        MODEL_SCORING → MULTIPLIER_BOOST → DIVERSITY_RERANK → FIXED_PINNING
-                └─ legacy pipeline decomposed into composable steps
+**Config-driven experimentation.** Each step type is an enum value in the step registry. An experiment can swap one step implementation for another (e.g., a new diversity algorithm) by registering a different `RankingStep` for that enum key. The MLE experiment config drives which steps run and in what order — no code deployment needed for new ranking experiments.
 
-Phase 3:        MODEL_SCORING → CALIBRATION → VALUE_FUNCTION → DIVERSITY → PINNING
-                └─ full UBP pipeline with unified value function
-```
+**Cross-cutting concerns injected transparently.** Because `StepHandler` wraps each step, infrastructure concerns — metrics, per-step tracing, latency budgets, circuit-breaking — can be added in one place without modifying any step. Shadow comparison, A/B metrics emission, and timeout enforcement all live at the handler level.
 
-| Future capability | How it plugs in |
-| :---- | :---- |
-| Config-driven experiments | New step type enum value + new `RankingStep` implementation. No engine change. |
-| Per-step observability | `StepHandler` already wraps each step — add metrics/tracing in one place. |
-| Unified value function | `CALIBRATION` + `VALUE_FUNCTION` steps added to the chain. Engine unchanged. |
-| Partner self-service | NV/Ads/Merch implement their own `RankingStep` — HP registers it. |
-| New carousel type | Implement `Rankable` on one class. No other files change. |
+**Per-layer traffic management.** Vertical and horizontal ranking are separate `RankingPipeline<S>` instances with different step type enums. Each layer can be shadow-validated and rolled out independently. Future layers (e.g., ads ranking, cross-page ranking) follow the same pattern — new enum, new steps, same engine.
+
+**Unified value function.** Once steps are decomposed, calibration and value weighting become explicit steps: `CALIBRATION` (normalizes scores across content types) → `VALUE_FUNCTION` (applies `EV(c,k) = pImp(k) × pAct(c) × vAct(c)`). The engine is unchanged — just more steps in the chain. See Appendix A.
+
+**Partner self-service.** NV, Ads, and Merch teams implement their own `RankingStep` — HP registers it. Each partner owns their step's logic; HP owns the engine and the step registry. No more cross-team code entanglement.
+
+**New carousel type onboarding.** Implement `Rankable` on one class. No other files change. The pipeline, conversion functions, and all existing steps work automatically.
 
 ## Alternative Designs
 
@@ -564,26 +513,7 @@ Rejected. Without a shared type (`Rankable`) and a step contract (`RankingStep`)
 
 # Appendix
 
-## A. Existing Code: Key Files Reference
-
-| What | File | Relevance |
-| :---- | :---- | :---- |
-| **Rankable interface** | `libraries/platform/.../models/Rankable.kt` | The core interface |
-| **Ranking engine** | `libraries/common/.../ubp/RankingEngine.kt` | `RankingPipeline`, `RankingStep`, `RankingHandler`, `StepHandler` |
-| **Vertical step type** | `libraries/common/.../ubp/VerticalStepType.kt` | `enum class VerticalStepType { RANK_ALL }` |
-| **Vertical RANK_ALL step** | `libraries/common/.../ubp/VerticalRankAllStep.kt` | Delegates to `RankerConfiguration.rank()` |
-| **Conversion functions** | `libraries/common/.../ubp/RankableContentConversions.kt` | `toRankableList()` / `toRankableContent()` |
-| **Pipeline integration test** | `libraries/common/.../ubp/VerticalRankingPipelineTest.kt` | End-to-end: RankingPipeline → VerticalRankAllStep → EntityRankerConfiguration |
-| Vertical ranking entry point | `DefaultHomePagePostProcessor.reOrderGlobalEntitiesV2()` | Incision point for `RankingPipeline<VerticalStepType>` |
-| Current ranking skeleton | `BaseEntityRankerConfiguration.rank()` | Template Method being replaced |
-| Carousel type flattening | `EntityRankerConfiguration.getEntities()` | What `Rankable` interface replaces |
-| Sibyl ML scoring + blending | `EntityRankerConfiguration.getScoreBundleWithWorkflowHelper()` | Called by `VerticalRankAllStep` via `RankerConfiguration` |
-| Horizontal ranking entry point | `DefaultHomePageStoreRanker.rank()` | Incision point for `RankingPipeline<HorizontalStepType>` |
-| Post-ranking fixups (NOT changing) | `NonRankableHomepageOrderingUtil` | NV pin, PAD=3, member pricing — stays as-is |
-
----
-
-## B. Value Function Reference
+## A. Value Function Reference
 
 The interfaces support an eventual unified value function:
 
@@ -601,7 +531,7 @@ EV(c, k) = pImp(k) × pAct(c) × vAct(c)
 
 ---
 
-## C. Design Patterns
+## B. Design Patterns
 
 | Pattern | Where | What it buys us |
 | :---- | :---- | :---- |
@@ -611,6 +541,32 @@ EV(c, k) = pImp(k) × pAct(c) × vAct(c)
 | **Facade** | `RankingPipeline.rank()` | Hides chain assembly, registry lookup, and context passing behind one call. Callers see `pipeline.rank(items, steps, ctx)` — nothing else. |
 
 The key migration: **Template Method → Chain of Responsibility.** The existing `BaseEntityRankerConfiguration.rank()` uses Template Method — a rigid inheritance skeleton where subclasses override specific steps. This cannot be configured at runtime, tested in isolation, or extended without subclassing. Chain of Responsibility composes steps from a registry, making the pipeline data-driven and each step independently testable.
+
+---
+
+## C. Strangler Fig Pattern and Safe Refactoring
+
+**Strangler Fig** (Martin Fowler, "StranglerFigApplication", 2004): Build new functionality alongside old, prove equivalence at every step, then gradually migrate traffic. Both paths coexist until the new path is proven at 100%. The old path is never deleted prematurely — it remains the `else` branch behind a DV gate.
+
+This RFC follows the **Cover and Modify** discipline from Michael Feathers' *Working Effectively with Legacy Code*:
+
+- **Edit and Pray:** Understand the code, make changes, poke around to see if it broke. This is how feed-service ranking changes work today.
+- **Cover and Modify:** Write characterization tests that lock down current behavior *before* any code change. If tests pass after extraction, behavior is preserved. If they fail, something changed — investigate or revert.
+
+A **characterization test** (Feathers) tests what the code *actually does right now*, not what it *should* do. Bugs are captured as-is — users depend on this behavior. These tests are a temporary safety net replaced with proper unit tests after refactoring is complete.
+
+**Applied to this RFC:**
+1. Write characterization tests for `rankContent()` pipeline output (golden master)
+2. Extract interfaces (`Rankable`, `RankingStep`, `RankingPipeline`) — characterization tests stay green
+3. Shadow validate: run both paths, compare outputs
+4. Ramp traffic from old to new
+5. Replace characterization tests with proper unit/integration tests
+6. Delete old code path
+
+**References:**
+- Fowler, Martin. "StranglerFigApplication." martinfowler.com, 2004.
+- Feathers, Michael. *Working Effectively with Legacy Code.* Prentice Hall, 2004.
+- Fowler, Martin. *Refactoring: Improving the Design of Existing Code.* Addison-Wesley, 2018 (2nd ed).
 
 ---
 
