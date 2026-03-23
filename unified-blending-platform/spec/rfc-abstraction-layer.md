@@ -66,11 +66,11 @@ reOrderGlobalEntitiesV2()
                  └─ result.toRankableContent()             ← back to typed containers
 ```
 
-Three concepts:
+Three concepts, two ranking layers:
 
-- **`Rankable`** — interface implemented directly by the 9 domain types (`StoreCarousel`, `ItemCarousel`, etc.). No wrapper classes.
-- **`RankingStep<S : Enum<S>>`** — domain logic contract: items in, items out. Identified by a step type enum.
-- **`RankingPipeline<S : Enum<S>>`** — config-driven engine that assembles a handler chain from step types and executes it.
+- **`Rankable`** — interface implemented directly by domain types. Carousel types (`StoreCarousel`, `ItemCarousel`, etc.) for inter-carousel ranking. `StoreEntity` for intra-carousel ranking. No wrapper classes.
+- **`RankingStep<S : Enum<S>>`** — domain logic contract: items in, items out. Each ranking layer has its own step type enum (`CarouselRankStepType`, `IntraCarouselRankStepType`).
+- **`RankingPipeline<S : Enum<S>>`** — config-driven engine that assembles a handler chain from step types and executes it. Same engine for both layers.
 
 These don't change any ranking behavior — they formalize existing conventions into compile-time contracts so that everything UBP needs can be built on top without rearchitecting.
 
