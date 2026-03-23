@@ -101,22 +101,20 @@ There are zero tests covering the end-to-end ranking behavior. Changes are "edit
 
 ## Goals
 
-1. **Introduce `Rankable` interface** — implemented directly by 9 carousel domain types (no wrapper classes). `StoreCarousel`, `ItemCarousel`, etc. implement `Rankable` via `predictionScore` + `withPredictionScore()` copy pattern.
+1. **Introduce `Rankable` interface** — a shared type implemented directly by domain types (no wrapper classes).
 2. **Introduce ranking engine** — `RankingStep<S>` + `RankingHandler` + `RankingPipeline<S>` with chain-of-responsibility dispatch.
-3. **Align on these as the stable contract** — these interfaces and their signatures are the API surface all future UBP work builds on.
-4. **Shadow validate** — prove the engine produces identical results to the old path before any traffic migrates.
-5. **Preserve all existing behavior** — Phase 1 wraps the entire legacy pipeline in one `RANK_ALL` step. No behavior change.
+3. **Align on these as the stable contract** — these interfaces are the API surface all future UBP work builds on.
+4. **Preserve existing behavior** — the legacy coupled ranking logic runs unchanged behind the new interfaces. We're building abstractions to allow decoupling, not decoupling yet.
+5. **Shadow validate and roll out** — prove the engine produces identical results to the old path, then migrate traffic via DV-gated rollout.
 
 ## Non-Goals
 
-| Not doing | Why |
-| :---- | :---- |
-| Rewriting ranking logic | `RANK_ALL` delegates to the same existing methods |
-| Changing experiment behavior or traffic | This is pure infrastructure — no user-visible change |
-| Self-service MLE experiments | Future work built on these interfaces |
-| Unified value function | Future work — requires calibration infrastructure |
-| Ads blending | Post-POC — requires shared scoring scale |
-| Granular step decomposition | Phase 2 — break `RANK_ALL` into `MODEL_SCORING`, `DIVERSITY_RERANK`, etc. once Phase 1 is proven |
+1. **Rewriting or decoupling ranking logic** — legacy ranking runs unchanged behind the new interfaces.
+2. **Changing experiment behavior or traffic** — this is pure infrastructure, no user-visible change.
+3. **Self-service MLE experiments** — future work built on these interfaces.
+4. **Unified value function** — future work, requires calibration infrastructure.
+5. **Ads blending** — future, requires shared scoring scale.
+6. **Granular step decomposition** — future, decompose into composable steps once the interfaces are proven.
 
 ---
 
