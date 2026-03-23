@@ -84,7 +84,7 @@ This RFC asks for alignment on these abstractions before implementation begins.
 
 ## The homepage grew faster than its infrastructure
 
-The DoorDash homepage started as a single-vertical product — just restaurants. Over time it grew to serve 9+ content types on the same page: Rx stores, NV stores, item carousels, deal carousels, collections, map carousels, reels, and standalone store entities. Each was bolted on by different teams at different times.
+Over time, with many teams contributing their own disjoint experiments, features, and content types, the homepage grew to serve 9+ carousel types on the same page with no shared abstractions between them.
 
 The result: ranking logic is scattered across utility objects with no shared interface, no clean boundaries, and no way to test or configure one stage independently. Understanding what happens to a carousel's score requires reading 6+ files. Changing one experiment parameter requires touching 10-15 files and 2-3 weeks of HP engineer time.
 
