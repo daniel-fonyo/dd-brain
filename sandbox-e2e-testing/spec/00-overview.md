@@ -19,7 +19,6 @@ Do not implement Phase 2+ specs until Phase 1 is working end-to-end.
 | Skill files | `~/.claude/commands/*.md` |
 | Sandbox state | `~/.claude/sandbox-state.json` |
 | Audit runs | `feed-service/.claude/sandbox/runs/<run-id>/` |
-| Latest run symlink | `feed-service/.claude/sandbox/latest` |
 | Gitignore entry | `feed-service/.gitignore` |
 
 ---
@@ -38,7 +37,7 @@ Every skill must:
 
 | Item | Convention | Example |
 |---|---|---|
-| Run ID | ISO timestamp + 6-char hex | `2026-03-19T14-30-00-a1b2c3` |
+| Run ID | `<timestamp>_<branch-sanitized>_<short-hash>` | `2026-03-19T14-30-00_feat-dfonyo-ranking-debug_a1b2c3d` |
 | Step names | kebab-case verbs | `pod-check`, `browser-navigate` |
 | Screenshot files | zero-padded sequence + label | `01-homepage.png`, `02-carousel-stores.png` |
 | Log file | `feed-service.log` | always this name inside runDir |

@@ -12,9 +12,12 @@ Top-level orchestrator. Entry point for "test this change on homepage." Figures 
 
 ### 1. Init Audit Run
 
-Generate a run ID:
+Generate a run ID using branch+hash+timestamp format:
 ```bash
-RUN_ID="$(date -u +%Y-%m-%dT%H-%M-%S)-$(openssl rand -hex 3)"
+BRANCH=$(cd /Users/daniel.fonyo/Projects/feed-service && git branch --show-current | tr '/' '-' | tr ' ' '-' | cut -c1-60)
+HASH=$(cd /Users/daniel.fonyo/Projects/feed-service && git rev-parse --short=7 HEAD)
+TIMESTAMP=$(date -u +%Y-%m-%dT%H-%M-%S)
+RUN_ID="${TIMESTAMP}_${BRANCH}_${HASH}"
 RUN_DIR="/Users/daniel.fonyo/Projects/feed-service/.claude/sandbox/runs/${RUN_ID}"
 mkdir -p "${RUN_DIR}/screenshots"
 ```
@@ -112,11 +115,6 @@ Store the result for Step 7.
 Write completed `meta.json` with `completedAt`, `status`, `checks` from test result.
 
 Write `report.md` using template from `spec/03-audit-trail.md`.
-
-Update latest symlink:
-```bash
-ln -sfn "${RUN_DIR}" "/Users/daniel.fonyo/Projects/feed-service/.claude/sandbox/latest"
-```
 
 Append: `{"step":"run-complete","result":"<status>","ok":<bool>}`
 

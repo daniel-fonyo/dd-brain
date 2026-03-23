@@ -14,12 +14,19 @@ feed-service/.claude/sandbox/
         02-carousel-<title>.png
         ...
       report.md
-  latest -> runs/<most-recent-run-id>   (symlink)
 ```
 
-`<run-id>` format: `YYYY-MM-DDTHH-MM-SS-<6-char hex>` e.g. `2026-03-19T14-30-00-a1b2c3`
+`<run-id>` format: `<timestamp>_<branch-sanitized>_<short-hash>` e.g. `2026-03-19T14-30-00_feat-dfonyo-ranking-debug_a1b2c3d`
 
-Generate hex suffix: `openssl rand -hex 3`
+Branch sanitization: replace `/` and spaces with `-`, truncate to 60 chars.
+
+Generation:
+```bash
+BRANCH=$(cd /Users/daniel.fonyo/Projects/feed-service && git branch --show-current | tr '/' '-' | tr ' ' '-' | cut -c1-60)
+HASH=$(cd /Users/daniel.fonyo/Projects/feed-service && git rev-parse --short=7 HEAD)
+TIMESTAMP=$(date -u +%Y-%m-%dT%H-%M-%S)
+RUN_ID="${TIMESTAMP}_${BRANCH}_${HASH}"
+```
 
 ---
 
@@ -29,26 +36,36 @@ Written by `sandbox-run` at run start (partial), updated at run end (complete).
 
 ```json
 {
-  "runId": "2026-03-19T14-30-00-a1b2c3",
+  "runId": "2026-03-19T14-30-00_feat-dfonyo-ranking-debug_a1b2c3d",
   "trigger": "<verbatim user request>",
   "branch": "feat/dfonyo-vertical-ranking-debug-logs",
+  "commitHash": "a1b2c3d",
   "sandboxName": "rd29ad35",
   "pod": "feed-service-web-group1-sandbox-rd29ad35-57b48c758d-pfpgc",
   "startedAt": "2026-03-19T14:30:00Z",
   "completedAt": "2026-03-19T14:35:12Z",
   "status": "pass | fail | error",
+  "warnings": [],
   "checks": {
+    "homepageLoadMs": 2300,
     "homepageLoaded": true,
     "carouselsFound": 4,
+    "totalStores": 48,
     "jsErrors": 0,
     "logErrors": 0,
-    "logWarnings": 2
+    "logWarnings": 2,
+    "videoRecorded": true
   }
 }
 ```
 
-Fields written at start: `runId`, `trigger`, `branch`, `sandboxName`, `pod`, `startedAt`
-Fields written at end: `completedAt`, `status`, `checks`
+Fields written at start: `runId`, `trigger`, `branch`, `commitHash`, `sandboxName`, `pod`, `startedAt`
+Fields written at end: `completedAt`, `status`, `warnings`, `checks`
+
+**Pass/fail criteria:**
+- **PASS** if ALL: `homepageLoadMs < 10000`, `carouselsFound > 0`, `jsErrors == 0`
+- **FAIL** if ANY: `homepageLoadMs >= 10000` or homepage didn't load, `carouselsFound == 0`, `jsErrors > 0`
+- **WARN** (status: "pass" with `warnings` populated) if: `logErrors > 0`, `logWarnings > 50`
 
 ---
 
