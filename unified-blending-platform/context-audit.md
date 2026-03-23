@@ -204,3 +204,16 @@ unified-blending-platform/
 6. **Standardized naming** across plan.md, northstar.md, rfc-feedback.md to Scorable/RankingStep/Ranker
 7. **Cleaned up** rfc-feedback.md (removed "temp" label, updated component names)
 8. **Updated** CLAUDE.md with new file structure and naming convention
+
+---
+
+## 11. Actions Taken (2026-03-23)
+
+Context audit follow-up: the 2026-03-22 cleanup standardized naming in `plan.md`, `northstar.md`, and `rfc-feedback.md`, but left the entire `spec/` directory untouched — 422 stale `FeedRow`/`RowItem` references across 16 files describing an adapter-wrapper architecture that was never built.
+
+1. **Archived `spec/impl/`** (9 files, 170+ FeedRow refs) → `spec/archive/impl/`. These described FeedRow adapter wrappers (`StoreCarouselRow`, etc.) superseded by the simpler `Scorable` interface-on-domain-type approach.
+2. **Rewrote `spec/rfc-abstraction-layer.md`** — replaced 101 FeedRow/RowItem references with actual Scorable/RankingStep/Ranker architecture. Updated all code examples, class diagrams, delivery timeline, and appendices to match shipped Phase 1 implementation.
+3. **Updated `spec/rfc.md`** — replaced 22 FeedRow/RowItem references. Updated abbreviations, engine architecture, step types (2-step → 1-step RANK_ALL), control.json examples, Contract 2/4 definitions, and phase descriptions.
+4. **Rewrote `spec/CLAUDE.md`** — reflects archived `impl/` directory, correct Scorable naming with feed-service file locations, current Phase 1 status.
+5. **Fixed `context/pivot-analysis.md`** — replaced 6 FeedRow/RowItem references in "What stays" section.
+6. **Verification**: `grep -r "FeedRow\|FeedRowRankingStep\|FeedRowRanker" unified-blending-platform/ --include="*.md" | grep -v archive/ | grep -v context-audit.md` → **0 results**. FeedRow exists only in archived docs and this audit log.
