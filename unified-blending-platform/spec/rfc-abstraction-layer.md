@@ -314,14 +314,6 @@ class CarouselRankAllStep(
 
 This step calls `rankerConfiguration.rank()` — the same method the old path calls. Identical behavior, different dispatch path.
 
-## Why These Seams?
-
-**Why `Rankable` on domain types (not wrappers)?** The fields (`id`, `predictionScore`) already exist on these types. `Rankable` formalizes an existing convention into a compile-time contract — zero-overhead interface inheritance. The alternative — 9 `ScorableEntity*` wrapper classes with mutable `var score` and `applyBackTo()` writeback — adds files, mutable state, and a writeback coordination problem. Interface inheritance eliminates all of that.
-
-**Why chain-of-responsibility (not a function list)?** Each handler wraps a step with infrastructure concerns — metrics, tracing, conditional execution — transparently. A simple `steps.forEach { it.execute() }` pipeline can't inject cross-cutting concerns between steps without modifying the steps themselves. The handler chain lets us add observability, shadow comparison, or circuit-breaking around any step without that step knowing.
-
-**Why `foldRight` immutable construction?** Avoids a mutable linking loop. Each `StepHandler` receives its `next` as a constructor parameter — it's complete and immutable at construction time. No dangling `next = null` that gets set later, no ordering bugs from mutating a chain after construction.
-
 ## Class Diagram
 
 ```mermaid
