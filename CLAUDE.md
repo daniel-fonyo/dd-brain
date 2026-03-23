@@ -20,7 +20,13 @@ Before making any changes in a referenced repo, **always verify the current bran
 ### Referenced Repo Workflow (code changes)
 For `feed-service`, `services-protobuf`, or any other referenced repo:
 1. **Never merge to main directly.** Always work on a feature branch within that repo.
-2. Create a branch in the relevant repo for the change (e.g. `git checkout -b feat/my-change`).
+2. **Use worktrees for feed-service.** Multiple agents may work on this repo concurrently. Always create a worktree under `.claude/worktrees/<name>` for your feature branch instead of switching the main checkout. After creating the worktree, restore the main checkout to its original branch so other agents are not affected.
+   ```bash
+   cd /Users/daniel.fonyo/Projects/feed-service
+   git branch my-feature  # create branch from current HEAD
+   git worktree add .claude/worktrees/my-feature my-feature
+   # Work inside .claude/worktrees/my-feature — leave the main checkout untouched
+   ```
 3. Commit with clear messages: what changed, why, and any testing notes.
 4. Push the branch and open a PR with:
    - **Title**: concise summary
