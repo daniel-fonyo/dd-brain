@@ -1,11 +1,13 @@
 # Unified Blending Platform — Plan
 
-## Status: Abstractions First → Engine → Traffic Management
+## Status: Interfaces + Abstractions → Engine → Traffic Splitting
 
-> **Pivot (March 2026):** After stakeholder conversations (YZ, Dipali, Frank), the approach
-> shifts from "build a full engine then prove it" to "ship good abstractions in feed-service,
-> extract seams, build the engine on proven foundations." The MLE-facing contract is simplified.
-> Per-layer traffic management is the #1 customer-facing deliverable.
+> **Source of truth**: `Unified Blending Platform Vision.md` (the RFC), `Unified Blending Platform 1 Pager.md`, `poc-generic-ranking.md` (engine design).
+>
+> **Pivot (March 2026):** After stakeholder conversations (YZ, Dipali, Frank), approach
+> is "ship good abstractions in feed-service, extract seams, build the engine on proven
+> foundations." Per-layer traffic splitting is a **future design** — we'll tackle it after
+> interfaces and abstractions are shipped and proven.
 >
 > See `context/pivot-analysis.md` and `context/rfc-feedback.md` for full synthesis.
 
@@ -14,20 +16,12 @@
 ## Approach: Working Effectively with Legacy Code
 
 The feed-service post-processing code is messy and poorly understood (confirmed by every
-stakeholder). Rewriting it is too risky and too slow. Instead:
+stakeholder). Rewriting is too risky. Instead:
 
-1. **Extract interfaces at seams** — FeedRow wraps 9+ carousel types behind one interface.
-   RankingStep wraps hardcoded ranking methods behind one interface. The old code still works.
-2. **Ship abstractions first** — Each abstraction is independently useful. FeedRow solves
-   Frank's new-carousel-type problem. RankingStep makes ranking composable. Neither requires
-   the full engine to deliver value.
-3. **Build the engine on proven foundations** — Once FeedRow and RankingStep exist and are
-   tested, the engine is just a loop over steps. Ship it when the abstractions are proven.
-4. **Traffic router in parallel** — Per-layer traffic management doesn't depend on the engine.
-   Build it concurrently.
-
-This follows the "Scratch Refactoring" pattern from *Working Effectively with Legacy Code*:
-understand by refactoring, formalize into real abstractions, ship incrementally.
+1. **Extract interfaces at seams** — `Scorable` formalizes what 12 types already have (`id`, `predictionScore`). `RankingStep` wraps hardcoded ranking methods. Old code still works.
+2. **Ship abstractions first** — Each abstraction is independently useful. `Scorable` solves Frank's new-carousel-type problem. `RankingStep` makes ranking composable.
+3. **Build the engine on proven foundations** — Once `Scorable` and `RankingStep` exist and are tested, the `Ranker` is just a chain of handlers. Ship when abstractions are proven.
+4. **Traffic splitting later** — Per-layer traffic management is a separate design effort after the engine is wired in. See `experiment-traffic-industry-research.md` for the design space.
 
 ---
 
@@ -110,59 +104,39 @@ reOrderGlobalEntitiesV2()
 
 | Stakeholder | Role | #1 Pain | UBP Component |
 |---|---|---|---|
-| **Frank Zhang** | NV BE | New carousel type onboarding — no abstraction | FeedRow interface + adapters |
-| **Yu Zhang** | Manager | DV waterfall — experiment traffic management | Per-layer traffic router |
+| **Frank Zhang** | NV BE | New carousel type onboarding — no abstraction | `Scorable` interface |
+| **Yu Zhang** | Manager | DV waterfall — experiment traffic management | Per-layer traffic router (future) |
 | **Dipali Ranjan** | MLE | Model experiment lifecycle — config mess | Simplified experiment declaration |
 
 All agree: code is messy, no abstraction layer, adding anything requires deep HP knowledge.
 
 ---
 
-## MLE-Facing Contract (Simplified)
+## Naming (from poc-generic-ranking.md)
 
-MLEs provide an experiment declaration. UBP handles everything else.
-
-```json
-{
-  "experiment_id": "nv_boost_v2",
-  "layer": "vertical",
-  "model_name": "vertical_intent_model_v3",
-  "predictor_name": "FEED_RANKING_FW_SIBYL_PREDICTOR_NAME",
-  "traffic_pct": 5,
-  "params": {}
-}
-```
-
-| Field | Required | Description |
+| Concept | Name | Description |
 |---|---|---|
-| `experiment_id` | Yes | Unique experiment name |
-| `layer` | Yes | `"vertical"` or `"horizontal"` |
-| `model_name` | Yes | Sibyl model to use |
-| `predictor_name` | No | Defaults to layer's default predictor |
-| `traffic_pct` | Yes | % of traffic within the layer |
-| `params` | No | Step-level param overrides (empty = model swap only) |
+| Unified interface | `Scorable` | Any type with `id` + `predictionScore` + `withPredictionScore()`. Not a wrapper — existing domain types implement it directly. |
+| Step | `RankingStep<S : Enum<S>>` | Domain logic contract. Items in → items out. Pure function. Parameterized by step type enum. |
+| Handler | `RankingHandler` | Infrastructure wrapper (metrics, conditions, shadow). Chain of Responsibility pattern. |
+| Engine | `Ranker<S : Enum<S>>` | Assembles handler chain from pipeline config, executes it. Zero business logic. |
+| Vertical step enum | `VerticalStepType` | Phase 1: `RANK_ALL`. Phase 2: `MODEL_SCORING`, `MULTIPLIER_BOOST`, `DIVERSITY_RERANK`, `POSITION_BOOSTING`, `FIXED_PINNING`. |
+| Horizontal step enum | `HorizontalStepType` | Phase 1: `RANK_ALL`. Phase 2: granular steps TBD. |
 
-MLEs don't write pipeline configs or step sequences. That's internal.
+**Key design choice**: `Scorable` uses inheritance (existing types add `override` + one-line `withPredictionScore`), NOT composition wrappers. The fields already exist — we're formalizing a convention into a compile-time contract.
 
 ---
 
-## Internal Engine Architecture (HP-Owned)
+## Internal Engine Architecture
 
-### Naming
+Phase 1: **one `RANK_ALL` step** wrapping the entire legacy pipeline. This proves the interfaces work end-to-end without changing any ranking behavior.
 
-- `FeedRow` — vertical ranking unit (one carousel on the page)
-- `RowItem` — horizontal ranking unit (one store/item within a carousel)
-- `FeedRowRankingStep` / `RowItemRankingStep` — one step in the ranking pipeline
-- `FeedRowRanker` / `RowItemRanker` — config-driven orchestrator
+Phase 2: **decompose into granular steps** once `RANK_ALL` is stable. The engine is unchanged — add enum values + step implementations + new pipeline config.
 
-### Vertical step types (2 steps)
-
-We are NOT boiling the ocean. Finer decomposition is a future iteration once interfaces are proven.
-
-| Step type | What it wraps | Replaces in current code |
-|---|---|---|
-| `MODEL_SCORING` | `getScoreBundle()` — Sibyl gRPC + `BlendingUtil.blendBundle()` including diversity rerank (all one atomic call) | `EntityRankerConfiguration.getScoreBundleWithWorkflowHelper()` + `BlendingUtil` |
-| `BOOST_AND_RANK` | `getBoostBundle()` + `getRankingBundle()` + `getRankableContent()` — score assignment, position boosting, deal multiplier, pin vs flow sort order, reassembly (all one atomic flow) | `Boosting.kt` + `BoostingBundle.boosted()` + `RankingBundle.ranked()` |
+```
+Phase 1:  RANK_ALL
+Phase 2:  MODEL_SCORING → MULTIPLIER_BOOST → DIVERSITY_RERANK → POSITION_BOOSTING → FIXED_PINNING
+```
 
 ### Config fragmentation this solves
 
@@ -180,159 +154,62 @@ boost allow list + DV                 →  boostByPositionCarouselIdAllowList + 
 
 ---
 
-## N x M Experiment Model
+## Implementation Steps
 
-Experiments are mutually exclusive WITHIN a layer, orthogonal ACROSS layers.
+### Step 1: `Scorable` interface on existing domain types
 
-```
-Layer: vertical    → Experiment A (5%), Experiment B (10%), Control (85%)
-Layer: horizontal  → Experiment C (3%), Control (97%)
-→ Any (vertical, horizontal) combination is valid
-```
-
-UBP traffic router assigns users via hash-based bucketing per layer:
-`bucket = hash(consumer_id, layer_salt) % 1000`
-
-No DV waterfall. No dummy DVs. No reserve segments. No priority lists.
-
----
-
-## Implementation Steps (New Priority Order)
-
-### Step 1: FeedRow interface + adapters
-
-**Goal:** Single interface wrapping all carousel types. Immediately useful — new carousel types
-need only one adapter class instead of touching 10+ files. Solves Frank's #1 pain.
+**Goal:** Single interface formalizing what 12 types already have. Immediately useful — new carousel types only need to implement `Scorable` + `SortablePlacement`. Solves Frank's #1 pain.
 
 **What to build:**
-- `interface FeedRow` with `id`, `type: RowType`, `score` (mutable), `metadata`, `applyBackTo()`
-- `RowType` enum: `STORE_CAROUSEL`, `ITEM_CAROUSEL`, `DEAL_CAROUSEL`, `STORE_COLLECTION`,
-  `COLLECTION_V2`, `ITEM_COLLECTION`, `MAP_CAROUSEL`, `REELS_CAROUSEL`, `STORE_ENTITY`
-- Adapters for all 9 types (each: `toFeedRow()` extension + `applyBackTo()`)
-- Extend existing `ScorableEntityStoreCarousel` + `ScorableEntityItemCarousel` prototypes
+- `interface Scorable { val id: String; val predictionScore: Double?; fun withPredictionScore(score: Double): Scorable }`
+- Add `Scorable` to all 9 vertical types: `StoreCarousel`, `ItemCarousel`, `DealCarousel`, `StoreCollection`, `CollectionV2`, `ItemCollection`, `MapCarousel`, `ReelsCarousel`, `StoreEntity`
+- Add `Scorable` to 3 horizontal types: `StoreEntity`, `ItemStoreEntity`, `DealStoreEntity`
+- Each type: add `override` to existing fields + one-line `withPredictionScore` via `copy()`
 
 **Key files:**
-- New: `libraries/common/.../ubp/vertical/FeedRow.kt`
-- New: `libraries/common/.../ubp/vertical/RowType.kt`
-- New: `libraries/common/.../ubp/vertical/adapters/` (9 adapter classes)
+- New: `libraries/common/.../ubp/Scorable.kt`
+- Modified: 12 existing data classes (add `: Scorable` + `override` + `withPredictionScore`)
 
-**Why first:** This is a pure seam extraction. Zero risk to existing code. Immediately testable.
-Any code that branches on carousel type can start using it.
+**Open question:** `LiteStoreCollection` has no `predictionScore` field (uses maps). Add field? Exclude?
+**Open question:** `StoreEntity` has `id: Long`. Scorable expects `String`. Use `toString()`?
+
+**Why first:** Pure seam extraction. Zero behavior change. Compile-time enforcement of existing convention.
 
 ---
 
-### Step 2: FeedRowRankingStep interface + step extraction
+### Step 2: `RankingStep` + `RankingHandler` + `Ranker` engine
 
-**Goal:** Extract hardcoded ranking methods into registered, independently-testable steps.
-
-| Step class | Step type | Wraps |
-|---|---|---|
-| `ModelScoringStep` | `MODEL_SCORING` | `getScoreBundle()` (Sibyl gRPC + BlendingUtil.blendBundle() + diversity rerank — all one atomic call) |
-| `BoostAndRankStep` | `BOOST_AND_RANK` | `getBoostBundle()` + `getRankingBundle()` + `getRankableContent()` (score assignment, position boosting, deal multiplier, pin vs flow sort, reassembly — all one atomic flow) |
-
-**Critical rule:** `params` injected from config. Steps do NOT read DV keys internally.
-
-```kotlin
-interface FeedRowRankingStep {
-    val stepType: String
-    val paramsClass: Class<out StepParams>
-    suspend fun process(
-        rows: MutableList<FeedRow>,
-        context: RankingContext,
-        params: StepParams,
-    )
-}
-```
-
-**Key files:**
-- New: `libraries/common/.../ubp/vertical/FeedRowRankingStep.kt`
-- New: `libraries/common/.../ubp/vertical/steps/` (2 implementations)
-
-**Why second:** Steps consume FeedRow (depends on Step 1). Extraction is the scratch-refactoring
-approach: move logic into step classes, verify behavior is preserved, formalize.
-
----
-
-### Step 3: Per-layer traffic router (parallel with Steps 1-2)
-
-**Goal:** Replace DV waterfall with hash-based bucket partitioning per layer. Solves YZ's #1 pain.
+**Goal:** Extract legacy ranking into one step, wrap in handler chain, orchestrate via Ranker.
 
 **What to build:**
-- `UbpExperimentRegistry` — runtime JSON listing active experiments per layer
-- `UbpTrafficRouter` — hash-based assignment (`murmurHash(consumerId, layerSalt) % 1000`)
-- Writes assignment to `experimentMap` for analytics pipeline compatibility
-- Control config in separate HP-owned runtime JSON
-
-```kotlin
-class UbpTrafficRouter(private val registry: UbpExperimentRegistry) {
-    fun assign(consumerId: Long, layer: String): ExperimentAssignment {
-        val bucket = murmurHash(consumerId, layer) % 1000
-        val experiments = registry.getExperiments(layer)
-        for (exp in experiments) {
-            if (bucket in exp.bucketStart..exp.bucketEnd) {
-                return ExperimentAssignment(exp.id, exp.treatment, resolveConfig(exp))
-            }
-        }
-        return ExperimentAssignment.CONTROL
-    }
-}
-```
+- `interface RankingStep<S : Enum<S>>` — domain logic contract
+- `interface RankingHandler` — chain of responsibility (metrics, conditions)
+- `class Ranker<S : Enum<S>>` — assembles chain from pipeline config, executes
+- `VerticalRankAllStep` — wraps entire `BaseEntityRankerConfiguration.rank()`
+- `HorizontalRankAllStep` — wraps entire `StoreCarouselService.sortEntities()`
 
 **Key files:**
-- New: `libraries/common/.../ubp/traffic/UbpExperimentRegistry.kt`
-- New: `libraries/common/.../ubp/traffic/UbpTrafficRouter.kt`
+- New: `libraries/common/.../ubp/RankingStep.kt`
+- New: `libraries/common/.../ubp/RankingHandler.kt` (BaseHandler, StepHandler, MetricsHandler)
+- New: `libraries/common/.../ubp/Ranker.kt`
+- New: `libraries/common/.../ubp/vertical/VerticalRankAllStep.kt`
+- New: `libraries/common/.../ubp/horizontal/HorizontalRankAllStep.kt`
 
-**Why parallel:** No dependency on FeedRow or steps. Can be built and tested independently.
+**Why second:** Consumes `Scorable` (depends on Step 1). Wraps legacy — no behavior change.
 
 ---
 
-### Step 4: FeedRowRanker engine + step registry
+### Step 3: Wire engine into feed-service
 
-**Goal:** Config-driven orchestrator. Zero business logic. Pure dispatch.
-
-```kotlin
-class FeedRowRanker(
-    private val stepRegistry: StepRegistry,
-    private val traceEmitter: UbpTraceEmitter? = null,
-) {
-    suspend fun rank(
-        rows: MutableList<FeedRow>,
-        pipeline: ResolvedPipeline,
-        context: RankingContext,
-    ): List<FeedRow>
-}
-```
-
-- Loops steps from resolved pipeline, dispatches to `stepRegistry[stepConfig.type]`
-- Unknown step type → skip + log warning (never crash)
-- Auto-trace after each step when `emitTrace = true`
-
-**Key files:**
-- New: `libraries/common/.../ubp/vertical/FeedRowRanker.kt`
-- New: `libraries/common/.../ubp/config/` (config data classes, control.json)
-
-**Why fourth:** Depends on FeedRow (Step 1) and steps (Step 2). Simple once foundations exist.
-
----
-
-### Step 5: Wire engine + traffic router into feed-service
-
-**Goal:** Route requests via traffic router to UBP engine. Zero impact to non-UBP traffic.
+**Goal:** Route requests through `Ranker<VerticalStepType>` using `RANK_ALL`. Zero impact — same behavior, new path.
 
 **Vertical incision:** inside `reOrderGlobalEntitiesV2()`, before `rankAndDedupeContent()`:
 ```kotlin
-val assignment = ubpTrafficRouter.assign(consumerId, "vertical")
-if (assignment != ExperimentAssignment.CONTROL) {
-    val rows = toFeedRows(layout)
-    val ranked = feedRowRanker.rank(rows, assignment.pipeline, context)
-    applyRankedRows(ranked, layout)
-} else {
-    rankAndDedupeContent(...)
-}
+val items = carousels.filterIsInstance<Scorable>()
+val ranked = verticalRanker.rank(items, listOf(VerticalStepType.RANK_ALL), ctx)
 ```
 
-**Horizontal incision:** inside `DefaultHomePageStoreRanker.rank()`, wrapping
-`modifyLiteStoreCollection()`.
+**Horizontal incision:** inside `DefaultHomePageStoreRanker.rank()`, wrapping `modifyLiteStoreCollection()`.
 
 **Key files:**
 - `pipelines/homepage/.../DefaultHomePagePostProcessor.kt`
@@ -340,52 +217,79 @@ if (assignment != ExperimentAssignment.CONTROL) {
 
 ---
 
-### Step 6: Standardized tracing
+### Step 4: Shadow validation
+
+**Goal:** Prove `Ranker` + `RANK_ALL` produces identical output to old path.
+
+- `ShadowHandler` runs both paths, compares sort order, logs divergences
+- Shadow result always discarded — users see old-path result
+- Target: `divergence_count = 0` before any traffic migration
+
+---
+
+### Step 5: Standardized tracing
 
 **Goal:** Auto-trace per step. Score snapshots queryable in Snowflake.
 
-- Standard event: `{ row_id, step_id, score_before, score_after, request_id, experiment_id }`
-- Engine emits when `output_config.emit_trace = true`
-- New proto: `ubp_feed_row_ranking_trace.proto` in services-protobuf
+- Standard event: `{ item_id, step_type, score_before, score_after, request_id }`
+- `MetricsHandler` already captures duration; add score diffing
+- New proto: `ubp_ranking_trace.proto` in services-protobuf
 
 ---
 
-### Step 7: Shadow validation + contract assembly
+### Step 6: Granular step decomposition (Phase 2)
 
-**Goal:** Prove UBP engine produces identical output to old path.
+**Goal:** Break `RANK_ALL` into granular steps. Engine unchanged — add enum values + implementations.
 
-- `UbpContractAssembler` observes prod decisions, assembles equivalent UBP config
-- Shadow: run both paths, compare sort order, log divergences
-- Target: `divergence_count = 0` before any real traffic migration
-
----
-
-## Migration Path
-
-| Stage | What | Traffic |
-|---|---|---|
-| 0 | Ship abstractions (FeedRow, steps) — no traffic impact | 0% |
-| 1 | Contract assembly — shadow observe prod decisions | 0% |
-| 2 | Shadow validate — UBP engine vs old path comparison | 0% |
-| 3 | Control arm — small % real traffic to UBP control | 1-5% |
-| 4 | First experiment — MLE declares experiment via Contract 0 | MLE-chosen % |
-| 5 | Retire — old experiments end, remove old code paths | Gradual |
-
----
-
-## New Carousel Type Onboarding Process (Frank's Pain)
-
-Once FeedRow exists, the onboarding process for a new carousel type becomes:
-
-```
-1. Write FeedRowAdapter for the new type (1 class)
-2. Stage 1 — Pin: configure BOOST_AND_RANK step with guaranteed position
-3. Stage 2 — Explore: enable UCB_EXPLORATION step for the new type
-4. Stage 3 — Organic: remove pin, let MODEL_SCORING rank naturally
+```kotlin
+enum class VerticalStepType {
+    RANK_ALL, MODEL_SCORING, MULTIPLIER_BOOST, DIVERSITY_RERANK, POSITION_BOOSTING, FIXED_PINNING,
+}
 ```
 
-Each stage is a config change, not a code change. The thresholds for transitioning
-between stages can be defined in config (min impressions, min MAB trials, etc.).
+Each new step wraps the same existing methods, but independently testable and configurable.
+
+---
+
+### Future: Per-layer traffic splitting
+
+After interfaces and engine are shipped and proven, design the traffic management system:
+- Hash-based bucket partitioning per layer (replaces DV waterfall)
+- MLE declares experiment_id + layer + model + traffic_pct
+- UBP assigns users via `murmurHash(consumerId, layerSalt) % 1000`
+- See `context/experiment-traffic-industry-research.md` for design space
+
+This solves YZ's #1 pain (DV waterfall). Depends on working engine with config-driven experiments.
+
+---
+
+## N x M Experiment Model (Target State)
+
+Experiments mutually exclusive WITHIN a layer, orthogonal ACROSS layers.
+
+```
+Layer: vertical    → Experiment A (5%), Experiment B (10%), Control (85%)
+Layer: horizontal  → Experiment C (3%), Control (97%)
+→ Any (vertical, horizontal) combination is valid
+```
+
+No DV waterfall. No dummy DVs. No reserve segments. No priority lists.
+
+---
+
+## New Carousel Type Onboarding (Frank's Pain)
+
+Once `Scorable` is shipped, onboarding a new carousel type:
+
+```
+1. Add `: Scorable` to the new data class (1 line per field + withPredictionScore)
+2. Stage 1 — Pin: hardcode sort order (existing pattern, no new code)
+3. Stage 2 — Explore: enable UCB exploration for the new type (config change once engine exists)
+4. Stage 3 — Organic: let model rank naturally
+```
+
+Before UBP: touch 10+ files, need HP team pairing, 2-3 weeks.
+After UBP: implement `Scorable` on one class, done.
 
 ---
 
@@ -394,7 +298,7 @@ between stages can be defined in config (min impressions, min MAB trials, etc.).
 | Layer | Key File | What it does |
 |---|---|---|
 | Vertical entry | `DefaultHomePagePostProcessor.kt` | `reOrderGlobalEntitiesV2()` — incision point |
-| Vertical scoring | `EntityRankerConfiguration.kt` | Calls Sibyl + blending (replaced by FeedRowRanker) |
+| Vertical scoring | `EntityRankerConfiguration.kt` | Calls Sibyl + blending (wrapped by `VerticalRankAllStep`) |
 | Vertical blending | `VerticalBlending.kt` | Calibration x intent x boost weight multipliers |
 | Vertical pinning | `Boosting.kt` | `enforceManualSortOrder` enforcement |
 | Pinned order config | `PinnedCarouselUtil.kt` | Reads `pinned_carousel_ranking_order.json` |
@@ -410,26 +314,23 @@ between stages can be defined in config (min impressions, min MAB trials, etc.).
 
 ## Progress Tracker
 
-**Abstractions (ship first — independently valuable)**
-- [ ] Step 1: `FeedRow` interface + adapters for all 9 carousel types
-- [ ] Step 2: `FeedRowRankingStep` interface + 2 step implementations (`ModelScoringStep`, `BoostAndRankStep`)
+**Phase 1: Interfaces + Abstractions (ship first — independently valuable)**
+- [ ] Step 1: `Scorable` interface on all 12 domain types
+- [ ] Step 2: `RankingStep` + `RankingHandler` + `Ranker` engine + `RANK_ALL` steps
+- [ ] Step 3: Wire engine into feed-service (vertical + horizontal)
+- [ ] Step 4: Shadow validation — prove identical output
+- [ ] Step 5: Standardized tracing
 
-**Traffic Management (parallel with abstractions)**
-- [ ] Step 3: `UbpExperimentRegistry` + `UbpTrafficRouter` (hash-based bucketing)
+**Phase 2: Granular Steps (decompose RANK_ALL)**
+- [ ] Step 6: Break vertical `RANK_ALL` into `MODEL_SCORING`, `MULTIPLIER_BOOST`, `DIVERSITY_RERANK`, `POSITION_BOOSTING`, `FIXED_PINNING`
+- [ ] Break horizontal `RANK_ALL` into granular steps
 
-**Engine (builds on abstractions)**
-- [ ] Step 4: `FeedRowRanker` engine + step registry + config data classes
-- [ ] Step 5: Wire engine + traffic router into PostProcessor + StoreRanker
-- [ ] Step 6: Standardized tracing / `ubp_feed_row_ranking_trace.proto`
-- [ ] Step 7: Shadow validation + contract assembly
+**Future: Traffic + Experiments**
+- [ ] Per-layer traffic splitting design + implementation
+- [ ] MLE self-service experiment declaration
+- [ ] N × M cross-layer experiment support
 
-**Horizontal (mirrors vertical)**
-- [ ] `RowItem` interface + adapters
-- [ ] `RowItemRankingStep` + step implementations
-- [ ] `RowItemRanker` with `row_overrides` dispatch
-- [ ] Wire into `DefaultHomePageStoreRanker`
-
-**Post-POC**
+**Future: Advanced**
 - [ ] `CalibrationStep` (`PIECEWISE`, `ISOTONIC`)
 - [ ] `ValueFunctionStep` (pImp x pAct x vAct)
-- [ ] `AdsFeedRow` adapter + fair ads/organic competition
+- [ ] Ads/organic fair competition via unified Scorable
