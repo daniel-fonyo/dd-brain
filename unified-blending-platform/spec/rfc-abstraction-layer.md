@@ -72,7 +72,7 @@ These don't change any ranking behavior — they formalize existing conventions 
 
 **Thesis:** The homepage ranking pipeline cannot evolve toward UBP without interfaces. Every future UBP goal — experiment velocity, partner self-service, whole-page optimization — depends on composable, testable ranking steps that operate on a uniform data type. This RFC proposes those interfaces and a safe delivery plan to get them into production.
 
-**Phase 1 is shipped.** `Rankable` is implemented on 9 carousel domain types. `RankingPipeline<CarouselRankStepType>` with a single `RANK_ALL` step wrapping the entire legacy pipeline is wired in at `DefaultHomePagePostProcessor.rankContent()` (shadow mode, gated by `ubp_shadow_vertical_ranking`). This RFC asks for alignment that these are the right abstractions before proceeding to shadow validation and intra-carousel ranking.
+**Phase 1 is implemented.** `Rankable` is implemented on 9 carousel domain types. `RankingPipeline<CarouselRankStepType>` with a single `RANK_ALL` step wrapping the entire legacy pipeline is wired in at `DefaultHomePagePostProcessor.rankContent()` (shadow mode, gated by `ubp_shadow_vertical_ranking`). This RFC asks for alignment that these are the right abstractions before proceeding to shadow validation and intra-carousel ranking.
 
 ---
 
@@ -129,13 +129,13 @@ There are zero tests covering the end-to-end ranking behavior. Changes are "edit
 
 # When?
 
-| Phase | What | Status |
-| :---- | :---- | :---- |
-| **1. Carousel rank interfaces** | `Rankable` on 9 carousel types, `RankingStep<S>`, `RankingHandler`, `RankingPipeline<S>`, `CarouselRankAllStep` — all pure additions | **Shipped** |
-| **1.5. Intra-carousel rank interfaces** | Same engine applied to within-carousel store ranking. `IntraCarouselRankStepType`, `IntraCarouselRankAllStep` wrapping `DefaultHomePageStoreRanker`. Zero engine changes. | Next |
-| **2. Shadow validation** | Wire shadow path for carousel + intra-carousel ranking. Run both paths, compare sort orders, log divergences. Target: `divergence_count = 0` | After 1.5 |
-| **3. Rollout** | DV-gated gradual migration: 1% → 5% → 25% → 50% → 100% | After shadow proven |
-| **4. Granular steps** | Decompose `RANK_ALL` into composable steps | After rollout stable |
+| Phase                                   | What                                                                                                                                                                      | Status               |
+| :-------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :------------------- |
+| **1. Carousel rank interfaces**         | `Rankable` on 9 carousel types, `RankingStep<S>`, `RankingHandler`, `RankingPipeline<S>`, `CarouselRankAllStep` — all pure additions                                      | On feature branch (`feat/vertical-ranking-abstraction-phase1`) |
+| **1.5. Intra-carousel rank interfaces** | Same engine applied to within-carousel store ranking. `IntraCarouselRankStepType`, `IntraCarouselRankAllStep` wrapping `DefaultHomePageStoreRanker`. Zero engine changes. | Next                 |
+| **2. Shadow validation**                | Wire shadow path for carousel + intra-carousel ranking. Run both paths, compare sort orders, log divergences. Target: `divergence_count = 0`                              | After 1.5            |
+| **3. Rollout**                          | DV-gated gradual migration: 1% → 5% → 25% → 50% → 100%                                                                                                                    | After shadow proven  |
+| **4. Granular steps**                   | Decompose `RANK_ALL` into composable steps                                                                                                                                | After rollout stable |
 
 Each phase is independently shippable. If any phase shows risk, we stop and the old path continues serving 100% of traffic.
 
@@ -623,7 +623,7 @@ These are small internal interfaces (3 types, ~10 methods total) within a single
 The interfaces are designed to absorb UBP capabilities incrementally. Each phase adds step types and implementations — the engine, the interface, and the wiring stay unchanged. Phase 1.5 (intra-carousel) is the first concrete proof — see "Phase 1.5: Intra-Carousel Ranking" above.
 
 ```
-Phase 1   (shipped):  CarouselRank RANK_ALL
+Phase 1   (implemented):  CarouselRank RANK_ALL
                       └─ wraps entire carousel-level legacy pipeline in one step
 
 Phase 1.5 (next):    IntraCarouselRank RANK_ALL
