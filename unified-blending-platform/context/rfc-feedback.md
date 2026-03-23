@@ -1,7 +1,8 @@
 # RFC Feedback — Stakeholder Conversations
 
-> Temp doc. Captures feedback from conversations with MLEs and engineers
+> Captures feedback from conversations with MLEs and engineers
 > about UBP direction, pain points, and what they actually need.
+> See also `pivot-analysis.md` for the strategic pivot this informed.
 
 ---
 
@@ -116,23 +117,18 @@ See `context/pivot-analysis.md` for full details.
 
 | Pain | UBP Component |
 |---|---|
-| DV waterfall | Contract 0: per-layer traffic router with hash-based bucketing |
-| Model experiment config mess | Contract 0: simplified experiment declaration (model + layer + traffic %) |
-| New carousel type onboarding | Contract 2: FeedRow interface + adapter pattern — new type = 1 adapter class |
-| No step abstraction | Contract 4: RankingStep interface + step registry |
-| No observability | Contract 5: auto-trace per step |
-| Code mess / coupling | Engine architecture: clean separation of concerns |
+| DV waterfall | Per-layer traffic router with hash-based bucketing (future) |
+| Model experiment config mess | Simplified experiment declaration (`mle-contract.md`) |
+| New carousel type onboarding | `Scorable` interface — new type = add `override` + `withPredictionScore` |
+| No step abstraction | `RankingStep` interface + step registry |
+| No observability | Auto-trace per step via `MetricsHandler` |
+| Code mess / coupling | `Ranker` engine: clean separation of concerns |
 
-### The Incremental Path (Refactoring Book Approach)
+### The Incremental Path
 
 Frank's pain point is the strongest argument for shipping **abstractions first, engine second**:
 
-1. **FeedRow interface + adapters** — This is immediately useful even without the engine. Any code that currently branches on carousel type can be simplified. New carousel types get one adapter instead of touching 10+ files.
-
-2. **RankingStep interface** — Extract current ranking logic into steps. The code gets cleaner AND we build toward the engine. Scratch refactoring: move things around to understand them, then formalize into the step pattern.
-
-3. **Engine** — Once interfaces exist and steps are extracted, the engine is just a loop over steps. Ship it when the abstractions are proven.
-
-4. **Traffic router** — Can be built in parallel with abstractions. Doesn't depend on the engine.
-
-This is the Working Effectively with Legacy Code approach: don't rewrite, extract interfaces at seams, wrap legacy code in new abstractions, test the new abstractions, then gradually replace internals.
+1. **`Scorable` interface** — Immediately useful. New carousel types implement one interface instead of touching 10+ files.
+2. **`RankingStep` + `RankingHandler`** — Extract ranking logic into steps. Code gets cleaner AND we build toward the engine.
+3. **`Ranker` engine** — Once interfaces exist, the engine is just a handler chain. Ship when abstractions are proven.
+4. **Traffic splitting** — Future design effort, independent of engine.
