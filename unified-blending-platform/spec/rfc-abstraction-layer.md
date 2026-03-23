@@ -413,7 +413,7 @@ Each step receives its configuration as data (model names, weight parameters, co
 
 **Config-driven experimentation.** Each step type is an enum value in the step registry. An experiment can swap one step implementation for another (e.g., a new diversity algorithm) by registering a different `RankingStep` for that enum key. The MLE experiment config drives which steps run and in what order, with no code deployment needed for new ranking experiments.
 
-**Cross-cutting concerns injected transparently.** Because `StepHandler` wraps each step, infrastructure concerns (metrics, per-step tracing, latency budgets, circuit-breaking) can be added in one place without modifying any step. Shadow comparison, A/B metrics emission, and timeout enforcement all live at the handler level.
+**Per-step observability and experimentation.** Because `StepHandler` wraps each step, observability (per-step latency, score distributions, tracing) and experimentation (A/B metrics per step, step-level feature flags) can be added at the handler level without modifying any step implementation.
 
 **Per-layer traffic management.** Vertical and horizontal ranking are separate `RankingPipeline<S>` instances with different step type enums. Each layer can be shadow-validated and rolled out independently. Future layers (e.g., ads ranking, cross-page ranking) follow the same pattern: new enum, new steps, same engine.
 
