@@ -1,6 +1,6 @@
 # Unified Blending Platform — Plan
 
-## Status: Phase 1 vertical implemented — shadow validated on sandbox (parallel, identical output)
+## Status: RFC in progress — POC on private branch validates design
 
 > **Source of truth**: `Unified Blending Platform Vision.md` (the RFC), `Unified Blending Platform 1 Pager.md`, `poc-generic-ranking.md` (engine design).
 >
@@ -18,9 +18,9 @@
 The feed-service post-processing code is messy and poorly understood (confirmed by every
 stakeholder). Rewriting is too risky. Instead:
 
-1. **Extract interfaces at seams** — `Scorable` formalizes what 12 types already have (`id`, `predictionScore`). `RankingStep` wraps hardcoded ranking methods. Old code still works.
-2. **Ship abstractions first** — Each abstraction is independently useful. `Scorable` solves Frank's new-carousel-type problem. `RankingStep` makes ranking composable.
-3. **Build the engine on proven foundations** — Once `Scorable` and `RankingStep` exist and are tested, the `Ranker` is just a chain of handlers. Ship when abstractions are proven.
+1. **Extract interfaces at seams** — `Rankable` formalizes what 9+ types already have (`id`, `predictionScore`). `RankingStep` wraps hardcoded ranking methods. Old code still works.
+2. **Ship abstractions first** — Each abstraction is independently useful. `Rankable` solves Frank's new-carousel-type problem. `RankingStep` makes ranking composable.
+3. **Build the engine on proven foundations** — Once `Rankable` and `RankingStep` exist and are tested, the `RankingPipeline` is just a chain of handlers. Ship when abstractions are proven.
 4. **Traffic splitting later** — Per-layer traffic management is a separate design effort after the engine is wired in. See `experiment-traffic-industry-research.md` for the design space.
 
 ---
@@ -104,7 +104,7 @@ reOrderGlobalEntitiesV2()
 
 | Stakeholder | Role | #1 Pain | UBP Component |
 |---|---|---|---|
-| **Frank Zhang** | NV BE | New carousel type onboarding — no abstraction | `Scorable` interface |
+| **Frank Zhang** | NV BE | New carousel type onboarding — no abstraction | `Rankable` interface |
 | **Yu Zhang** | Manager | DV waterfall — experiment traffic management | Per-layer traffic router (future) |
 | **Dipali Ranjan** | MLE | Model experiment lifecycle — config mess | Simplified experiment declaration |
 
@@ -112,18 +112,22 @@ All agree: code is messy, no abstraction layer, adding anything requires deep HP
 
 ---
 
-## Naming (from poc-generic-ranking.md)
+## Naming
 
 | Concept | Name | Description |
 |---|---|---|
-| Unified interface | `Scorable` | Any type with `id` + `predictionScore` + `withPredictionScore()`. Not a wrapper — existing domain types implement it directly. |
-| Step | `RankingStep<S : Enum<S>>` | Domain logic contract. Items in → items out. Pure function. Parameterized by step type enum. |
-| Handler | `RankingHandler` | Infrastructure wrapper (metrics, conditions, shadow). Chain of Responsibility pattern. |
-| Engine | `Ranker<S : Enum<S>>` | Assembles handler chain from pipeline config, executes it. Zero business logic. |
-| Vertical step enum | `VerticalStepType` | Phase 1: `RANK_ALL`. Phase 2: `MODEL_SCORING`, `MULTIPLIER_BOOST`, `DIVERSITY_RERANK`, `POSITION_BOOSTING`, `FIXED_PINNING`. |
-| Horizontal step enum | `HorizontalStepType` | Phase 1: `RANK_ALL`. Phase 2: granular steps TBD. |
+| Unified interface | `Rankable` | Any type with `rankableId()` + `predictionScore` + `withPredictionScore()`. Not a wrapper — existing domain types implement it directly. |
+| Step | `RankingStep<S : Enum<S>>` | Domain logic contract. Items in → items out. Parameterized by step type enum. |
+| Handler | `RankingHandler` | `fun interface` — infrastructure wrapper (metrics, conditions, shadow). Chain of Responsibility pattern. |
+| Engine | `RankingPipeline<S : Enum<S>>` | Assembles handler chain from step registry, executes via `foldRight`. Zero business logic. |
+| Carousel rank step enum | `CarouselRankStepType` | Inter-carousel ranking. Phase 1: `RANK_ALL`. Phase 2: `MODEL_SCORING`, `MULTIPLIER_BOOST`, `DIVERSITY_RERANK`, `POSITION_BOOSTING`, `FIXED_PINNING`. |
+| Intra-carousel rank step enum | `IntraCarouselRankStepType` | Within-carousel store ranking. Phase 1: `RANK_ALL`. Phase 2: granular steps TBD. |
 
-**Key design choice**: `Scorable` uses inheritance (existing types add `override` + one-line `withPredictionScore`), NOT composition wrappers. The fields already exist — we're formalizing a convention into a compile-time contract.
+**Why not "Vertical/Horizontal"?** "Vertical" is overloaded with business verticals (grocery, convenience landing pages). `CarouselRank` / `IntraCarouselRank` removes ambiguity.
+
+**Key design choice**: `Rankable` uses interface inheritance (existing types add `override` + one-line `withPredictionScore`), NOT composition wrappers. The fields already exist — we're formalizing a convention into a compile-time contract.
+
+> **POC branch**: `feed-service: feat/vertical-ranking-abstraction-phase1` — uses old naming (`VerticalStepType`, `VerticalRankAllStep`). This is a private POC to validate feasibility, not production code. Will be rewritten post-RFC approval with correct naming.
 
 ---
 
@@ -288,17 +292,17 @@ No DV waterfall. No dummy DVs. No reserve segments. No priority lists.
 
 ## New Carousel Type Onboarding (Frank's Pain)
 
-Once `Scorable` is shipped, onboarding a new carousel type:
+Once `Rankable` is accepted, onboarding a new carousel type:
 
 ```
-1. Add `: Scorable` to the new data class (1 line per field + withPredictionScore)
+1. Add `: Rankable` to the new data class (1 line per field + withPredictionScore)
 2. Stage 1 — Pin: hardcode sort order (existing pattern, no new code)
 3. Stage 2 — Explore: enable UCB exploration for the new type (config change once engine exists)
 4. Stage 3 — Organic: let model rank naturally
 ```
 
 Before UBP: touch 10+ files, need HP team pairing, 2-3 weeks.
-After UBP: implement `Scorable` on one class, done.
+After UBP: implement `Rankable` on one class, done.
 
 ---
 
@@ -321,37 +325,40 @@ After UBP: implement `Scorable` on one class, done.
 
 ---
 
-## UBP Naming Conventions
+## UBP Naming History
 
-Resolves naming collisions with existing monorepo types:
+Resolved naming collisions with existing monorepo types:
 
-| UBP name | Old name | Collision it resolved |
+| Current name | POC branch name | Collision resolved |
 |---|---|---|
 | `Rankable` | `Scorable` | sdk-core's `Scorable` (ML feature extraction interface) |
-| `rankableId()` | `scorableId()` | — |
 | `RankingPipeline` | `Ranker` | sdk-p13n's `abstract class Ranker` |
-| `toRankableList()` | `toScorableList()` | — |
-| `RankingStep` | — | unchanged |
-| `RankingHandler` | — | unchanged (`fun interface`) |
+| `CarouselRankStepType` | `VerticalStepType` | "vertical" overloaded with business verticals |
+| `IntraCarouselRankStepType` | `HorizontalStepType` | clarity over brevity |
 
-Chain-of-responsibility uses immutable constructor injection (`StepHandler` takes `next: RankingHandler?` as constructor param, built via `foldRight`).
-
-Branch: `feed-service: refactor/ubp-phase1-naming-fixes`
+See `CLAUDE.md` naming conventions table for the full canonical list.
 
 ---
 
 ## Progress Tracker
 
-**Phase 1: Interfaces + Abstractions (ship first — independently valuable)**
-- [x] Step 1: `Rankable` interface on 9 vertical domain types — `feed-service: feat/vertical-ranking-abstraction-phase1`
-- [x] Step 2: `RankingStep` + `RankingHandler` + `RankingPipeline` engine + vertical `RANK_ALL` step
-- [x] Step 3: Wire vertical engine into `DefaultHomePagePostProcessor.rankContent()` (shadow mode, gated by `ubp_shadow_vertical_ranking`)
-- [x] Step 3b: Parallelize shadow — `coroutineScope { async(shadowCoroutineContext) {} }` with 5s timeout safeguard
-- [x] Phase 1 naming fixes: `Scorable`→`Rankable`, `Ranker`→`RankingPipeline`, immutable chain
-- [x] Step 4: Shadow validation — sandbox-validated 2026-03-23 (450 log entries, 90/91 orderMatch=true, 0 timeouts, 0 failures, shadow 115ms parallel with legacy 135ms → total 135ms)
-  - All Phase 1 changes consolidated on `feed-service: feat/vertical-ranking-abstraction-phase1`
-- [ ] Step 5: Standardized tracing
-- [ ] Step 6: Horizontal `RANK_ALL` step (same pattern, `DefaultHomePagePostProcessor.reOrderGlobalEntitiesV2`)
+**RFC**
+- [ ] Finalize RFC (`spec/rfc-abstraction-layer.md`) — ready for review
+- [ ] Copy to Google Docs, email `rfc@doordash.com`
+- [ ] Get sign-off from Yu, Frank, Dipali
+
+**POC (private branch — validates design, not production code)**
+- [x] POC: `Rankable` interface on 9 carousel domain types
+- [x] POC: `RankingStep` + `RankingHandler` + `RankingPipeline` engine + `RANK_ALL` step
+- [x] POC: Wire engine into `DefaultHomePagePostProcessor.rankContent()` (shadow mode)
+- [x] POC: Shadow validation on sandbox (450 log entries, 99% orderMatch, 0 failures, parallel coroutines confirmed)
+- Branch: `feed-service: feat/vertical-ranking-abstraction-phase1` (uses old naming — will be rewritten post-RFC)
+
+**Phase 1: Carousel rank interfaces (post-RFC approval)**
+- [ ] Implement with correct naming (`CarouselRankStepType`, `CarouselRankAllStep`)
+- [ ] Shadow validation on production traffic
+- [ ] Intra-carousel ranking (`IntraCarouselRankStepType`, `IntraCarouselRankAllStep`)
+- [ ] Standardized tracing
 
 **Phase 2: Granular Steps (decompose RANK_ALL)**
 - [ ] Step 6: Break vertical `RANK_ALL` into `MODEL_SCORING`, `MULTIPLIER_BOOST`, `DIVERSITY_RERANK`, `POSITION_BOOSTING`, `FIXED_PINNING`
