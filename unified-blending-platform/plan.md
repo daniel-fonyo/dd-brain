@@ -318,9 +318,29 @@ Same pattern applied to Layer 3:
 
 ---
 
+## UBP Naming Conventions
+
+Resolves naming collisions with existing monorepo types:
+
+| UBP name | Old name | Collision it resolved |
+|---|---|---|
+| `Rankable` | `Scorable` | sdk-core's `Scorable` (ML feature extraction interface) |
+| `rankableId()` | `scorableId()` | — |
+| `RankingPipeline` | `Ranker` | sdk-p13n's `abstract class Ranker` |
+| `toRankableList()` | `toScorableList()` | — |
+| `RankingStep` | — | unchanged |
+| `RankingHandler` | — | unchanged (`fun interface`) |
+
+Chain-of-responsibility uses immutable constructor injection (`StepHandler` takes `next: RankingHandler?` as constructor param, built via `foldRight`).
+
+Branch: `feed-service: refactor/ubp-phase1-naming-fixes`
+
+---
+
 ## Progress Tracker
 
 **Phase 1: Vertical Blending**
+- [x] Phase 1 naming fixes: `Scorable`→`Rankable`, `Ranker`→`RankingPipeline`, immutable chain
 - [ ] Step 1: `UnifiedExperimentConfig` data classes + `UbpRuntimeUtil` (config loading + `extends` merge)
 - [ ] Step 2: `VerticalComponent` interface + adapters for all 9 carousel types
 - [ ] Step 3: `VerticalProcessor` interface + 4 processor implementations
