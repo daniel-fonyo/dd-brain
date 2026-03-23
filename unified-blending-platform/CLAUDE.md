@@ -21,7 +21,8 @@ Design a unified blending platform for the feed-service homepage pipeline.
 ## Context Files
 - `plan.md` — current plan and progress tracker
 - `context/northstar.md` — engineering first principles
-- `context/mle-contract.md` — canonical MLE experiment config
+- `context/mle-vertical-contract.md` — canonical MLE experiment config
+- `context/config-driven-experimentation.md` — how experiment config flows through the pipeline (code mechanics)
 - `context/current-system-deep-dive.md` — how feed-service ranking works today
 - `context/horizontal-blending-analysis.md` — ICP ads blending analysis
 - `context/horizontal-ranking-analysis.md` — within-carousel ranking analysis
