@@ -471,15 +471,6 @@ val intraCarouselPipeline = RankingPipeline<IntraCarouselRankStepType>(
 
 The pipeline runs once per carousel, not once per page — the engine is invocation-agnostic. Scores currently live in `LiteStoreCollection.storePredictionScoresMap` rather than on `StoreEntity.predictionScore`, so the `IntraCarouselRankAllStep` delegates directly to the existing comparator-based sorting which already reads from the map.
 
-### Why this proves extensibility
-
-The engine (`RankingPipeline`), the handler chain (`StepHandler`), and the core interface (`Rankable`) are all **completely unchanged** for intra-carousel ranking. The only new code is:
-- A new enum (`IntraCarouselRankStepType`)
-- A new step implementation (`IntraCarouselRankAllStep`)
-- Wiring at the entry point
-
-This is the same pattern as carousel ranking, applied at a different granularity. If the interfaces can absorb both carousel ranking (page-level) and intra-carousel ranking (within-carousel) without modification, they can absorb future UBP capabilities (granular steps, value function, partner self-service) the same way.
-
 ## Safe Delivery: Shadow → Rollout
 
 We never put users at risk. The migration has two phases:
@@ -582,29 +573,21 @@ These are small internal interfaces (3 types, ~10 methods total) within a single
 
 ## Extensibility
 
-The interfaces are designed to absorb UBP capabilities incrementally. Each phase adds step types and implementations — the engine, the interface, and the wiring stay unchanged. Phase 1.5 (intra-carousel) is the first concrete proof — see "Phase 1.5: Intra-Carousel Ranking" above.
+These interfaces are the foundation for the full UBP vision. Here's how each future capability builds on them — without changing the engine, the handler chain, or the `Rankable` interface.
 
-```
-Phase 1   (proposed):  CarouselRank RANK_ALL
-                      └─ wraps entire carousel-level legacy pipeline in one step
+**Decompose into composable steps.** Today `RANK_ALL` wraps the entire legacy pipeline. Once proven, we break it into granular steps — `MODEL_SCORING → MULTIPLIER_BOOST → DIVERSITY_RERANK → FIXED_PINNING`. Each step is a new `RankingStep` implementation registered in the step registry. The engine just runs a longer chain.
 
-Phase 1.5 (next):    IntraCarouselRank RANK_ALL
-                      └─ wraps per-carousel store ranking — same engine, new step type
+**Config-driven MLE experiments.** An MLE drops a JSON config specifying model name, value weights, diversity parameters, and boost multipliers — no code PR needed. The pipeline reads this config and passes it through `RankingContext` to the relevant steps. Swapping a model or tuning a parameter is a config change, not a code change.
 
-Phase 2:             MODEL_SCORING → MULTIPLIER_BOOST → DIVERSITY_RERANK → FIXED_PINNING
-                      └─ legacy pipeline decomposed into composable steps
+**Cross-cutting concerns.** Because `StepHandler` wraps every step, we can inject metrics, tracing, and score snapshots between steps in one place. Per-step observability — `{ item_id, step_type, score_before, score_after }` — comes for free from the chain-of-responsibility pattern. No manual instrumentation per step.
 
-Phase 3:             MODEL_SCORING → CALIBRATION → VALUE_FUNCTION → DIVERSITY → PINNING
-                      └─ full UBP pipeline with unified value function
-```
+**Per-layer traffic management.** Each ranking layer (carousel, intra-carousel) gets its own pipeline instance with its own step registry. Experiment traffic isolation is a function of which `RankingContext` a request gets — the engine doesn't know or care about traffic splitting. This replaces the current DV waterfall with declarative, hash-based bucket assignment.
 
-| Future capability | How it plugs in |
-| :---- | :---- |
-| Config-driven experiments | New step type enum value + new `RankingStep` implementation. No engine change. |
-| Per-step observability | `StepHandler` already wraps each step — add metrics/tracing in one place. |
-| Unified value function | `CALIBRATION` + `VALUE_FUNCTION` steps added to the chain. Engine unchanged. |
-| Partner self-service | NV/Ads/Merch implement their own `RankingStep` — HP registers it. |
-| New carousel type | Implement `Rankable` on one class. No other files change. |
+**Unified value function.** Calibration and value weighting become explicit steps in the chain — `MODEL_SCORING → CALIBRATION → VALUE_FUNCTION → DIVERSITY → PINNING`. Organic stores, ads, and merch content compete on calibrated, comparable scales. The scoring contract (`Rankable.predictionScore`) carries the unified value through every step.
+
+**Partner self-service.** NV, Ads, or Merch teams implement their own `RankingStep` for their domain logic. HP registers it in the step registry. The engine composes it into the chain alongside existing steps — no HP engineer involvement beyond the initial registration.
+
+**New carousel type onboarding.** Implement `Rankable` on one data class. The engine, the steps, and the conversion functions all operate on `List<Rankable>` — they don't know or care what concrete type is in the list.
 
 ## Alternative Designs
 
