@@ -25,8 +25,9 @@
 | **pAct** | P(user takes action) — CTR, CVR, or order probability from ML model |
 | **vAct** | Value of that action — weighted GOV + FIV + strategic |
 | **pImp** | P(user sees a given page position) — position decay |
-| **FeedRow** | A vertical ranking unit — one carousel on the page |
-| **RowItem** | A horizontal ranking unit — one store or item within a carousel |
+| **Scorable** | Unified interface for all rankable types — any carousel or store with `predictionScore` + `withPredictionScore()` |
+| **RankingStep** | Domain logic contract — items in → items out, parameterized by step type enum |
+| **Ranker** | Config-driven engine — assembles handler chain from step types, executes |
 | **control.json** | JSON file canonically defining production ranking behavior |
 
 ---
@@ -100,10 +101,10 @@ REQUEST
   ▼  Layer 2: Grouping
   │  Buckets candidates into named carousels
   │
-  ▼  Layer 3: Horizontal Ranking  ← Phase 1.5  (RowItemRanker)
+  ▼  Layer 3: Horizontal Ranking  ← Phase 1.5  (Ranker<HorizontalStepType>)
   │  Ranks stores/items WITHIN each carousel
   │
-  ▼  Layer 4: Vertical Ranking    ← Phase 1    (FeedRowRanker)
+  ▼  Layer 4: Vertical Ranking    ← Phase 1    (Ranker<VerticalStepType>)
   │  Ranks carousels for their vertical page position
   │
   ▼  Post-processing (unchanged)
@@ -116,9 +117,9 @@ REQUEST
 |---|---|---|---|---|
 | 0 | **Experiment Declaration** | MLE-facing | MLEs, partner teams | DV waterfall hell — per-layer traffic management |
 | 1 | Experiment Config (JSON) | Internal | HP team | Config fragmented across 10+ locations |
-| 2 | FeedRow / RowItem interfaces | Internal | Any team whose content gets ranked | 9+ typed classes with no shared interface |
+| 2 | Scorable interface | Internal | Any team whose content gets ranked | 9+ typed classes with no shared interface |
 | 3 | Value Function / Score | Internal | Model teams | Incomparable scoring scales across content types |
-| 4 | RankingStep interface | Internal | Domain teams (NV, Ads, Merch) | No extension point without HP involvement |
+| 4 | RankingStep<S> interface | Internal | Domain teams (NV, Ads, Merch) | No extension point without HP involvement |
 | 5 | Trace Event | Both | Analytics / data science | No stage-wise score observability |
 
 **Key distinction:** Contract 0 is the MLE-facing surface — what MLEs interact with. Contracts
@@ -128,25 +129,20 @@ configs or step sequences.
 ### Engine Architecture
 
 ```
-FeedRowRanker.rank(rows, experimentId, treatment, context)
+Ranker<VerticalStepType>.rank(items, stepTypes, context)
   │
-  ├── 1. UbpRuntimeUtil.resolve(experimentId, treatment)
-  │        → ResolvedPipeline(steps, predictors, emitTrace)
-  │        → unknown treatment? → fall back to "control" (Null Object)
-  │        → "extends: control"? → shallow-merge params + predictors (Prototype)
+  ├── 1. buildChain(stepTypes)
+  │        → for each stepType: lookup in stepRegistry, wrap in StepHandler, chain
+  │        → unknown type? → skip + warn
   │
-  ├── 2. for each StepConfig:
-  │        step = stepRegistry[config.type] ?: skip + warn
-  │        resolvedParams = resolveParams(config.rawParams, predictors)
-  │        typedParams = OBJECT_MAPPER_RELAX.treeToValue(resolvedParams, step.paramsClass)
-  │        snapshot scores (if tracing)
-  │        step.process(rows, context, typedParams)     ← Chain of Responsibility
-  │        traceEmitter?.recordStep(...)                ← Observer (when emit_trace=true)
+  ├── 2. chain.handle(items, context)
+  │        → each StepHandler calls step.execute(items, context)
+  │        → passes result to next handler in chain
   │
-  └── 3. return rows sorted by score descending
+  └── 3. return ranked items
 ```
 
-`RowItemRanker` (Phase 1.5) is the same architecture applied to `MutableList<RowItem>`.
+`Ranker<HorizontalStepType>` (Phase 1.5) is the same architecture applied to horizontal ranking.
 
 ---
 
@@ -251,79 +247,59 @@ Config hot-reloaded via `DeserializedRuntimeCache` (5-min TTL). No pod restart.
 4. Engine executes resolved pipeline
 ```
 
-### Vertical step types (Phase 1)
+### Vertical step types (Phase 1 — shipped)
 
-Two coarse steps. We are NOT boiling the ocean — finer decomposition is a future iteration
-once interfaces are proven.
+Phase 1 wraps the entire legacy pipeline in one step. Finer decomposition is Phase 2.
 
 | Type | What it wraps | Replaces today |
 |---|---|---|
-| `MODEL_SCORING` | `getScoreBundle()` — Sibyl gRPC + `BlendingUtil.blendBundle()` including diversity rerank (all one atomic call) | `EntityRankerConfiguration.getScoreBundleWithWorkflowHelper()` + `BlendingUtil` |
-| `BOOST_AND_RANK` | `getBoostBundle()` + `getRankingBundle()` + `getRankableContent()` — score assignment to domain objects, position boosting, deal multiplier, pin vs flow sort order, reassembly (all one atomic flow) | `Boosting.kt` + `BoostingBundle.boosted()` + `RankingBundle.ranked()` |
+| `RANK_ALL` | `RankerConfiguration.rank()` — entire vertical pipeline (Sibyl scoring + blending + boosting + pinning + reassembly) | `BaseEntityRankerConfiguration.rank()` template method |
+
+Phase 2 will decompose `RANK_ALL` into: `MODEL_SCORING`, `MULTIPLIER_BOOST`, `DIVERSITY_RERANK`, `POSITION_BOOSTING`, `FIXED_PINNING`.
 
 ### Horizontal step types (Phase 1.5)
 
-Two coarse steps, mirroring the vertical decomposition.
+Mirrors vertical — one `RANK_ALL` step wrapping `modifyLiteStoreCollection()`, decomposed later.
 
 | Type | What it wraps | Replaces today |
 |---|---|---|
-| `MODEL_SCORING` | `scoredCollections()` — Sibyl + score modifiers (atomic) | `StoreCollectionScorer` |
-| `RANKING_SORT` | `modifyLiteStoreCollection()` `when(rankingType)` dispatch | `DefaultHomePageStoreRanker.modifyLiteStoreCollection()` when-chain |
+| `RANK_ALL` | `modifyLiteStoreCollection()` — entire horizontal pipeline | `DefaultHomePageStoreRanker.modifyLiteStoreCollection()` when-chain |
 
 ---
 
-## Contract 2: FeedRow / RowItem Interfaces
+## Contract 2: Scorable Interface
 
 **Counterparty: Any team whose content gets ranked**
 
-The engine never sees typed carousel classes — only these interfaces. Adapters are the only code
-aware of both sides.
+The engine never sees typed carousel classes — only `Scorable`. Domain types implement the
+interface directly (no wrapper classes).
 
 ```kotlin
-interface FeedRow {
-    val id: String
-    val type: RowType                          // enum — one entry per carousel domain type
-    var score: Double                          // mutable — steps write in-place
-    val metadata: MutableMap<String, Any>      // side-channel for inter-step data
-    fun applyBackTo()                          // writes final score back to domain object
-}
-
-interface RowItem {
-    val id: String
-    val type: RowItemType
-    var score: Double
-    val metadata: MutableMap<String, Any>
-    fun applyBackTo()
+interface Scorable {
+    fun scorableId(): String
+    val predictionScore: Double?
+    fun withPredictionScore(score: Double): Scorable
 }
 ```
 
-Each domain type gets one adapter:
+Domain types implement by adding `override` to existing fields + one-line copy:
 
 ```kotlin
-class StoreCarouselRow(private val carousel: StoreCarousel) : FeedRow {
-    override val id    = carousel.id
-    override val type  = RowType.STORE_CAROUSEL
-    override var score = carousel.predictionScore ?: 0.0
-    override val metadata = mutableMapOf<String, Any>()
-    override fun applyBackTo() { carousel.sortOrder = score.toInt() }
-}
-fun StoreCarousel.toFeedRow(): FeedRow = StoreCarouselRow(this)
-```
-
-There is no `AD_CAROUSEL` FeedRow. Ads are post-POC scope.
-
-### RowType enum
-
-```kotlin
-enum class RowType {
-    STORE_CAROUSEL, ITEM_CAROUSEL, DEAL_CAROUSEL,
-    STORE_COLLECTION, COLLECTION_V2, ITEM_COLLECTION,
-    MAP_CAROUSEL, REELS_CAROUSEL, STORE_ENTITY,
+data class StoreCarousel(
+    // ... existing fields ...
+    override val predictionScore: Double?,
+) : Carousel, BaseCarousel, SortablePlacement, Scorable {
+    override fun scorableId(): String = id
+    override fun withPredictionScore(score: Double): StoreCarousel = copy(predictionScore = score)
 }
 ```
 
-No `NV_CAROUSEL` — NV stores appear as `STORE_CAROUSEL` or `ITEM_CAROUSEL`. NV-specific step
-logic uses carousel ID matching in params, not a distinct RowType.
+9 vertical domain types implement `Scorable`: `StoreCarousel`, `ItemCarousel`, `DealCarousel`,
+`StoreCollection`, `CollectionV2`, `ItemCollection`, `MapCarousel`, `ReelsCarousel`, `StoreEntity`.
+
+Conversion between `RankableContent` and `List<Scorable>` via `toScorableList()` / `toRankableContent()`.
+
+No ads `Scorable` — ads are post-POC scope.
 
 ---
 
@@ -339,55 +315,43 @@ EV(c, k) = pImp(k) × pAct(c) × vAct(c)
   vAct(c)  = Value of that action — gov_w × GOV + fiv_w × FIV + strategic_w × Strategic
 ```
 
-**POC approximation:**
+**Phase 1 approximation:**
 
 ```
-score = MODEL_SCORING  →  BOOST_AND_RANK
-      ≈    pAct(c)     ×      vAct(c)
+score = RANK_ALL (wraps entire legacy pipeline)
+      ≈ pAct(c) × vAct(c) via existing BlendingUtil
 
 pImp = 1.0 (not yet — steps are position-unaware during scoring)
 ```
 
-Step order is load-bearing: `MODEL_SCORING` sets the base score (Sibyl + blending + diversity);
-`BOOST_AND_RANK` handles score assignment, position boosting, deal multiplier, pin vs flow sort.
-Calibration types available per experiment: `NONE` (within-type ranking), `PIECEWISE`
-(score-range multipliers), `ISOTONIC` (regression table — post-POC for cross-type scoring).
+Phase 1 `RANK_ALL` delegates to `RankerConfiguration.rank()`, which calls the same Sibyl + blending + boosting pipeline. The value function is implicit in the existing code.
+
+Phase 2 decomposes `RANK_ALL` into granular steps, making each formula component explicit and independently configurable.
 
 ---
 
-## Contract 4: RankingStep Interface
+## Contract 4: RankingStep<S> Interface
 
 **Counterparty: Domain teams that need custom logic**
 
 HP owns the engine and registry. Partner teams implement and own their steps.
 
 ```kotlin
-interface FeedRowRankingStep {
-    val stepType: String                         // key in experiment config "type" field
-    val paramsClass: Class<out StepParams>       // engine uses this to deserialize rawParams
-
-    suspend fun process(
-        rows: MutableList<FeedRow>,
-        context: RankingContext,
-        params: StepParams,                      // typed — deserialized by engine before this call
-    )
+interface RankingStep<S : Enum<S>> {
+    val stepType: S
+    suspend fun execute(items: List<Scorable>, context: RankingContext): List<Scorable>
 }
 ```
 
-`params` is `StepParams` (sealed interface), not `Map<String, Any>`. The engine calls
-`OBJECT_MAPPER_RELAX.treeToValue(rawParams, step.paramsClass)` before each `step.process()`.
-Steps do a single safe cast — guaranteed correct because the engine used `paramsClass`
-to deserialize.
-
-**The `params` constraint is absolute.** A step that reads its own DV keys internally is not a
-UBP step — it defeats the purpose. All tunable behavior flows through `params`.
+Steps are pure functions: items in → items out. The engine chains steps via `RankingHandler` wrappers that add infrastructure concerns (metrics, tracing).
 
 Adding a step type:
-1. Team implements `FeedRowRankingStep`
-2. HP adds one line to `buildStepRegistry()`
-3. Any experiment can use it via config — no further HP involvement
+1. Team implements `RankingStep<VerticalStepType>` (or `HorizontalStepType`)
+2. Add enum value to the step type enum
+3. HP registers it in the step registry
+4. Any experiment can use it via config — no further HP involvement
 
-`RowItemRankingStep` is the identical interface for horizontal ranking.
+Same interface for both vertical and horizontal — parameterized by step type enum.
 
 ---
 
@@ -399,22 +363,20 @@ Emitted automatically after every step when `output_config.emit_trace: true`. St
 tracing code — the engine observes and emits (Observer pattern).
 
 ```protobuf
-// services-protobuf/ubp_feed_row_ranking_trace.proto
-message UbpFeedRowRankingTrace {
+// services-protobuf/ubp_ranking_trace.proto
+message UbpRankingTrace {
   string request_id    = 1;
   string experiment_id = 2;
   string treatment     = 3;
-  string step_id       = 4;
-  string row_id        = 5;
-  string row_type      = 6;
-  double score_before  = 7;
-  double score_after   = 8;
-  int64  timestamp_ms  = 9;
+  string step_type     = 4;
+  string item_id       = 5;
+  double score_before  = 6;
+  double score_after   = 7;
+  int64  timestamp_ms  = 8;
 }
 ```
 
-One event per (FeedRow, step) pair. 20 rows × 2 steps = 40 events per request. Enable in
-treatment arms only; leave off in control to manage volume.
+One event per (Scorable item, step) pair. Enable in treatment arms only; leave off in control to manage volume.
 
 **What this enables:**
 - Stage-wise score snapshots queryable in Snowflake without code changes
@@ -446,31 +408,29 @@ to experiments that still use the old ranking code path — the engine is not a 
 - How does this interact with the existing 4-cohort system?
 - Gradual migration: can old experiments coexist with UBP-managed experiments?
 
-### Phase 1 — Vertical Ranking Engine
+### Phase 1 — Vertical Ranking Engine (Shipped)
 
-**Incision point:** `DefaultHomePagePostProcessor.reOrderGlobalEntitiesV2()`, replacing
-`rankAndMergeContent()` for requests routed by Phase 0's traffic router.
+**Incision point:** `DefaultHomePagePostProcessor.rankContent()`, replacing
+`rankAndMergeContent()` for requests with shadow flag enabled.
 
-**Migration (5 stages):**
-1. **Contract assembly** — `UbpContractAssembler` runs in shadow mode, observes prod per-request
-   decisions, assembles equivalent UBP contract JSON, logs it for visual inspection. Engine not
-   required yet — the assembler runs independently. Fast path to seeing the contract shape.
-2. **Freeze + shadow validate** — once contract shape stabilizes across 1000+ requests, freeze a
-   representative assembled contract into static `control.json`. Shadow with static file. Target:
-   `divergence_count = 0`.
-3. **Control arm** — small % real traffic to UBP control. Identical result to old path.
-4. **First experiment** — MLE declares experiment via Contract 0. No code change. This is the payoff.
-5. **Retire** — as old experiments end, remove old code paths one by one.
+**What shipped:**
+- `Scorable` interface on 9 vertical domain types
+- `RankingStep<VerticalStepType>` + `RankingHandler` + `Ranker<VerticalStepType>`
+- `VerticalRankAllStep` wrapping `RankerConfiguration.rank()`
+- `RankableContentConversions` (`toScorableList()` / `toRankableContent()`)
+- Wired into `DefaultHomePagePostProcessor` (shadow mode, gated by `ubp_shadow_vertical_ranking`)
+
+**Next: shadow validation** — enable shadow flag, compare sort orders, target `divergence_count = 0`.
 
 **Stays unchanged:** All `NonRankableHomepageOrderingUtil` fixups (NV post-checkout pin, PAD=3,
 member pricing), color bleed reordering, immersive spacing.
 
 ### Phase 1.5 — Horizontal Ranking Engine
 
-**Incision point:** `DefaultHomePageStoreRanker.rank()`, replacing each
+**Incision point:** `DefaultHomePageStoreRanker.rank()`, wrapping each
 `modifyLiteStoreCollection()` call.
 
-Same 5-stage migration path as Phase 1.
+Same pattern as Phase 1 vertical: `Scorable` on horizontal types → `Ranker<HorizontalStepType>` with `RANK_ALL` → shadow → rollout.
 
 Phase 0 + Phase 1 + Phase 1.5 together prove the full claim: traffic allocation is declarative,
 both ranking layers are config-driven, and MLEs self-serve experiments.
@@ -503,22 +463,12 @@ both ranking layers are config-driven, and MLEs self-serve experiments.
     "vertical_pipeline": {
       "steps": [
         {
-          "id": "score",
-          "type": "MODEL_SCORING",
-          "params": { "predictor_ref": "p_act" }
-        },
-        {
-          "id": "boost_and_rank",
-          "type": "BOOST_AND_RANK",
-          "params": {
-            "boost_by_position_enabled": false,
-            "deal_carousel_score_multiplier": 1.0,
-            "boost_by_position_allow_list": []
-          }
+          "id": "rank_all",
+          "type": "RANK_ALL"
         }
       ]
     },
-    "output_config": { "emit_trace": false, "max_feed_rows": 20 }
+    "output_config": { "emit_trace": false }
   }
 }
 ```
@@ -544,24 +494,16 @@ both ranking layers are config-driven, and MLEs self-serve experiments.
     },
     "horizontal_pipeline": {
       "steps": [
-        { "id": "score", "type": "MODEL_SCORING", "params": { "predictor_ref": "p_act" } },
-        { "id": "rank",  "type": "RANKING_SORT",  "params": { "ranking_type": "CAROUSEL", "apply_open_closed": true } }
-      ],
-      "row_overrides": {
-        "FAVORITES":   { "rank": { "ranking_type": "CAROUSEL", "order_history_rerank_enabled": true } },
-        "PICKUP_MAP":  { "score": { "skip": true }, "rank": { "ranking_type": "PICKUP_STORE_FEED", "sort_by": "DISTANCE" } },
-        "BOOKMARKS":   { "score": { "skip": true }, "rank": { "ranking_type": "BOOKMARKS", "sort_by": "SAVELIST_ORDER" } },
-        "WHOLE_ORDER": { "rank": { "ranking_type": "WHOLE_ORDER_REORDER", "order_history_rerank_enabled": true } },
-        "NOOP":        { "steps": [] }
-      }
+        {
+          "id": "rank_all",
+          "type": "RANK_ALL"
+        }
+      ]
     },
     "output_config": { "emit_trace": false }
   }
 }
 ```
-
-`row_overrides` semantics: default config applies to all carousels; the carousel-specific override
-shallow-merges on top. `"skip": true` on a step skips it for that carousel only.
 
 ---
 
