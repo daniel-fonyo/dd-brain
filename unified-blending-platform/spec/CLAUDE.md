@@ -1,38 +1,37 @@
 # UBP Spec Directory
 
-This directory contains the formal specification and implementation plan for the
-Unified Blending Platform.
+This directory contains the formal specification for the Unified Blending Platform.
 
-## Documents in this directory
-
-### Phase 1 — Vertical Ranking
+## Documents
 
 | File | Purpose |
 |---|---|
-| `rfc.md` | RFC: problem statement, goals, non-goals, high-level design, contracts (0-5), phases, control.json baselines, experiment examples |
-| `impl/00-overview.md` | Implementation order, dependencies between parts, guiding principles, Phase 1 scope boundary |
-| `impl/00a-safe-refactoring.md` | Safe refactoring strategy: characterization tests, seams, strangler fig, Cover and Modify discipline |
-| `impl/01-shadow-infra.md` | Shadow traffic path for safe validation before any real traffic migrates |
-| `impl/02-feed-row-interface.md` | FeedRow interface + 9 adapters (Adapter pattern) |
-| `impl/03-ranking-step.md` | FeedRowRankingStep interface + 2 step implementations (Strategy pattern) |
-| `impl/04-ranker-engine.md` | FeedRowRanker engine + step registry (Facade + Chain of Responsibility) |
-| `impl/05-config.md` | UnifiedExperimentConfig data classes + UbpRuntimeUtil (Factory Method + Prototype) |
-| `impl/06-wiring.md` | Wire engine into DefaultHomePagePostProcessor and DefaultHomePageStoreRanker |
-| `impl/07-tracing.md` | Auto-trace infrastructure + ubp_feed_row_ranking_trace.proto (Observer pattern) |
+| `rfc.md` | POC RFC: problem statement, goals, non-goals, contracts (0-5), phases, control.json baselines, experiment examples |
+| `rfc-abstraction-layer.md` | Abstraction layer RFC for reviewers: full design of `Scorable`, `RankingStep<S>`, `RankingHandler`, `Ranker<S>` — matches shipped Phase 1 implementation |
 
-### Phase 1.5 — Horizontal Ranking
+## Archived
 
-Phase 1.5 mirrors Phase 1 exactly with `RowItem` replacing `FeedRow`.
-
-Parts 2–7 each have a direct Phase 1.5 equivalent (not yet written — follow same pattern):
-
-| Vertical (Phase 1) | Horizontal (Phase 1.5) |
+| Directory | Purpose |
 |---|---|
-| `FeedRow` | `RowItem` |
-| `FeedRowRankingStep` | `RowItemRankingStep` |
-| `FeedRowRanker` | `RowItemRanker` |
-| `DefaultHomePagePostProcessor` incision | `DefaultHomePageStoreRanker` incision |
-| `control.json` vertical pipeline | `control.json` horizontal pipeline (from `modifyLiteStoreCollection()` when-chain) |
+| `archive/impl/` | Pre-implementation spec files (9 docs) describing a FeedRow adapter-wrapper design that was superseded by the simpler Scorable interface approach. Kept for historical reference only — **do not use for new work**. |
+
+## Naming Convention (matches shipped code)
+
+| Concept | Name | feed-service location |
+|---|---|---|
+| Unified interface | `Scorable` | `libraries/platform/.../models/Scorable.kt` |
+| Ranking step | `RankingStep<S : Enum<S>>` | `libraries/common/.../ubp/RankingEngine.kt` |
+| Handler (chain of responsibility) | `RankingHandler` / `BaseHandler` / `StepHandler` | `libraries/common/.../ubp/RankingEngine.kt` |
+| Engine | `Ranker<S : Enum<S>>` | `libraries/common/.../ubp/RankingEngine.kt` |
+| Vertical step type | `VerticalStepType { RANK_ALL }` | `libraries/common/.../ubp/VerticalStepType.kt` |
+| Vertical RANK_ALL step | `VerticalRankAllStep` | `libraries/common/.../ubp/VerticalRankAllStep.kt` |
+| Conversion functions | `toScorableList()` / `toRankableContent()` | `libraries/common/.../ubp/RankableContentConversions.kt` |
+
+## Current Status
+
+- **Phase 1 vertical: shipped** — `Scorable` on 9 types, engine wired in shadow mode
+- **Next: shadow validation** — enable `ubp_shadow_vertical_ranking`, validate divergence = 0
+- See `plan.md` in parent directory for full progress tracker
 
 ## Other documents in unified-blending-platform/
 
@@ -40,16 +39,10 @@ Parts 2–7 each have a direct Phase 1.5 equivalent (not yet written — follow 
 |---|---|
 | `plan.md` | Overall project plan, pipeline architecture, migration path, progress tracker |
 | `context/northstar.md` | Engineering first principles — the vision and end-state |
-| `context/problem-and-approach.md` | Root cause analysis and the mental model for the solution |
-| `context/Unified Blending Platform Vision.md` | Full vision doc with all pain point themes |
-| `context/mle-vertical-contract.md` | MLE-facing contract for vertical blending experiments |
-| `context/experiment-config-contract.md` | Experiment config JSON examples |
-| `context/design-patterns-and-contract.md` | Design patterns used + value function |
 | `context/current-system-deep-dive.md` | Deep dive into current feed-service code |
-| `context/Homepage Ads Blending.md` | Ads blending architecture — post-POC context |
-| `context/mle-experiment-guide.md` | MLE decision guide + all experiment cases (Cases 1–7) + feature sources + calibration reference |
-| `context/pivot-analysis.md` | March 2026 pivot: YZ + Dipali transcript synthesis, impact on POC direction |
-| `context/rfc-feedback.md` | Stakeholder pain points (YZ, Dipali, Frank) with synthesis |
-| `context/experiment-traffic-industry-research.md` | Industry research on per-layer experiment traffic allocation |
-| `context/one-pager-abstraction-proposal.md` | 1-pager: problem statement, proposed abstraction layer, safe delivery plan, scope |
-| `context/one-pager-diagrams.md` | Mermaid diagrams companion: class, sequence, before/after, strangler fig, horizontal mirroring, onboarding |
+| `context/pivot-analysis.md` | March 2026 pivot: YZ + Dipali transcript synthesis |
+| `context/rfc-feedback.md` | Stakeholder conversation notes |
+| `context/mle-vertical-contract.md` | Canonical MLE experiment config |
+| `context/config-driven-experimentation.md` | How experiment config flows through the pipeline |
+| `context/experiment-traffic-industry-research.md` | Industry research for future traffic splitting |
+| `context/archive/` | Superseded docs and raw imports (do not use for new work) |
