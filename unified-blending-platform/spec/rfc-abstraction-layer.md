@@ -151,7 +151,7 @@ The core flow: diverse types converge to one interface, pass through a step chai
 
 ```mermaid
 flowchart LR
-    subgraph sources["9 Carousel Types"]
+    subgraph sources["Domain Types"]
         direction TB
         T1["StoreCarousel"]
         T2["ItemCarousel"]
@@ -160,7 +160,7 @@ flowchart LR
     end
 
     subgraph convert["toRankableList()"]
-        A["RankableContent → List&lt;Rankable&gt;"]
+        A["→ List&lt;Rankable&gt;"]
     end
 
     T1 --> A
@@ -168,19 +168,25 @@ flowchart LR
     T3 --> A
     T4 --> A
 
-    subgraph pipeline["RankingPipeline&lt;CarouselRankStepType&gt;"]
-        ENG["RankingStep.execute(items, ctx)
-        Phase 1: single RANK_ALL step
-        Phase 2: granular step chain"]
+    subgraph pipeline["RankingPipeline (chain of responsibility)"]
+        direction LR
+        S1["StepHandler
+        step: RankingStep"]
+        S2["StepHandler
+        step: RankingStep"]
+        S3["StepHandler
+        step: RankingStep"]
+        S1 -->|"next"| S2
+        S2 -->|"next"| S3
     end
 
-    A --> ENG
+    A --> S1
 
     subgraph writeback["toRankableContent()"]
-        WB["List&lt;Rankable&gt; → RankableContent"]
+        WB["→ typed containers"]
     end
 
-    ENG --> WB
+    S3 --> WB
 
     style sources fill:#fff3f3,stroke:#cc0000
     style convert fill:#ffffcc,stroke:#aaaa00
@@ -468,14 +474,14 @@ Key differences from carousel ranking:
 
 ### How Phase 1.5 maps to the same interfaces
 
-| | Carousel Rank (Phase 1) | Intra-Carousel Rank (Phase 1.5) |
-|---|---|---|
-| **`Rankable` type** | `StoreCarousel`, `ItemCarousel`, etc. | `StoreEntity` (already implements `Rankable`) |
-| **Step type enum** | `CarouselRankStepType { RANK_ALL }` | `IntraCarouselRankStepType { RANK_ALL }` |
-| **RANK_ALL step** | Wraps `RankerConfiguration.rank()` | Wraps `DefaultHomePageStoreRanker` per-carousel logic |
-| **Pipeline** | `RankingPipeline<CarouselRankStepType>` | `RankingPipeline<IntraCarouselRankStepType>` |
-| **Engine changes** | — | None |
-| **Interface changes** | — | None |
+|                       | Carousel Rank (Phase 1)                 | Intra-Carousel Rank (Phase 1.5)                       |
+| --------------------- | --------------------------------------- | ----------------------------------------------------- |
+| **`Rankable` type**   | `StoreCarousel`, `ItemCarousel`, etc.   | `StoreEntity` (already implements `Rankable`)         |
+| **Step type enum**    | `CarouselRankStepType { RANK_ALL }`     | `IntraCarouselRankStepType { RANK_ALL }`              |
+| **RANK_ALL step**     | Wraps `RankerConfiguration.rank()`      | Wraps `DefaultHomePageStoreRanker` per-carousel logic |
+| **Pipeline**          | `RankingPipeline<CarouselRankStepType>` | `RankingPipeline<IntraCarouselRankStepType>`          |
+| **Engine changes**    | —                                       | None                                                  |
+| **Interface changes** | —                                       | None                                                  |
 
 `StoreEntity` already implements `Rankable` — it has `rankableId()`, `predictionScore`, and `withPredictionScore()`. No new interface work needed.
 
