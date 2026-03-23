@@ -1,43 +1,98 @@
-# POC: Scorable + ScoreBoard + Chain of Responsibility
+# Ranking Abstraction POC
 
-> Domain objects implement `Scorable` directly (one-line change per class). No adapters. Mutable scores in external `ScoreBoard`. Pipeline executed via Chain of Responsibility — cross-cutting concerns (metrics, conditional execution, shadow mode) are first-class handlers. Phase 1: one coarse `RANK_ALL` handler wrapping the legacy pipeline.
+## The Problem
 
-## Design Decisions Captured
+The homepage ranking pipeline has 9 vertical placement types and 3+ horizontal entity types. They all have `id` and `predictionScore`, but no shared interface. Ranking logic is scattered across `BaseEntityRankerConfiguration`, `StoreCarouselService`, and a dozen utility classes, each operating on different concrete types. There's no uniform way to score, reorder, or experiment across them.
 
-| Decision | Choice | Why |
-| --- | --- | --- |
-| Adapters vs direct interface | Domain objects implement `Scorable` directly | Eliminates 9 adapter wrapper classes. One-line change per data class. |
-| Mutable score tracking | External `ScoreBoard` in the engine | Data classes stay immutable. No `var score` breaking `equals`/`hashCode`/`copy`. |
-| Apply-back mechanism | `withPredictionScore(score): Scorable` on each type | Each data class implements via `copy(predictionScore = score)`. Polymorphic — no `when` block. |
-| Pipeline execution | Chain of Responsibility | Cross-cutting concerns (metrics, conditional skip, shadow mode) are handlers, not `try/catch` noise in a for-loop. Each handler decides to process, skip, or fork. |
-| Generics | `Ranker<S : Enum<S>>`, `RankingStep<S : Enum<S>>` | One engine, one step interface. Type system prevents mixing vertical/horizontal steps. |
-| Typed metadata keys | `MetadataKey<T>` | Compile-time safety. Unused in Phase 1, ready for inter-step communication. |
-| StepParams in Phase 1 | Empty stubs — no data, no logic | Existing methods read their own config internally. Real params are a future concern. |
-| Phase 1 granularity | One coarse `RANK_ALL` step | Wraps `BaseEntityRankerConfiguration.rank()` as-is. No bridge conversions. |
+## The Scorable Interface
 
----
-
-## Full Example Code
+We introduce one interface: `Scorable`. It captures the minimal contract that every rankable item already satisfies.
 
 ```kotlin
-// ═══════════════════════════════════════════════════════════════
-// 1. CORE ABSTRACTIONS — shared between vertical & horizontal
-// ═══════════════════════════════════════════════════════════════
-
-// ── Scorable interface ────────────────────────────────────────
-// Minimal contract. Domain objects already have id + predictionScore.
-// Adding this interface to each data class is a one-line change.
-
 interface Scorable {
     val id: String
     val predictionScore: Double?
     fun withPredictionScore(score: Double): Scorable
 }
+```
 
+Three members. That's it. Every domain type that participates in ranking already has `id` and `predictionScore` as fields — implementing `Scorable` is adding `override` to existing fields and a one-line `withPredictionScore` via `copy()`.
 
-// ── ScoreBoard — external mutable score tracking ─────────────
-// Domain objects stay immutable (val predictionScore).
-// The engine tracks mutable scores here instead.
+### Why inheritance over composition?
+
+We considered three approaches:
+
+| Approach | What it means | Verdict |
+|---|---|---|
+| **Inheritance (is-a)** | Domain objects implement `Scorable` directly | **Chosen** — fields already exist, one-line change per class, polymorphic `withPredictionScore` eliminates `when` blocks |
+| **Composition (has-a)** | Wrap items in `Ranked<T>(item, id, score)` | Rejected — reconstructs what inheritance gives us for free, reintroduces `when` blocks for wrapping/unwrapping |
+| **Registry (strategy)** | Register `ScoreExtractor<T>` per type | Rejected — 12 extractor objects doing `it.id` / `it.predictionScore` / `it.copy(...)`, more boilerplate than `override` |
+
+**Inheritance wins because the fields already exist.** We're not inventing a hierarchy — we're formalizing a convention (`id` + `predictionScore`) that every rankable type already follows into a compile-time contract.
+
+### Scorable vs SortablePlacement
+
+`SortablePlacement` already exists in feed-service. It handles **vertical positioning** (sort order, gap rules, immersive spacing). `Scorable` handles **scoring** (ML prediction scores, blending, boosting). They're orthogonal capabilities:
+
+```
+Scorable                          SortablePlacement
+"I can be scored"                 "I can be positioned vertically"
+  id, predictionScore,              sortOrder, assignSortOrder(),
+  withPredictionScore()             getRequiredGap(), getMaxVerticalPlacement()
+
+        ┌─── Vertical types implement BOTH ───┐
+        │  StoreCarousel    : Scorable, SortablePlacement
+        │  ItemCarousel     : Scorable, SortablePlacement
+        │  DealCarousel     : Scorable, SortablePlacement
+        │  CollectionV2     : Scorable, SortablePlacement
+        │  ItemCollection   : Scorable, SortablePlacement
+        │  Collection       : Scorable, SortablePlacement
+        │  MapCarousel      : Scorable, SortablePlacement
+        │  AnnouncementColl.: Scorable, SortablePlacement
+        │  StoreEntity      : Scorable, SortablePlacement  ← also horizontal
+        └──────────────────────────────────────┘
+
+        ┌─── Horizontal-only types implement Scorable only ───┐
+        │  ItemStoreEntity  : Scorable
+        │  DealStoreEntity  : Scorable
+        └─────────────────────────────────────────────────────┘
+```
+
+No type is forced to implement an interface it doesn't need. Vertical types get positioning + scoring. Horizontal-only types get scoring alone.
+
+### Which types implement Scorable?
+
+| Type | Layer | Already has `id`? | Already has `predictionScore`? | Change needed |
+|---|---|---|---|---|
+| StoreCarousel | Vertical | Yes | Yes | Add `: Scorable`, `override`, `withPredictionScore` |
+| ItemCarousel | Vertical | Yes | Yes | Same |
+| DealCarousel | Vertical | Yes | Yes | Same |
+| CollectionV2 | Vertical | Yes | Yes | Same |
+| ItemCollection | Vertical | Yes | Yes | Same |
+| Collection | Vertical | Yes | Yes | Same |
+| MapCarousel | Vertical | Yes | Yes | Same |
+| AnnouncementCollection | Vertical | Yes | Yes | Same |
+| StoreEntity | Both | Yes (`Long`) | Yes | Same (id needs `toString()`) |
+| ItemStoreEntity | Horizontal | Yes (`itemId`) | Yes | Same (id field name differs) |
+| DealStoreEntity | Horizontal | Yes (`Long`) | Yes | Same |
+| LiteStoreCollection | Vertical | Yes | **No** (uses maps) | Add `predictionScore` field, TBD |
+
+11 of 12 types are a one-line change. LiteStoreCollection is the outlier.
+
+---
+
+## The Engine
+
+Four components: `ScoreBoard`, `RankingStep`, `RankingHandler` (chain of responsibility), and `Ranker`. All are generic — the same engine runs both vertical and horizontal pipelines.
+
+```kotlin
+// ═══════════════════════════════════════════════════════════════
+// 1. SCOREBOARD — external mutable score tracking
+//
+//    Domain objects are immutable data classes (val predictionScore).
+//    The engine tracks mutable scores externally so data class
+//    equals/hashCode/copy are never affected.
+// ═══════════════════════════════════════════════════════════════
 
 class ScoreBoard(items: List<Scorable>) {
     private val scores = HashMap<String, Double>(items.size)
@@ -51,52 +106,29 @@ class ScoreBoard(items: List<Scorable>) {
 }
 
 
-// ── Typed metadata keys ──────────────────────────────────────
-// Phase 1: unused. Phase 2: inter-step communication.
-
-class MetadataKey<T>(val name: String)
-
-@Suppress("UNCHECKED_CAST")
-operator fun <T> MutableMap<String, Any>.get(key: MetadataKey<T>): T? = this[key.name] as? T
-operator fun <T : Any> MutableMap<String, Any>.set(key: MetadataKey<T>, value: T) { this[key.name] = value }
-
-
-// ── Step type enums ──────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// 2. RANKING STEP — domain logic contract
+//
+//    Steps are pure ranking logic. They score, reorder, or filter.
+//    They don't know about chains, metrics, or conditions.
+//    Generic on S (step type enum) — prevents mixing vertical
+//    steps into a horizontal pipeline at compile time.
+// ═══════════════════════════════════════════════════════════════
 
 enum class VerticalStepType {
-    RANK_ALL,             // Phase 1 — wraps entire BaseEntityRankerConfiguration.rank()
-    // ── Phase 2: granular breakdown ──
-    // MODEL_SCORING,
-    // MULTIPLIER_BOOST,
-    // DIVERSITY_RERANK,
-    // POSITION_BOOSTING,
-    // FIXED_PINNING,
+    RANK_ALL,             // Phase 1: wraps entire legacy pipeline
+    // Phase 2: MODEL_SCORING, MULTIPLIER_BOOST, DIVERSITY_RERANK,
+    //          POSITION_BOOSTING, FIXED_PINNING
 }
 
 enum class HorizontalStepType {
-    RANK_ALL,             // Phase 1 — wraps entire StoreRanker/CampaignRanker
-    // ── Phase 2: granular breakdown ──
-    // MODEL_SCORING,
-    // SCORE_MODIFIER,
-    // CAMPAIGN_SORT,
-    // BUSINESS_RULES_SORT,
-    // ORDER_HISTORY_RERANK,
+    RANK_ALL,             // Phase 1: wraps entire StoreCarouselService
+    // Phase 2: MODEL_SCORING, SCORE_MODIFIER, CAMPAIGN_SORT,
+    //          BUSINESS_RULES_SORT, ORDER_HISTORY_RERANK
 }
-
-
-// ── Step params ──────────────────────────────────────────────
 
 sealed class StepParams
 object RankAllParams : StepParams()
-
-
-// ═══════════════════════════════════════════════════════════════
-// 2. RANKING STEP — the domain logic contract
-//
-//    Steps are pure domain logic. They don't know about chains,
-//    metrics, or conditions. They just score/reorder items.
-//    Think: servlet vs servlet filter. Step = servlet.
-// ═══════════════════════════════════════════════════════════════
 
 interface RankingStep<S : Enum<S>> {
     val stepType: S
@@ -111,32 +143,22 @@ interface RankingStep<S : Enum<S>> {
 
 data class StepConfig<S : Enum<S>>(
     val type: S,
-    val rawParams: String = "{}",
+    val rawParams: String = "{}",   // Phase 1: always empty JSON
 )
 
 
 // ═══════════════════════════════════════════════════════════════
 // 3. CHAIN OF RESPONSIBILITY — pipeline infrastructure
 //
-//    Handlers form a linked chain. Each handler:
-//      - Processes the request (or delegates to a wrapped handler)
-//      - Passes to the next handler in the chain
+//    Steps are domain logic (servlet). Handlers are infrastructure
+//    (servlet filter). The chain separates these concerns:
 //
-//    Separation of concerns:
-//      RankingStep  = domain logic (scoring, reranking)
-//      StepHandler  = wraps a step into the chain
-//      MetricsHandler = times the step, records metrics
-//      ConditionalHandler = skips based on context/experiments
+//      StepHandler        — wraps a RankingStep into the chain
+//      MetricsHandler     — times its step, records duration
+//      ConditionalHandler — skips step if experiment flag is off
 //
-//    Chain structure (each "link" is a decorated step):
-//      MetricsHandler → MetricsHandler → MetricsHandler → ∅
-//        ↓ wraps           ↓ wraps           ↓ wraps
-//      StepHandler       StepHandler       StepHandler
-//        ↓ executes        ↓ executes        ↓ executes
-//      RankAllStep       ModelScoring      DiversityRerank
+//    Each link:  MetricsHandler(wraps StepHandler) → next link → ...
 // ═══════════════════════════════════════════════════════════════
-
-// ── Handler interface ─────────────────────────────────────────
 
 interface RankingHandler {
     suspend fun handle(
@@ -146,7 +168,6 @@ interface RankingHandler {
     ): List<Scorable>
 }
 
-// Base class with next-chaining
 abstract class BaseHandler : RankingHandler {
     var next: RankingHandler? = null
 
@@ -157,11 +178,6 @@ abstract class BaseHandler : RankingHandler {
     ): List<Scorable> = next?.handle(items, scoreBoard, context) ?: items
 }
 
-
-// ── StepHandler — wraps a RankingStep into the chain ──────────
-// Leaf handler. Executes the step, does NOT chain internally.
-// Chaining is handled by the outer decorator (MetricsHandler).
-
 class StepHandler(
     private val step: RankingStep<*>,
     private val params: StepParams,
@@ -170,20 +186,13 @@ class StepHandler(
         items: List<Scorable>,
         scoreBoard: ScoreBoard,
         context: RankingContext,
-    ): List<Scorable> {
-        return step.execute(items, scoreBoard, context, params)
-    }
+    ): List<Scorable> = step.execute(items, scoreBoard, context, params)
 }
-
-
-// ── MetricsHandler — times the wrapped step, chains to next ──
-// Decorates a StepHandler. Measures ONLY its step's duration
-// (not the rest of the chain), then passes to next link.
 
 class MetricsHandler(
     private val stepName: String,
     private val metrics: MetricsClient,
-    private val wrapped: RankingHandler,  // the StepHandler
+    private val wrapped: RankingHandler,
 ) : BaseHandler() {
     override suspend fun handle(
         items: List<Scorable>,
@@ -198,12 +207,6 @@ class MetricsHandler(
     }
 }
 
-
-// ── ConditionalHandler — skips step based on context ──────────
-// Wraps a handler. If condition is false, skips entirely and
-// passes items unchanged to next link. Useful for experiment
-// flags, feature gates, A/B variants.
-
 class ConditionalHandler(
     private val condition: (RankingContext) -> Boolean,
     private val wrapped: RankingHandler,
@@ -216,42 +219,15 @@ class ConditionalHandler(
         val result = if (condition(context)) {
             wrapped.handle(items, scoreBoard, context)
         } else {
-            items  // skip — condition not met
+            items
         }
         return next(result, scoreBoard, context)
     }
 }
 
 
-// ── Chain builder — assembles pipeline config into a chain ────
-// Each StepConfig becomes: MetricsHandler(StepHandler(RankingStep))
-// Links are chained: handler1.next = handler2.next = handler3...
-
-fun <S : Enum<S>> buildChain(
-    pipeline: List<StepConfig<S>>,
-    stepRegistry: Map<S, RankingStep<S>>,
-    metrics: MetricsClient,
-): RankingHandler? {
-    val links: List<BaseHandler> = pipeline.mapNotNull { config ->
-        val step = stepRegistry[config.type] ?: return@mapNotNull null
-        val params = deserialize(config.rawParams, step.paramsClass)
-
-        // Build from inside out: step → metrics
-        val stepHandler = StepHandler(step, params)
-        MetricsHandler(config.type.name, metrics, stepHandler)
-    }
-
-    // Wire the chain: each link's next → following link
-    for (i in 0 until links.size - 1) {
-        links[i].next = links[i + 1]
-    }
-
-    return links.firstOrNull()
-}
-
-
 // ═══════════════════════════════════════════════════════════════
-// 4. RANKER — builds chain, executes it, returns result
+// 4. RANKER — assembles chain from config, executes it
 // ═══════════════════════════════════════════════════════════════
 
 class Ranker<S : Enum<S>>(
@@ -264,11 +240,24 @@ class Ranker<S : Enum<S>>(
         context: RankingContext,
     ): RankedResult {
         val scoreBoard = ScoreBoard(items)
-
-        val chain = buildChain(pipeline, stepRegistry, metrics)
+        val chain = buildChain(pipeline, scoreBoard)
         val ranked = chain?.handle(items, scoreBoard, context) ?: items
-
         return RankedResult(ranked, scoreBoard)
+    }
+
+    private fun buildChain(
+        pipeline: List<StepConfig<S>>,
+        scoreBoard: ScoreBoard,
+    ): RankingHandler? {
+        val links: List<BaseHandler> = pipeline.mapNotNull { config ->
+            val step = stepRegistry[config.type] ?: return@mapNotNull null
+            val params = deserialize(config.rawParams, step.paramsClass)
+            MetricsHandler(config.type.name, metrics, StepHandler(step, params))
+        }
+        for (i in 0 until links.size - 1) {
+            links[i].next = links[i + 1]
+        }
+        return links.firstOrNull()
     }
 }
 
@@ -276,79 +265,45 @@ data class RankedResult(
     val items: List<Scorable>,
     val scoreBoard: ScoreBoard,
 )
+```
 
+---
 
-// ═══════════════════════════════════════════════════════════════
-// 5. DOMAIN CHANGES — one-line per type
-//
-//    Each data class already has `id` and `predictionScore`.
-//    Changes: add `: Scorable`, add `override`, add withPredictionScore.
-//    No new classes. No wrappers.
-//
-//    Vertical (9): StoreCarousel, ItemCarousel, DealCarousel,
-//      LiteStoreCollection, CollectionV2, ItemCollection,
-//      MapCarousel, AnnouncementCollection, StoreEntity
-//    Horizontal (3): StoreEntity, DealStoreEntity, ItemStoreEntity
-// ═══════════════════════════════════════════════════════════════
+## Putting It Together
 
+### Domain changes (one-time, per type)
+
+```kotlin
 // ── Before ────────────────────────────────────────────────────
 data class StoreCarousel(
     val id: String,
-    // ... 50+ other fields ...
     val predictionScore: Double?,
-    val scoreMultiplier: Double?,
-    val calibrationMultiplier: Double?,
-    // ...
+    // ... 50+ other fields ...
 ) : Carousel, BaseCarousel, SortablePlacement
 
-// ── After (3 changes highlighted) ─────────────────────────────
+// ── After ─────────────────────────────────────────────────────
 data class StoreCarousel(
-    override val id: String,                    // ← add override
+    override val id: String,                  // add override
+    override val predictionScore: Double?,    // add override
     // ... 50+ other fields (untouched) ...
-    override val predictionScore: Double?,      // ← add override
-    val scoreMultiplier: Double?,
-    val calibrationMultiplier: Double?,
-    // ...
-) : Carousel, BaseCarousel, SortablePlacement, Scorable {  // ← add Scorable
-    override fun withPredictionScore(score: Double) = copy(predictionScore = score)
-}
-
-// Same pattern for all other types:
-data class ItemCarousel(
-    override val id: String,
-    override val predictionScore: Double?,
-    // ...
 ) : Carousel, BaseCarousel, SortablePlacement, Scorable {
     override fun withPredictionScore(score: Double) = copy(predictionScore = score)
 }
 
-data class DealCarousel(
+// Horizontal type — same pattern, Scorable only (no SortablePlacement)
+data class ItemStoreEntity(
     override val id: String,
     override val predictionScore: Double?,
     // ...
-) : Carousel, BaseCarousel, Scorable {
+) : BaseItemFeature, GroceryItemProvider, Scorable {
     override fun withPredictionScore(score: Double) = copy(predictionScore = score)
 }
+```
 
-// LiteStoreCollection — outlier. Uses maps instead of single
-// predictionScore. Add predictionScore field or compute from map. TBD.
-data class LiteStoreCollection(
-    override val id: String,
-    override val predictionScore: Double? = null,
-    val storeScoreMap: Map<String, Double> = emptyMap(),
-    // ...
-) : Scorable {
-    override fun withPredictionScore(score: Double) = copy(predictionScore = score)
-}
+### Vertical ranking (Phase 1)
 
-
-// ═══════════════════════════════════════════════════════════════
-// 6. PHASE 1 STEP — RANK_ALL
-//
-//    Wraps the ENTIRE existing pipeline as one opaque step.
-//    No bridge conversions. No new scoring logic.
-// ═══════════════════════════════════════════════════════════════
-
+```kotlin
+// ── Step: wraps the entire legacy pipeline ────────────────────
 class VerticalRankAllStep(
     private val legacyRanker: BaseEntityRankerConfiguration,
 ) : RankingStep<VerticalStepType> {
@@ -362,224 +317,128 @@ class VerticalRankAllStep(
         params: StepParams,
     ): List<Scorable> {
         // items are still StoreCarousel, ItemCarousel, etc. at runtime.
-        // Legacy ranker handles them as-is — same types, same method.
-        val ranked: List<Any> = legacyRanker.rank(context, items)
-
-        // Legacy ranker returns copies with updated predictionScore.
-        // Capture in ScoreBoard for apply-back.
+        // Legacy ranker handles them as-is — nothing changes inside.
+        val ranked = legacyRanker.rank(context, items)
         val result = ranked.filterIsInstance<Scorable>()
         result.forEach { scoreBoard[it.id] = it.predictionScore ?: 0.0 }
-
         return result
     }
 }
 
-
-// ═══════════════════════════════════════════════════════════════
-// 7. SPRING WIRING
-// ═══════════════════════════════════════════════════════════════
-
-@Configuration
-class UbpConfig {
-    @Bean
-    fun verticalStepRegistry(
-        legacyRanker: BaseEntityRankerConfiguration,
-    ): Map<VerticalStepType, RankingStep<VerticalStepType>> = mapOf(
-        VerticalStepType.RANK_ALL to VerticalRankAllStep(legacyRanker),
-    )
-
-    @Bean
-    fun verticalRanker(
-        registry: Map<VerticalStepType, RankingStep<VerticalStepType>>,
-        metrics: MetricsClient,
-    ): Ranker<VerticalStepType> = Ranker(registry, metrics)
-}
-
-
-// ═══════════════════════════════════════════════════════════════
-// 8. PIPELINE CONFIG
-//    Phase 1: single RANK_ALL step.
-//    Production: comes from upstream hash-based traffic bucketing.
-//    See: experiment-traffic-industry-research.md
-// ═══════════════════════════════════════════════════════════════
-
-val verticalPipeline = listOf(
-    StepConfig(type = VerticalStepType.RANK_ALL),
+// ── Wiring ────────────────────────────────────────────────────
+@Bean fun verticalRanker(
+    legacyRanker: BaseEntityRankerConfiguration,
+    metrics: MetricsClient,
+) = Ranker<VerticalStepType>(
+    stepRegistry = mapOf(VerticalStepType.RANK_ALL to VerticalRankAllStep(legacyRanker)),
+    metrics = metrics,
 )
 
+// ── Pipeline config ───────────────────────────────────────────
+val verticalPipeline = listOf(StepConfig(type = VerticalStepType.RANK_ALL))
 
-// ═══════════════════════════════════════════════════════════════
-// 9. THE INCISION POINT — inside DefaultHomePagePostProcessor
-//
-//    No adapt `when` block. No apply-back `when` block.
-//    No adapter classes. Items in → chain executes → items out.
-// ═══════════════════════════════════════════════════════════════
-
+// ── Incision point (inside DefaultHomePagePostProcessor) ──────
 suspend fun reOrderGlobalEntitiesV2(
     carousels: List<Any>,
     context: RankingContext,
     verticalRanker: Ranker<VerticalStepType>,
-    pipeline: List<StepConfig<VerticalStepType>>,
 ): List<Any> {
-
-    // Domain objects already implement Scorable — no conversion.
-    val items: List<Scorable> = carousels.filterIsInstance<Scorable>()
-
-    // Chain executes: MetricsHandler → StepHandler(RANK_ALL) → ∅
-    val (ranked, scores) = verticalRanker.rank(items, pipeline, context)
-
-    // Phase 1: RANK_ALL already produced copies with correct scores.
-    return ranked
-
-    // Phase 2: apply scoreBoard back to items.
-    // return ranked.map { it.withPredictionScore(scores[it.id]) }
+    val items = carousels.filterIsInstance<Scorable>()
+    val (ranked, _) = verticalRanker.rank(items, verticalPipeline, context)
+    return ranked  // correct order, correct scores
 }
 ```
 
----
+### Horizontal ranking (Phase 1) — same engine
 
-## Chain Execution Trace — Phase 1
+```kotlin
+// ── Step: wraps StoreCarouselService sort logic ───────────────
+class HorizontalRankAllStep(
+    private val storeCarouselService: StoreCarouselService,
+) : RankingStep<HorizontalStepType> {
+    override val stepType = HorizontalStepType.RANK_ALL
+    override val paramsClass = RankAllParams::class.java
+
+    override suspend fun execute(
+        items: List<Scorable>,
+        scoreBoard: ScoreBoard,
+        context: RankingContext,
+        params: StepParams,
+    ): List<Scorable> {
+        // items are still StoreEntity, ItemStoreEntity, etc. at runtime.
+        val sorted = storeCarouselService.sortEntities(context, items)
+        val result = sorted.filterIsInstance<Scorable>()
+        result.forEach { scoreBoard[it.id] = it.predictionScore ?: 0.0 }
+        return result
+    }
+}
+
+// ── Wiring ────────────────────────────────────────────────────
+@Bean fun horizontalRanker(
+    storeCarouselService: StoreCarouselService,
+    metrics: MetricsClient,
+) = Ranker<HorizontalStepType>(
+    stepRegistry = mapOf(HorizontalStepType.RANK_ALL to HorizontalRankAllStep(storeCarouselService)),
+    metrics = metrics,
+)
+
+// ── Pipeline config ───────────────────────────────────────────
+val horizontalPipeline = listOf(StepConfig(type = HorizontalStepType.RANK_ALL))
+
+// ── Incision point (inside StoreCarousel assembly) ────────────
+suspend fun rankStoresInCarousel(
+    stores: List<StoreEntity>,
+    context: RankingContext,
+    horizontalRanker: Ranker<HorizontalStepType>,
+): List<StoreEntity> {
+    val items = stores.filterIsInstance<Scorable>()
+    val (ranked, _) = horizontalRanker.rank(items, horizontalPipeline, context)
+    return ranked.filterIsInstance<StoreEntity>()
+}
+```
+
+**Same `Ranker`. Same `ScoreBoard`. Same `RankingHandler` chain.** The only differences are the step type enum (`VerticalStepType` vs `HorizontalStepType`) and the step implementation. The type system prevents accidentally passing a vertical step to a horizontal pipeline.
+
+### Execution trace (vertical, Phase 1)
 
 ```
 reOrderGlobalEntitiesV2(carousels, context)
 │
 ├─ items = carousels.filterIsInstance<Scorable>()
-├─ scoreBoard = ScoreBoard(items)
+│    └─ [StoreCarousel, ItemCarousel, DealCarousel, StoreEntity, ...]
 │
-├─ chain = MetricsHandler("RANK_ALL", wrapped=StepHandler(VerticalRankAllStep))
+├─ Ranker.rank(items, pipeline, context)
+│  ├─ ScoreBoard initialized from items' predictionScores
+│  ├─ chain = MetricsHandler("RANK_ALL", StepHandler(VerticalRankAllStep))
+│  │
+│  └─ chain.handle()
+│     ├─ MetricsHandler: start timer
+│     ├─ StepHandler → VerticalRankAllStep.execute()
+│     │  ├─ legacyRanker.rank(context, items)   ← same code as today
+│     │  ├─ ScoreBoard updated with result scores
+│     │  └─ return ranked items
+│     ├─ MetricsHandler: record 127ms
+│     └─ next → null (end of chain)
 │
-└─ chain.handle(items, scoreBoard, context)
-   │
-   ├─ MetricsHandler.handle()
-   │  ├─ start timer
-   │  ├─ wrapped.handle() → StepHandler.handle()
-   │  │  └─ VerticalRankAllStep.execute()
-   │  │     ├─ legacyRanker.rank(context, items)  ← same as today
-   │  │     ├─ scoreBoard updated with result scores
-   │  │     └─ return ranked items
-   │  ├─ record duration metric
-   │  └─ next() → null (end of chain)
-   │
-   └─ return ranked items with correct scores and order
-```
-
-## Chain Execution Trace — Phase 2 (Granular)
-
-```
-chain = MetricsHandler("MODEL_SCORING") → MetricsHandler("MULTIPLIER_BOOST") → MetricsHandler("DIVERSITY_RERANK") → ∅
-          ↓ wraps                            ↓ wraps                               ↓ wraps
-        StepHandler(ModelScoringStep)      StepHandler(MultiplierBoostStep)       StepHandler(DiversityRerankStep)
-
-chain.handle(items, scoreBoard, context)
-│
-├─ MetricsHandler("MODEL_SCORING").handle()
-│  ├─ ⏱ start
-│  ├─ ModelScoringStep.execute() → scores in ScoreBoard
-│  ├─ ⏱ record 45ms
-│  └─ next() →
-│
-├─ MetricsHandler("MULTIPLIER_BOOST").handle()
-│  ├─ ⏱ start
-│  ├─ MultiplierBoostStep.execute() → scores adjusted in ScoreBoard
-│  ├─ ⏱ record 12ms
-│  └─ next() →
-│
-├─ MetricsHandler("DIVERSITY_RERANK").handle()
-│  ├─ ⏱ start
-│  ├─ DiversityRerankStep.execute() → items reordered
-│  ├─ ⏱ record 8ms
-│  └─ next() → null (end)
-│
-└─ return reordered items
-```
-
-## Chain Composition Examples
-
-```kotlin
-// ── Example 1: Conditional step (experiment-gated) ────────────
-// Diversity rerank only runs if experiment flag is on.
-// ConditionalHandler wraps the step; if condition fails, skips.
-
-fun <S : Enum<S>> buildChainWithConditions(
-    pipeline: List<StepConfig<S>>,
-    stepRegistry: Map<S, RankingStep<S>>,
-    metrics: MetricsClient,
-    conditions: Map<S, (RankingContext) -> Boolean> = emptyMap(),
-): RankingHandler? {
-    val links: List<BaseHandler> = pipeline.mapNotNull { config ->
-        val step = stepRegistry[config.type] ?: return@mapNotNull null
-        val params = deserialize(config.rawParams, step.paramsClass)
-
-        // Inside out: step → conditional (optional) → metrics
-        var handler: RankingHandler = StepHandler(step, params)
-
-        val condition = conditions[config.type]
-        if (condition != null) {
-            val conditional = ConditionalHandler(condition, handler)
-            handler = conditional
-        }
-
-        MetricsHandler(config.type.name, metrics, handler)
-    }
-
-    for (i in 0 until links.size - 1) {
-        links[i].next = links[i + 1]
-    }
-    return links.firstOrNull()
-}
-
-// Usage:
-val conditions = mapOf(
-    VerticalStepType.DIVERSITY_RERANK to { ctx: RankingContext ->
-        ctx.hasExperiment("diversity_v2_enabled")
-    },
-)
-val chain = buildChainWithConditions(pipeline, registry, metrics, conditions)
-
-
-// ── Example 2: Shadow mode handler ───────────────────────────
-// Runs both legacy and new path, compares results, emits metrics.
-// Callers see only the legacy result (safe rollout).
-
-class ShadowHandler(
-    private val legacy: RankingHandler,
-    private val candidate: RankingHandler,
-    private val metrics: MetricsClient,
-) : BaseHandler() {
-    override suspend fun handle(
-        items: List<Scorable>,
-        scoreBoard: ScoreBoard,
-        context: RankingContext,
-    ): List<Scorable> {
-        // Run both paths
-        val legacyBoard = ScoreBoard(items)
-        val candidateBoard = ScoreBoard(items)
-
-        val legacyResult = legacy.handle(items, legacyBoard, context)
-        val candidateResult = candidate.handle(items, candidateBoard, context)
-
-        // Compare and emit metrics
-        val orderMatch = legacyResult.map { it.id } == candidateResult.map { it.id }
-        metrics.gauge("ranking.shadow.order_match", if (orderMatch) 1.0 else 0.0)
-
-        // Return legacy result (safe — candidate is shadow only)
-        return next(legacyResult, legacyBoard, context)
-    }
-}
+└─ return ranked items
 ```
 
 ---
 
-## Phase 2 Sketch — Granular Steps
+## Extending to the Future
+
+### Phase 2: Granular steps
+
+Break `RANK_ALL` into individual steps. The engine doesn't change — only the step registry and pipeline config.
 
 ```kotlin
 enum class VerticalStepType {
-    RANK_ALL,
-    MODEL_SCORING,
-    MULTIPLIER_BOOST,
-    DIVERSITY_RERANK,
-    POSITION_BOOSTING,
-    FIXED_PINNING,
+    RANK_ALL,              // Phase 1 (kept for rollback)
+    MODEL_SCORING,         // wraps EntityScorer.score()
+    MULTIPLIER_BOOST,      // wraps BlendingUtil.blendBundle()
+    DIVERSITY_RERANK,      // wraps BlendingUtil.rerankWithDiversity()
+    POSITION_BOOSTING,     // wraps BoostingBundle.boosted()
+    FIXED_PINNING,         // wraps pin/flow separation
 }
 
 class ModelScoringStep(
@@ -594,28 +453,151 @@ class ModelScoringStep(
         context: RankingContext,
         params: StepParams,
     ): List<Scorable> {
-        // Items are still original types at runtime.
         val scoreBundle = entityScorer.score(context, items)
         scoreBundle.forEach { (id, score) -> scoreBoard[id] = score }
-        return items  // scoring doesn't reorder
+        return items   // scoring doesn't reorder
     }
 }
 
-// Phase 2 pipeline
-val verticalPipelineV2 = listOf(
+// Pipeline changes. Engine stays identical.
+val granularPipeline = listOf(
     StepConfig(type = VerticalStepType.MODEL_SCORING),
     StepConfig(type = VerticalStepType.MULTIPLIER_BOOST),
     StepConfig(type = VerticalStepType.DIVERSITY_RERANK),
     StepConfig(type = VerticalStepType.POSITION_BOOSTING),
     StepConfig(type = VerticalStepType.FIXED_PINNING),
 )
+
+// Incision point: only apply-back changes
+val (ranked, scores) = verticalRanker.rank(items, granularPipeline, context)
+return ranked.map { it.withPredictionScore(scores[it.id]) }
 ```
 
-## Phase 3 Sketch — DAG Extension
+Chain becomes:
 
-Phase 1-2 pipelines are linear chains. When parallel branches matter
-(e.g., score via model A and model B concurrently, then merge), the
-chain extends to a DAG:
+```
+MetricsHandler("MODEL_SCORING") → MetricsHandler("MULTIPLIER_BOOST") → MetricsHandler("DIVERSITY_RERANK") → ...
+     ↓ wraps                          ↓ wraps                               ↓ wraps
+   StepHandler                      StepHandler                           StepHandler
+     ↓ executes                       ↓ executes                            ↓ executes
+   ModelScoringStep                 MultiplierBoostStep                   DiversityRerankStep
+```
+
+### Phase 2: Experiment-gated steps
+
+Use `ConditionalHandler` to skip steps based on experiment flags. No changes to the step itself.
+
+```kotlin
+val conditions = mapOf(
+    VerticalStepType.DIVERSITY_RERANK to { ctx: RankingContext ->
+        ctx.hasExperiment("diversity_v2_enabled")
+    },
+)
+
+// Chain builder wraps conditional steps automatically
+fun <S : Enum<S>> Ranker<S>.buildChainWithConditions(
+    pipeline: List<StepConfig<S>>,
+    conditions: Map<S, (RankingContext) -> Boolean>,
+): RankingHandler? {
+    val links = pipeline.mapNotNull { config ->
+        val step = stepRegistry[config.type] ?: return@mapNotNull null
+        val params = deserialize(config.rawParams, step.paramsClass)
+
+        var handler: RankingHandler = StepHandler(step, params)
+        conditions[config.type]?.let { condition ->
+            handler = ConditionalHandler(condition, handler)
+        }
+        MetricsHandler(config.type.name, metrics, handler)
+    }
+    links.zipWithNext().forEach { (a, b) -> a.next = b }
+    return links.firstOrNull()
+}
+```
+
+### Phase 2: Shadow mode
+
+Compare legacy vs new ranking path. Return legacy result (safe), emit comparison metrics.
+
+```kotlin
+class ShadowHandler(
+    private val legacy: RankingHandler,
+    private val candidate: RankingHandler,
+    private val metrics: MetricsClient,
+) : BaseHandler() {
+    override suspend fun handle(
+        items: List<Scorable>,
+        scoreBoard: ScoreBoard,
+        context: RankingContext,
+    ): List<Scorable> {
+        val legacyBoard = ScoreBoard(items)
+        val candidateBoard = ScoreBoard(items)
+
+        val legacyResult = legacy.handle(items, legacyBoard, context)
+        val candidateResult = candidate.handle(items, candidateBoard, context)
+
+        // Compare
+        val orderMatch = legacyResult.map { it.id } == candidateResult.map { it.id }
+        metrics.gauge("ranking.shadow.order_match", if (orderMatch) 1.0 else 0.0)
+
+        // Return legacy (safe)
+        return next(legacyResult, scoreBoard, context)
+    }
+}
+```
+
+### Phase 2: Typed metadata for inter-step communication
+
+When granular steps need to pass data between each other (e.g., calibration multiplier from scoring → boost step):
+
+```kotlin
+class MetadataKey<T>(val name: String)
+
+object Keys {
+    val CALIBRATION_MULTIPLIER = MetadataKey<Double>("calibrationMultiplier")
+    val VERTICAL_INTENT = MetadataKey<Double>("verticalIntentMultiplier")
+}
+
+// ScoreBoard extended with metadata
+class ScoreBoard(items: List<Scorable>) {
+    private val scores = HashMap<String, Double>(items.size)
+    private val metadata = HashMap<String, MutableMap<String, Any>>()
+
+    // ... score methods ...
+
+    @Suppress("UNCHECKED_CAST")
+    fun <T> getMetadata(id: String, key: MetadataKey<T>): T? =
+        metadata[id]?.get(key.name) as? T
+
+    fun <T : Any> setMetadata(id: String, key: MetadataKey<T>, value: T) {
+        metadata.getOrPut(id) { mutableMapOf() }[key.name] = value
+    }
+}
+```
+
+### Phase 2: StepParams with real config
+
+When experiments need to override step config (e.g., different model for scoring):
+
+```kotlin
+data class ModelScoringParams(
+    val modelId: String = "default_sibyl_v3",
+    val calibrationEnabled: Boolean = true,
+) : StepParams()
+
+// Pipeline config from experiment resolution
+val experimentPipeline = listOf(
+    StepConfig(
+        type = VerticalStepType.MODEL_SCORING,
+        rawParams = """{"modelId": "sibyl_v4_candidate", "calibrationEnabled": false}""",
+    ),
+    StepConfig(type = VerticalStepType.MULTIPLIER_BOOST),
+    StepConfig(type = VerticalStepType.DIVERSITY_RERANK),
+)
+```
+
+### Phase 3: DAG with parallel branches
+
+When parallel execution matters (e.g., scoring with multiple models concurrently):
 
 ```
 Phase 1:  RANK_ALL
@@ -627,41 +609,29 @@ Phase 3:                ┌→ MODEL_A_SCORING ─┐
                         └→ MODEL_B_SCORING ─┘
 ```
 
-The handler interface stays identical. What changes is the execution engine:
-- Nodes declare their dependencies (edges in the DAG)
+Handler interface stays identical. Execution engine adds fan-out/fan-in:
+- Nodes declare dependencies (DAG edges)
 - Engine does topological sort
-- Nodes with satisfied dependencies execute concurrently (coroutines)
+- Independent nodes execute concurrently (coroutines)
 - Merge nodes wait for all inputs
-
-CoR is the natural foundation — DAG nodes ARE handlers, the wiring just
-allows fan-out/fan-in instead of strictly linear next pointers.
 
 ---
 
-## What Changed from Previous POC
+## Design Decisions
 
-| # | Previous (Scorable + for-loop) | Current (Scorable + CoR) | Why |
-|---|---|---|---|
-| 1 | `for (stepConfig in pipeline) { step.execute() }` | `chain.handle()` dispatches through linked handlers | Cross-cutting concerns are handlers, not inline noise. |
-| 2 | Metrics would be `try/finally` blocks in the loop | `MetricsHandler` wraps each step, measures only its duration | Clean separation. Add/remove metrics without touching steps. |
-| 3 | Conditional execution = `if` in the loop | `ConditionalHandler` wraps a step, skips if condition fails | Conditions are composable. Experiment flags become handlers. |
-| 4 | Shadow mode = ??? | `ShadowHandler` forks: runs both paths, compares, returns legacy | Shadow mode is a handler — no special engine support needed. |
-| 5 | No execution visibility | Chain structure is inspectable and loggable | Can log "which handlers ran" for debugging/audit. |
-
-## Phase 1 vs Future
-
-| Concern | Phase 1 | Future |
+| Decision | Choice | Why |
 |---|---|---|
-| **Chain length** | 1 link: `MetricsHandler(RANK_ALL)` | 5+ links with conditional/shadow handlers |
-| **Step granularity** | One `RANK_ALL` wrapping legacy pipeline | Granular steps: scoring, boosting, reranking, pinning |
-| **Cross-cutting** | MetricsHandler per step | + ConditionalHandler, ShadowHandler, LoggingHandler |
-| **ScoreBoard** | Captures legacy output for bookkeeping | Primary score-tracking — steps read/write it |
-| **StepParams** | Empty stubs | Real config. Experiments override via JSON. |
-| **Pipeline shape** | Linear (1 handler) | Linear chain → DAG with parallel branches |
+| Inheritance vs composition | Inheritance (`Scorable` interface) | All 12 types already have `id` + `predictionScore`. One-line change. Composition reconstructs the same capability with more boilerplate. |
+| Scorable vs SortablePlacement | Orthogonal — not a hierarchy | Scorable = scoring capability. SortablePlacement = vertical positioning. Vertical types implement both. Horizontal types implement only Scorable. |
+| Mutable scores | External `ScoreBoard` | Data classes stay immutable. No `var score` breaking `equals`/`hashCode`/`copy`. |
+| Apply-back | `withPredictionScore()` on each type | Polymorphic — eliminates `when` blocks. Each type implements via `copy()`. |
+| Pipeline execution | Chain of Responsibility | Cross-cutting concerns (metrics, conditions, shadow mode) are composable handlers, not inline noise. |
+| Step type generics | `S : Enum<S>` per layer | `Ranker<VerticalStepType>` can't accept horizontal steps. Compiler prevents it. |
+| Phase 1 granularity | One `RANK_ALL` step | Wraps legacy pipeline as-is. No bridge conversions. Granular steps in Phase 2. |
+| StepParams Phase 1 | Empty stubs | Existing methods read their own config. Real params for experiment-driven config in Phase 2. |
 
 ## Open Questions
 
-- **LiteStoreCollection**: Uses `storeScoreMap` instead of `predictionScore`. Add field? Compute from map? Exclude from Scorable?
-- **withPredictionScore return type**: Returns `Scorable` not concrete type. Downstream must cast. Acceptable? (Same as today — ranking returns `List<Any>`.)
-- **Handler ordering in buildChain**: Current approach: metrics wraps step, links chain linearly. Should this be configurable per-step (e.g., some steps get conditional + metrics, others just metrics)?
-- **Chain immutability**: Current chain uses mutable `var next`. Should chain be rebuilt per-request (from pipeline config), or built once at startup and reused?
+- **LiteStoreCollection**: Uses `storeScoreMap` instead of `predictionScore`. Add a `predictionScore` field? Compute from map? Exclude from Scorable?
+- **StoreEntity `id` type**: StoreEntity has `id: Long`, Scorable expects `String`. Use `id.toString()` or change Scorable to `Any`?
+- **Chain lifecycle**: Build once at startup and reuse, or rebuild per-request from pipeline config?
