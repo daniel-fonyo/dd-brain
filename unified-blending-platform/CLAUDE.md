@@ -11,7 +11,7 @@ Design a unified blending platform for the feed-service homepage pipeline.
 - `context/Unified Blending Platform Vision.md` — Yu Zhang's RFC, the canonical vision
 - `context/Unified Blending Platform 1 Pager.md` — executive summary
 
-## Naming Conventions (Phase 1)
+## Naming Conventions
 
 | UBP type | What it is | NOT to be confused with |
 |---|---|---|
@@ -20,6 +20,10 @@ Design a unified blending platform for the feed-service homepage pipeline.
 | `RankingStep<S>` | Domain logic contract (items in → items out) | — |
 | `RankingHandler` | Infrastructure wrapper (fun interface) | — |
 | `toRankableList()` / `toRankableContent()` | Bridge functions between `RankableContent` and `List<Rankable>` | — |
+| `CarouselRankStepType` | Step type enum for inter-carousel ranking | NOT "vertical" (avoids business-vertical confusion) |
+| `IntraCarouselRankStepType` | Step type enum for within-carousel store ranking | NOT "horizontal" (clarity over brevity) |
+
+**Why not "Vertical/Horizontal"?** "Vertical" is overloaded — it means both "ranking carousels on the page" and "business vertical" (grocery, convenience, etc. landing pages). `CarouselRank` / `IntraCarouselRank` removes ambiguity. Shipped code currently uses `VerticalStepType` / `VerticalRankAllStep` — renaming to align with RFC.
 
 ## Context Files
 - `plan.md` — current plan and progress tracker
