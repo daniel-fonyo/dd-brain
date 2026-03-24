@@ -6,7 +6,23 @@
       "Bash(git push:*)",
       "Bash(head:*)",
       "Bash(git commit:*)",
-      "Bash(git restore:*)"
+      "Bash(git restore:*)",
+      "Bash(git:*)",
+      "Bash(code:*)",
+      "Bash(cat /Users/daniel.fonyo/.claude/projects/-Users-daniel-fonyo-Projects-brain/9b74c638-ff89-4080-a027-9140ef82f865/tool-results/toolu_01MdhgVowR2nH3uPKhXkASZa.json | python3 -c \"\nimport json, sys\ndata = json.load\\(sys.stdin\\)\ntext = data[0]['text']\n# Extract the JSON result from the text\nstart = text.index\\('{'\\)\nend = text.rindex\\('}'\\) + 1\nresult = json.loads\\(text[start:end]\\)\nprint\\(f\\\\\"maxScroll: {result['maxScroll']}\\\\\"\\)\nprint\\(f\\\\\"Carousels found: {len\\(result['allCarousels']\\)}\\\\\"\\)\nprint\\(\\)\nfor c in result['allCarousels']:\n    print\\(f\\\\\"  {c['title']} \\({c['carouselId']}\\)\\\\\"\\)\n    print\\(f\\\\\"    2nd pass: {c['secondPassScore']}, stores: {c['storeCount']}, nextClicks: {c['nextClicks']}\\\\\"\\)\n    if c['storeCount'] > 0:\n        for s in c['stores'][:5]:\n            print\\(f\\\\\"      {s['name']} \\(id={s['id']}, score={s['score']}\\)\\\\\"\\)\n        if c['storeCount'] > 5:\n            print\\(f\\\\\"      ... +{c['storeCount']-5} more\\\\\"\\)\n    print\\(\\)\n\" 2>/dev/null)",
+      "Bash(python3:*)",
+      "Bash(ln:*)",
+      "Bash(find:*)",
+      "WebFetch(domain:teleport-produc-nlb-internal-c1026d69cf4ddc1a.elb.us-west-2.amazonaws.com)",
+      "Bash(grep storeRanker_scoreSort\\\\|storeRanker_bizRulesSort:*)",
+      "WebFetch(domain:karishma-agr1996.medium.com)",
+      "WebFetch(domain:refactoring.guru)",
+      "WebSearch",
+      "WebFetch(domain:cybertron-service-gateway.doordash.team)"
     ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
   }
 }
