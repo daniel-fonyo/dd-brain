@@ -51,6 +51,15 @@ Before any sandbox deploy/test, apply these local-only changes (never commit):
 - **Password**: `1XQlCDr8Qb`
 - Test account on doortest tenant. See `sandbox-e2e-testing/spec/00-browser-playbook.md` for full interaction sequence.
 
+### Snowflake Access
+- **Warehouse**: `ADHOC`
+- **Database/Schema**: `IGUAZU.SERVER_EVENTS_PRODUCTION` (for Iguazu server events)
+- **Auth**: `externalbrowser` (SSO via Okta — opens browser popup)
+- **Connection config**: `~/.snowflake/connections.toml`
+- **Python connector**: available at `/Users/daniel.fonyo/.local/share/uv/tools/mlf-tools/bin/python3` (has `snowflake.connector`)
+- **MCP server**: configured in `~/.claude/mcp.json` as `snowflake` (requires session restart to activate)
+- **CRITICAL**: Always filter by `iguazu_partition_date` AND `iguazu_partition_hour` — the tables are massive. Never scan more than 2 days without additional filters.
+
 ### feed-service: Detekt Pre-Commit Hook
 The feed-service pre-commit hook runs `./gradlew detekt` which requires write access to `~/.gradle/wrapper/`. This **always fails** in the Claude Code sandbox because the sandbox blocks writes to `~/.gradle`. The hook output will show "Detekt failed" with empty "Detailed Output" sections — this is a sandbox restriction, not a real lint error.
 
