@@ -57,7 +57,7 @@ There are zero tests covering end-to-end ranking behavior. Changes are "edit and
 ## Goals
 
 1. **Introduce `Rankable` interface.** Implemented directly by domain types (no wrapper classes). `StoreCarousel`, `ItemCarousel`, etc. implement `Rankable` via `predictionScore` + `withPredictionScore()` copy pattern.
-2. **Introduce ranking engine.** `RankingStep<S>` + `RankingHandler` + `RankingPipeline<S>` with chain-of-responsibility dispatch.
+2. **Introduce ranking engine.** `RankingStep<S>` + `RankingHandler` + `RankingPipeline<S>` with chain-of-responsibility execution. Step assembly is external; the engine runs whatever steps it's given.
 3. **Align on these as the stable contract.** These interfaces and their signatures are the API surface all future UBP work builds on.
 4. **Shadow validate.** Prove the engine produces identical results to the old path before any traffic migrates.
 5. **Roll out.** Gradually migrate traffic from old path to new path behind a DV gate.
@@ -184,6 +184,8 @@ interface RankingStep<S : Enum<S>> {
 }
 ```
 
+The `stepType` enum serves as an identity label, not a dispatch key. The pipeline does not use it to look up implementations. Instead, `stepType` is used by the `RankingStepHandler` for observability: tagging per-step metrics, keying trace spans, and identifying steps in serialized ranking manifests. Multiple implementations can share a step type (e.g., `StorePinningStep` and `ItemPinningStep` both use `FIXED_PINNING`).
+
 Initially, all existing logic stays in a single step type (`RANK_ALL`), preserving current behavior while proving the interfaces:
 
 ```kotlin
@@ -228,19 +230,32 @@ The separation is deliberate. Steps contain domain logic and know nothing about 
 
 ## `RankingPipeline<S : Enum<S>>` Engine
 
-The entry point for ranking. Owns a registry of steps keyed by type, exposes a single `rank()` method. Looks up requested steps, assembles the handler chain, executes it.
+The entry point for ranking. Accepts a list of step instances, assembles the handler chain, executes it. The pipeline is pure execution; it does not own or look up steps.
 
 ```kotlin
-class RankingPipeline<S : Enum<S>>(
-    private val stepRegistry: Map<S, RankingStep<S>>,
-) {
-    suspend fun rank(items: List<Rankable>, stepTypes: List<S>, context: RankingContext): List<Rankable>
+class RankingPipeline<S : Enum<S>> {
+    suspend fun rank(items: List<Rankable>, steps: List<RankingStep<S>>, context: RankingContext): List<Rankable>
 
-    private fun buildChain(stepTypes: List<S>): RankingHandler
+    private fun buildChain(steps: List<RankingStep<S>>): RankingHandler
 }
 ```
 
-The step list is data, not code. Today it is `[RANK_ALL]`. Tomorrow it could be `[MODEL_SCORING, MULTIPLIER_BOOST, DIVERSITY_RERANK, FIXED_PINNING]`. The engine does not change; only the step list does.
+The step list is data, not code. Today it is `[CarouselRankAllStep]`. Tomorrow it could be `[ModelScoringStep, MultiplierBoostStep, DiversityRerankStep, FixedPinningStep]`. The engine does not change; only the step list does.
+
+Step assembly lives outside the pipeline. A step assembler resolves feature flags, experiment assignments, and runtime config to produce the step list for each request. The pipeline just runs whatever it's given:
+
+```kotlin
+// Step instances are singletons created at DI time
+val steps = buildList {
+    add(modelScoringStep)
+    add(diversityRerankStep)
+    if (hasStoreCarousels) add(storePinningStep)
+    if (hasItemCarousels) add(itemPinningStep)
+}
+pipeline.rank(items, steps, context)
+```
+
+This separation means new step implementations (e.g., a new diversity algorithm) can be swapped in by changing the assembly logic. No modifications to the engine, the handler chain, or any existing step.
 
 ## `CarouselRankAllStep`: Preserving Existing Behavior
 
@@ -329,8 +344,7 @@ classDiagram
     RankingStepHandler --> RankingStep : wraps
 
     class RankingPipeline~S~ {
-        -stepRegistry: Map~S, RankingStep~
-        +rank(items, stepTypes, context): List~Rankable~
+        +rank(items, steps, context): List~Rankable~
     }
 
     RankingPipeline --> RankingHandler : builds chain of
@@ -428,9 +442,17 @@ class ModelScoringStep(
 
 The step takes `List<Rankable>`, hydrates prediction scores via Sibyl, and returns `List<Rankable>` with scores attached. The interface holds: items in, items out. The remaining logic in `RANK_ALL` (multiplier boosts, diversity, pinning) would become subsequent steps, each following the same contract. No changes to `RankingHandler`, `RankingPipeline`, or any other step.
 
-**Config-driven experimentation.** Each step type is an enum value in the step registry. An experiment can swap one step implementation for another (e.g., a new diversity algorithm) by registering a different `RankingStep` for that enum key. The MLE experiment config drives which steps run and in what order, with no code deployment needed for new ranking experiments.
+**Config-driven experimentation.** Step assembly happens outside the pipeline, driven by experiment assignments and feature flags. An experiment can swap one step implementation for another (e.g., a new diversity algorithm), add or remove steps, or change step ordering. The pipeline is unaware of experiments; it just runs whatever steps the assembler provides. Steps themselves can also read experiment config from `RankingContext` to parameterize their behavior (e.g., which model to call, which weights to use).
 
-**Per-step observability and experimentation.** Because `RankingStepHandler` wraps each step, observability (per-step latency, score distributions, tracing) and experimentation (A/B metrics per step, step-level feature flags) can be added at the handler level without modifying any step implementation.
+**Per-step observability and experimentation.** Because `RankingStepHandler` wraps each step, observability (per-step latency, score distributions, tracing) and experimentation (A/B metrics per step, step-level feature flags) can be added at the handler level without modifying any step implementation. The `stepType` enum on each step is the identity key that ties metrics, traces, and events together.
+
+**Serializable ranking manifests.** Because each request's step list is assembled explicitly, the full ranking configuration can be serialized per request: which steps ran, in what order, which implementation of each step, and what config drove the selection. This unlocks:
+
+- **Offline replay for ML experimentation.** MLEs capture production ranking manifests (step list, model versions, weights, input items, scores), swap one step's config, and replay the pipeline in a batch job to get directional signal without running a live experiment.
+- **Agentic coding with real production context.** An agent developing a new step implementation can pull production manifests, run them through the pipeline with the new step swapped in, and compare outputs against the original. Characterization testing against real traffic patterns, not synthetic fixtures.
+- **Regression detection.** Capture manifests before a code change, replay after. If outputs differ, you know exactly which step caused the divergence.
+
+This is possible because the pipeline is pure execution over an explicit step list. Serialization happens at the `RankingStepHandler` level, capturing per-step input/output transparently. Steps don't know they're being recorded.
 
 **Per-layer traffic management.** Vertical and horizontal ranking are separate `RankingPipeline<S>` instances with different step type enums. Each layer can be shadow-validated and rolled out independently. Future layers (e.g., ads ranking, cross-page ranking) follow the same pattern: new enum, new steps, same engine.
 
