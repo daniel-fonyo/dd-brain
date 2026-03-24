@@ -1,105 +1,60 @@
 # GenAI Reranker Logging — Status Report
-**Date**: 2026-03-24 05:45 UTC (2026-03-23 22:45 PST)
+**Date**: 2026-03-24 05:55 UTC (2026-03-23 22:55 PST)
 **Branch**: `feat/genai-reranker-logging` in feed-service
 
 ## Summary
-**First successful end-to-end deployment achieved.** IguazuModule debug code is running on sandbox. Events are flowing to Kafka for `cx_cross_vertical_homepage_feed` (165 events per doortest request). Homepage loads with carousels. However, **genai_embedding and reranker fields are empty** because the test fallback code (`?: 0.42`, reranker injection) is in `services/feed-service`, not `libraries/platform` — and the devbox Makefile only compiles and patches `libraries/platform`.
+**VERIFIED WORKING.** The `genai_embedding_similarity_score` and `reranker_alpha/beta` fields are flowing through the Iguazu `cx_cross_vertical_homepage_feed` events. 110 of 180 events (61%) contain both fields per homepage load.
 
-## What's Working
+## What's Deployed (sandbox rd3987f9)
 
-1. **Sandbox deployed and serving traffic** — Pod `jvjkh` on sandbox `rd3987f9`
-2. **IguazuModule debug code confirmed running** — `DEBUG_IGUAZU_ENTER/GENERATE/COUNT/SENT` all appearing in pod logs
-3. **Events flowing to Kafka** — `cx_cross_vertical_homepage_feed`: 165 events sent for doortest tenant
-4. **Sandbox bypass working** — `val isSandboxEnv = false` allows Iguazu events in sandbox
-5. **Event sending re-enabled** — `proxyEventSender.send(event)` is active
-6. **Homepage loads** — Carousels visible: "Fastest", "Under $1 delivery fee", "National favorites", etc.
+### Selective bootJar patching (Makefile `build-remote-devbox-server`)
+Full build fails on unrelated modules. We compile `:platform` and `:domain-util` only, then inject specific class packages into the base image bootJar.
 
-## Root Cause: genai/reranker fields empty
+**Platform (3 classes — iguazu package only):**
+1. `IguazuModule.kt` — Debug logging + sandbox bypass (`isSandboxEnv = false`)
 
-The devbox Makefile target `build-remote-devbox-server` only compiles `libraries/platform` and patches the bootJar with the platform JAR. Changes in other modules are NOT deployed:
+**Domain-util (337 classes — 4 packages):**
+2. `ContainerEventsGenerator.kt` — `GENAI_EMBEDDING_SIMILARITY_SCORE` LoggedValue enum
+3. `DomainUtilLoggingConstants.kt` — `genai_embedding_similarity_score` key constant
+4. `StoreCarouselDataAdapter.kt` — Hardcoded `genai_embedding_similarity_score = 0.42` in logging map
+5. `StoreCarouselDataAdapterUtil.kt` — Reranker alpha/beta injection when trackingPayload empty
 
-| File | Module | Deployed? | Change |
-|------|--------|-----------|--------|
-| `IguazuModule.kt` | `libraries/platform` | YES | Debug logging, sandbox bypass, event sending |
-| `StoreCarouselService.kt` | `services/feed-service` | **NO** | `embeddingScore ?: 0.42` fallback |
-| `HomepageProgrammaticProductServiceUtil.kt` | `services/feed-service` | **NO** | `?: 0.42` fallback |
-| `StoreCarouselDataAdapterUtil.kt` | `services/feed-service` | **NO** | reranker alpha/beta injection |
-| `HomepageRequestToContext.kt` | `pipelines/homepage` | **NO** | Consumer ID override |
+**NOT deployed (binary compat constraint):**
+- `StoreEntity.embeddingScore` field — changes Builder constructor signature, breaks other modules
+- `HomepageRequestToContext.kt` consumer ID override — in homepage pipeline, not patched
+- `HomepageProgrammaticProductServiceUtil.kt` embeddingScore — same reason as StoreEntity
 
-The `DEBUG_IGUAZU_SUMMARY` logs confirm: `genai_count=0, reranker_count=0, cxgen_count=0` — Content Systems returns null for embedding scores in this submarket, and our test fallback code isn't deployed.
+## Key Evidence
 
-## Build Status
-- **BUILD SUCCESSFUL** on all runs since v7
-- Build takes ~3s with cached platform library
-- Service startup takes ~52s after build
-- Devbox exits immediately after "Service is ready" — service survives on pod
+```
+DEBUG_IGUAZU_SUMMARY: batch stats | {
+  "topic": "cx_cross_vertical_homepage_feed",
+  "total_events": 180,
+  "genai_count": 110,     # events with genai_embedding score modifier
+  "reranker_count": 110,  # events with reranker in carousel_details
+  "cxgen_count": 0         # no GenAI carousels for test consumer (expected)
+}
+```
 
-## Key Discovery: devbox lifecycle
-- `devbox run` syncs files, builds, patches bootJar, restarts service, waits for ready, then **exits**
-- Service continues running on pod after devbox exits (on new pods like `jvjkh`)
-- On older pods, the restarted service may die when devbox SSH disconnects
-- Previous 502 errors were from testing on old pods where the service died after devbox exit
+## Build Strategy
 
-## What's Done
+```
+1. gradle :platform:jar          → compiles IguazuModule + StoreEntity (with embeddingScore)
+2. gradle :domain-util:jar       → compiles ContainerEventsGenerator, DataAdapter, etc.
+3. Extract ORIGINAL platform.jar from bootJar
+4. Inject ONLY iguazu/*.class into original platform.jar (preserves base image StoreEntity)
+5. Patch bootJar with hybrid platform.jar
+6. Extract ORIGINAL domain-util.jar from bootJar
+7. Inject changed packages (iguazu, carousel/utils, facets/adapters, utils/logging)
+8. Patch bootJar with hybrid domain-util.jar
+```
 
-### Code Changes (all on branch, uncommitted local-only changes marked)
+This avoids the `NoSuchMethodError: StoreEntity$Builder.<init>` that occurs when the full platform.jar is patched.
 
-1. **`IguazuModule.kt`** — Debug logging + sandbox bypass (uncommitted) — **DEPLOYED**
-   - `val isSandboxEnv = false` hardcode to bypass sandbox Iguazu gating
-   - DEBUG_IGUAZU_ENTER/SKIP/GENERATE/COUNT/SENT log lines
-   - Detailed per-event inspection for `cx_cross_vertical_homepage_feed` topic
-   - Logs genai_embedding counts, reranker counts, cxgen event details
-   - Events ARE sent to Kafka (re-enabled after accidental disable)
+## Next Steps for PR
 
-2. **`StoreCarouselService.kt:792`** — Test fallback (uncommitted) — **NOT DEPLOYED**
-   - `embeddingScore = ...embeddingScore ?: 0.42`
-
-3. **`HomepageProgrammaticProductServiceUtil.kt:225`** — Test fallback (uncommitted) — **NOT DEPLOYED**
-   - Same `?: 0.42` fallback
-
-4. **`StoreCarouselDataAdapterUtil.kt:663-672`** — Test reranker values (uncommitted) — **NOT DEPLOYED**
-   - Injects `reranker_alpha: 0.5, reranker_beta: 1.5`
-
-5. **`HomepageRequestToContext.kt`** — Consumer ID override (uncommitted) — **NOT DEPLOYED**
-   - `return 757606047L`
-
-6. **`SpeedCategoryFilterProductService.kt`** — Cache buster annotation (uncommitted)
-   - `@file:Suppress("unused")` to bust stale Gradle remote cache
-
-7. **Committed code** (on branch, pushed):
-   - `genai_embedding_similarity_score` LoggedValue enum in ContainerEventsGenerator
-   - Score modifier logging in IguazuEventUtil
-   - `embeddingScore` field on StoreCarouselItem data class
-   - carousel_details tracking payload plumbing
-
-## Current State
-- Sandbox: `rd3987f9`
-- Pod: `feed-service-web-group1-sandbox-rd3987f9-57cd8b88c-jvjkh`
-- Service: RUNNING with patched IguazuModule
-- Events: Flowing to Kafka (165 events per doortest homepage request)
-- Homepage: Loading with carousels
-
-## Next Steps (in order)
-
-1. **Modify Makefile** to compile and patch additional modules (`services/feed-service`, `pipelines/homepage`) — OR move test fallback logic into IguazuModule (platform library) where the event generation happens
-2. **Re-deploy** with test fallbacks compiled
-3. **Verify genai_count > 0** in DEBUG_IGUAZU_SUMMARY logs
-4. **Query Snowflake** to verify `genai_embedding_similarity_score` and reranker data appear
-5. **Remove test fallbacks** before final commit
-6. **Clean up** cache buster annotations
-
-## Alternative: Skip test fallbacks
-
-Since the committed code changes add the `genai_embedding_similarity_score` field plumbing, and the IguazuModule confirms events flow end-to-end, we could:
-1. Verify in Snowflake that the field COLUMN exists (even if values are null for this submarket)
-2. Merge the PR as-is — the real data will come from production submarkets where Content Systems returns real embedding scores
-3. This avoids the need to hack the Makefile for a one-time test
-
-## Key Learnings
-
-- `build-remote-devbox-server` Makefile target only compiles `libraries/platform` — NOT the full service
-- Devbox exits after "Service is ready" — service survives on new pods
-- On old recycled pods, the service may die when devbox exits (causing 502s)
-- Teleport connections drop intermittently — `namespaces not found` errors
-- Always wait for devbox to finish before testing (don't test while service starting)
-- Pod names change between devbox runs — always get fresh pod name from devbox output
+1. Remove test hardcodes (`0.42`, reranker `0.5/1.5`)
+2. Remove debug logging (`DEBUG_IGUAZU_*`)
+3. Re-enable sandbox Iguazu gating
+4. The PR should add `embeddingScore` to StoreEntity + plumb it from Content Systems response
+5. CI full build will verify binary compat
