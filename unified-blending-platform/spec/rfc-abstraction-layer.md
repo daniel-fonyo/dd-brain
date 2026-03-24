@@ -57,7 +57,7 @@ There are zero tests covering end-to-end ranking behavior. Changes are "edit and
 ## Goals
 
 1. **Introduce `Rankable` interface.** Implemented directly by domain types (no wrapper classes). `StoreCarousel`, `ItemCarousel`, etc. implement `Rankable` via `predictionScore` + `withPredictionScore()` copy pattern.
-2. **Introduce ranking engine.** `RankingStep<S>` + `RankingHandler` + `RankingPipeline<S>` with chain-of-responsibility execution. Step assembly is external; the engine runs whatever steps it's given.
+2. **Introduce ranking engine.** `RankingStep` + `RankingHandler` + `RankingPipeline` with chain-of-responsibility execution. Step assembly is external; the engine runs whatever steps it's given.
 3. **Align on these as the stable contract.** These interfaces and their signatures are the API surface all future UBP work builds on.
 4. **Shadow validate.** Prove the engine produces identical results to the old path before any traffic migrates.
 5. **Roll out.** Gradually migrate traffic from old path to new path behind a DV gate.
@@ -89,7 +89,7 @@ There are zero tests covering end-to-end ranking behavior. Changes are "edit and
 
 | Phase | What | Status |
 | :---- | :---- | :---- |
-| **1. Rankable + engine** | `Rankable` on 9 vertical types, `RankingStep<S>`, `RankingHandler`, `RankingPipeline<S>`, `CarouselRankAllStep` (all pure additions) | **Proposed** |
+| **1. Rankable + engine** | `Rankable` on 9 vertical types, `RankingStep`, `RankingHandler`, `RankingPipeline`, `RankingStepAssembler`, `CarouselRankAllStep` (all pure additions) | **Proposed** |
 | **2. Shadow validation** | Wire shadow path in `DefaultHomePagePostProcessor`. Run both paths, compare sort orders, log divergences. Target: `divergence_count = 0` | Next |
 | **3. Rollout** | DV-gated gradual migration: 1% → 5% → 25% → 50% → 100% | After shadow proven |
 | **4. Granular steps** | Decompose `RANK_ALL` into composable steps | After rollout stable |
@@ -125,7 +125,7 @@ flowchart LR
 
     subgraph pipeline["RankingPipeline"]
         subgraph handler1["RankingStepHandler"]
-            S1["RankingStep: RANK_ALL"]
+            S1["CarouselRankAllStep"]
         end
     end
 
@@ -173,32 +173,19 @@ Adding a new carousel type means implementing `Rankable` on one class. No wrappe
 
 Extension functions `toRankableList()` and `toRankableContent()` handle conversion between the existing typed container (`RankableContent`) and `List<Rankable>`. Concrete types are preserved through the round-trip: `toRankableContent()` filters by runtime type (`is StoreCarousel`, `is ItemCarousel`, etc.) to reconstruct the typed container, so no type information is lost despite the pipeline operating on `List<Rankable>`.
 
-## `RankingStep<S : Enum<S>>`
+## `RankingStep`
 
-Each ranking operation is a step: items in, items out. The interface is generic over a step type enum so each ranking layer (vertical, horizontal) has its own taxonomy.
+Each ranking operation is a step: items in, items out.
 
 ```kotlin
-interface RankingStep<S : Enum<S>> {
-    val stepType: S
+interface RankingStep {
     suspend fun execute(items: List<Rankable>, context: RankingContext): List<Rankable>
 }
 ```
 
-The `stepType` enum serves as an identity label, not a dispatch key. The pipeline does not use it to look up implementations. Instead, `stepType` is used by the `RankingStepHandler` for observability: tagging per-step metrics, keying trace spans, and identifying steps in serialized ranking manifests. Multiple implementations can share a step type (e.g., `StorePinningStep` and `ItemPinningStep` both use `FIXED_PINNING`).
+That's the entire contract. Every step, whether it scores, boosts, reranks, or pins, implements this one method. Steps are independently testable, swappable, and composable.
 
-Initially, all existing logic stays in a single step type (`RANK_ALL`), preserving current behavior while proving the interfaces:
-
-```kotlin
-enum class CarouselRankStepType {
-    RANK_ALL,
-    // MODEL_SCORING,
-    // MULTIPLIER_BOOST,
-    // DIVERSITY_RERANK,
-    // FIXED_PINNING,
-}
-```
-
-Once proven, `RANK_ALL` can be decomposed into distinct steps (scoring, boosting, diversity, pinning) without changing the engine.
+Initially, all existing logic stays in a single step (`CarouselRankAllStep`), preserving current behavior while proving the interfaces. Once proven, it can be decomposed into distinct steps (scoring, boosting, diversity, pinning) without changing the engine.
 
 ## `RankingHandler` and Chain of Responsibility
 
@@ -215,8 +202,8 @@ fun interface RankingHandler {
 `RankingStepHandler` connects a `RankingStep` to the chain. It executes the step, then delegates to the next handler:
 
 ```kotlin
-class RankingStepHandler<S : Enum<S>>(
-    private val step: RankingStep<S>,
+class RankingStepHandler(
+    private val step: RankingStep,
     private val next: RankingHandler?,
 ) : RankingHandler {
     override suspend fun handle(items: List<Rankable>, context: RankingContext): List<Rankable> {
@@ -228,31 +215,55 @@ class RankingStepHandler<S : Enum<S>>(
 
 The separation is deliberate. Steps contain domain logic and know nothing about chaining. Handlers own orchestration. Step authors write pure ranking logic; the engine takes care of composition. Cross-cutting infrastructure (metrics, tracing, timeouts, experiment gating) can be injected at the handler level without touching any step.
 
-## `RankingPipeline<S : Enum<S>>` Engine
+## `RankingPipeline` Engine
 
 The entry point for ranking. Accepts a list of step instances, assembles the handler chain, executes it. The pipeline is pure execution; it does not own or look up steps.
 
 ```kotlin
-class RankingPipeline<S : Enum<S>> {
-    suspend fun rank(items: List<Rankable>, steps: List<RankingStep<S>>, context: RankingContext): List<Rankable>
+class RankingPipeline {
+    suspend fun rank(items: List<Rankable>, steps: List<RankingStep>, context: RankingContext): List<Rankable>
 
-    private fun buildChain(steps: List<RankingStep<S>>): RankingHandler
+    private fun buildChain(steps: List<RankingStep>): RankingHandler
 }
 ```
 
-The step list is data, not code. Today it is `[CarouselRankAllStep]`. Tomorrow it could be `[ModelScoringStep, MultiplierBoostStep, DiversityRerankStep, FixedPinningStep]`. The engine does not change; only the step list does.
+The step list is data, not code. Today it is `[CarouselRankAllStep]`. Tomorrow it could be `[ModelScoringStep, MultiplierBoostStep, DiversityRerankStep, StorePinningStep]`. The engine does not change; only the step list does.
 
-Step assembly lives outside the pipeline. A step assembler resolves feature flags, experiment assignments, and runtime config to produce the step list for each request. The pipeline just runs whatever it's given:
+## Step Assembly
+
+Step assembly lives outside the pipeline. The assembler resolves feature flags, experiment assignments, and runtime config to produce the step list for each request. The pipeline just runs whatever it's given.
 
 ```kotlin
-// Step instances are singletons created at DI time
-val steps = buildList {
-    add(modelScoringStep)
-    add(diversityRerankStep)
-    if (hasStoreCarousels) add(storePinningStep)
-    if (hasItemCarousels) add(itemPinningStep)
+// Step implementations are singletons created at DI time.
+// Each implements RankingStep with its own internal logic.
+class RankingStepAssembler(
+    private val rankAllStep: CarouselRankAllStep,
+    private val modelScoringStep: ModelScoringStep,
+    private val diversityRerankStep: DiversityRerankStep,
+    private val storePinningStep: StorePinningStep,
+    private val itemPinningStep: ItemPinningStep,
+    // new diversity algorithm behind a feature flag
+    private val merchantDiversityStep: MerchantDiversityStep,
+) {
+    fun assembleSteps(context: RankingContext): List<RankingStep> = buildList {
+        // Today: single step wrapping all legacy logic
+        add(rankAllStep)
+
+        // Future: decomposed steps, conditionally assembled
+        // add(modelScoringStep)
+        // if (context.featureFlag("merchant_diversity")) {
+        //     add(merchantDiversityStep)
+        // } else {
+        //     add(diversityRerankStep)
+        // }
+        // if (hasStoreCarousels) add(storePinningStep)
+        // if (hasItemCarousels) add(itemPinningStep)
+    }
 }
-pipeline.rank(items, steps, context)
+
+// Caller
+val steps = assembler.assembleSteps(context)
+val ranked = pipeline.rank(items, steps, context)
 ```
 
 This separation means new step implementations (e.g., a new diversity algorithm) can be swapped in by changing the assembly logic. No modifications to the engine, the handler chain, or any existing step.
@@ -264,9 +275,7 @@ In this initial refactor, a single step (`CarouselRankAllStep`) wraps all existi
 ```kotlin
 class CarouselRankAllStep(
     private val rankerConfiguration: RankerConfiguration,
-) : RankingStep<CarouselRankStepType> {
-    override val stepType = CarouselRankStepType.RANK_ALL
-
+) : RankingStep {
     override suspend fun execute(items: List<Rankable>, context: RankingContext): List<Rankable> {
         val content = items.toRankableContent()
         val ranked = rankerConfiguration.rank(context, content)
@@ -291,17 +300,14 @@ classDiagram
     }
 
     class StoreCarousel {
-        +id: String
         +predictionScore: Double?
         +withPredictionScore(score): StoreCarousel
     }
     class ItemCarousel {
-        +id: String
         +predictionScore: Double?
         +withPredictionScore(score): ItemCarousel
     }
     class DealCarousel {
-        +id: String
         +predictionScore: Double?
         +withPredictionScore(score): DealCarousel
     }
@@ -311,15 +317,9 @@ classDiagram
     Rankable <|.. DealCarousel
     note for Rankable "9 domain types implement directly\n(6 more omitted for brevity)"
 
-    class RankingStep~S~ {
+    class RankingStep {
         <<interface>>
-        +stepType: S
         +execute(items, context): List~Rankable~
-    }
-
-    class CarouselRankStepType {
-        <<enum>>
-        RANK_ALL
     }
 
     class CarouselRankAllStep {
@@ -328,34 +328,38 @@ classDiagram
     }
 
     RankingStep <|.. CarouselRankAllStep
-    CarouselRankAllStep --> CarouselRankStepType
 
     class RankingHandler {
         <<fun interface>>
         +handle(items, context): List~Rankable~
     }
 
-    class RankingStepHandler~S~ {
-        -step: RankingStep~S~
+    class RankingStepHandler {
+        -step: RankingStep
         -next: RankingHandler?
     }
 
     RankingHandler <|.. RankingStepHandler
     RankingStepHandler --> RankingStep : wraps
 
-    class RankingPipeline~S~ {
+    class RankingStepAssembler {
+        +assembleSteps(context): List~RankingStep~
+    }
+
+    class RankingPipeline {
         +rank(items, steps, context): List~Rankable~
     }
 
+    RankingStepAssembler --> RankingStep : produces list of
     RankingPipeline --> RankingHandler : builds chain of
     RankingPipeline --> Rankable : operates on
 ```
 
 ## Extensibility
 
-The same interfaces apply to both ranking layers. Each capability below adds step types and implementations; the engine, the interfaces, and the wiring stay unchanged.
+The same interfaces apply to both ranking layers. Each capability below adds step implementations; the engine, the interfaces, and the wiring stay unchanged.
 
-**Intra-carousel (horizontal) ranking.** Store ordering within each carousel today uses a separate ranker with no shared abstraction. `StoreEntity` implements `Rankable`, and a new step type enum (`IntraCarouselRankStepType`) defines the horizontal ranking vocabulary. The engine, handler chain, and step interface are reused identically. Only the step type enum and entry point differ.
+**Intra-carousel (horizontal) ranking.** Store ordering within each carousel today uses a separate ranker with no shared abstraction. `StoreEntity` implements `Rankable`, and new `RankingStep` implementations handle horizontal ranking logic. The engine, handler chain, and step interface are reused identically. Only the step implementations and assembler entry point differ.
 
 ### Future State: Decomposed Pipeline
 
@@ -428,9 +432,7 @@ To validate that these interfaces support future decomposition, consider the fir
 ```kotlin
 class ModelScoringStep(
     private val sibylClient: SibylPredictionService,
-) : RankingStep<CarouselRankStepType> {
-    override val stepType = CarouselRankStepType.MODEL_SCORING
-
+) : RankingStep {
     override suspend fun execute(items: List<Rankable>, context: RankingContext): List<Rankable> {
         val scores = sibylClient.predict(items.map { it.rankableId() }, context)
         return items.map { item ->
@@ -444,7 +446,7 @@ The step takes `List<Rankable>`, hydrates prediction scores via Sibyl, and retur
 
 **Config-driven experimentation.** Step assembly happens outside the pipeline, driven by experiment assignments and feature flags. An experiment can swap one step implementation for another (e.g., a new diversity algorithm), add or remove steps, or change step ordering. The pipeline is unaware of experiments; it just runs whatever steps the assembler provides. Steps themselves can also read experiment config from `RankingContext` to parameterize their behavior (e.g., which model to call, which weights to use).
 
-**Per-step observability and experimentation.** Because `RankingStepHandler` wraps each step, observability (per-step latency, score distributions, tracing) and experimentation (A/B metrics per step, step-level feature flags) can be added at the handler level without modifying any step implementation. The `stepType` enum on each step is the identity key that ties metrics, traces, and events together.
+**Per-step observability and experimentation.** Because `RankingStepHandler` wraps each step, observability (per-step latency, score distributions, tracing) and experimentation (A/B metrics per step, step-level feature flags) can be added at the handler level without modifying any step implementation.
 
 **Serializable ranking manifests.** Because each request's step list is assembled explicitly, the full ranking configuration can be serialized per request: which steps ran, in what order, which implementation of each step, and what config drove the selection. This unlocks:
 
@@ -454,11 +456,11 @@ The step takes `List<Rankable>`, hydrates prediction scores via Sibyl, and retur
 
 This is possible because the pipeline is pure execution over an explicit step list. Serialization happens at the `RankingStepHandler` level, capturing per-step input/output transparently. Steps don't know they're being recorded.
 
-**Per-layer traffic management.** Vertical and horizontal ranking are separate `RankingPipeline<S>` instances with different step type enums. Each layer can be shadow-validated and rolled out independently. Future layers (e.g., ads ranking, cross-page ranking) follow the same pattern: new enum, new steps, same engine.
+**Per-layer traffic management.** Vertical and horizontal ranking use separate assemblers and can be shadow-validated and rolled out independently. Future layers (e.g., ads ranking, cross-page ranking) follow the same pattern: new step implementations, same engine.
 
 **Unified value function.** Once steps are decomposed, calibration and value weighting become explicit steps: `CALIBRATION` (normalizes scores across content types) followed by `VALUE_FUNCTION` (applies `EV(c,k) = pImp(k) × pAct(c) × vAct(c)`). The engine is unchanged; just more steps in the chain. See Appendix A.
 
-**Partner self-service.** NV, Ads, and Merch teams implement their own `RankingStep` and HP registers it. Each partner owns their step's logic; HP owns the engine and the step registry. No more cross-team code entanglement.
+**Partner self-service.** NV, Ads, and Merch teams implement their own `RankingStep` and HP wires it into the assembler. Each partner owns their step's logic; HP owns the engine and the assembly. No more cross-team code entanglement.
 
 **New carousel type onboarding.** Implement `Rankable` on one class. No other files change. The pipeline, conversion functions, and all existing steps work automatically.
 
