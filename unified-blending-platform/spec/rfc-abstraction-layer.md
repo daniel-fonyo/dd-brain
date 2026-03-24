@@ -29,7 +29,7 @@ Getting there is a multi-step journey. This RFC addresses the first and most fou
 
 - **A shared interface for ranked content.** Domain types implement this directly. No wrapper classes, no adapters. The fields the ranking pipeline needs already exist on these types; we formalize them into a compile-time contract.
 - **A contract for ranking logic.** Each ranking operation becomes a self-contained step with a clear signature: items in, items out. Steps are identified by type, independently testable, and swappable.
-- **A config-driven ranking engine.** The engine assembles steps into a pipeline and executes them in sequence. The step list is data, not code. The same engine serves both vertical and horizontal ranking, differing only in which steps it runs.
+- **A composable ranking engine.** The engine assembles steps into a pipeline and executes them in sequence. The step list is assembled at request time, not hardwired in the pipeline. This composability makes it straightforward to add, remove, or reorder ranking steps, increasing feature velocity for ranking and blending changes. It also opens the door to config-driven experimentation and higher-velocity MLE iteration. The same engine serves both vertical and horizontal ranking, differing only in which steps it runs.
 
 These don't change any ranking behavior. They formalize existing conventions into compile-time contracts so that everything UBP needs can be built on top without rearchitecting.
 
