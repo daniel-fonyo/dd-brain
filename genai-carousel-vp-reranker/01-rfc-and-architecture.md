@@ -26,7 +26,7 @@ Conceptually: embedding score = **relevance signal**, store ranker score = **con
 **Production defaults**: `alpha=0.0`, `beta=1.0`, `k=10` (validated via A/B).
 With `alpha=0.0`, `finalScore^0 = 1` — ranker score drops out. Ranking is 100% EBR similarity today.
 
-**Why blocks, not global sort?** Blocks preserve coarse EBR ordering — a low-similarity store can't leapfrog into a higher block. Only stores already deemed relevant compete within a block.
+**Why blocks, not global sort?** Blocks preserve coarse EBR ordering — a low-similarity store can't leapfrog into a higher block.
 
 ### Proposed Change (VP Value Function)
 
@@ -44,13 +44,6 @@ val vpScore     = pConv * pDasherCost * pCommission
 val combinedScore = vpScore.pow(alpha) * similarity.pow(beta)
 ```
 
-**Formula options under discussion**:
-
-| Option | Formula | Notes |
-|--------|---------|-------|
-| A | `pConv^alpha * embeddingScore^beta * profitPerConversion` | Keeps embedding score, adds profit multiplier |
-| B | Bucket by pConv, rank by finalScore within buckets | No embedding score needed |
-
 ### Online A/B Experiment
 
 | Arm | Signal | Description |
@@ -59,122 +52,196 @@ val combinedScore = vpScore.pow(alpha) * similarity.pow(beta)
 | T1 | `pConv * pDasherCost * pCommission` (v1 coefficients) | Full VP formula, set 1 |
 | T2 | `pConv * pDasherCost * pCommission` (v2 coefficients) | Full VP formula, set 2 |
 
-All arms share `beta=1.0`, `k=10`. `alpha` set via DV per arm.
-
 ---
 
 ## Architecture
 
-### Embedding Score Data Flow
-
-```
-CRDB / EBR Model
-       │
-       ▼
-CxProfileGeneratedCarousel.storeIdsAndEmbeddingScoreMap
-       │
-       ▼
-GeneratedRecommendationDataService
-  ├─ fetchCarouselsWithPreComputedStores()   ← scores from CRDB
-  └─ fetchCarouselsWithEbrStores()           ← scores from EBR model call
-       │
-       ▼
-GeneratedRecommendationData.storeInfoMap
-  └─ GeneratedRecommendationStoreInfo.embeddingScore   ← per-store score
-       │
-       ▼
-HomepageGeneratedRecommendationProduct.buildCollection()
-       │
-       ▼
-LiteStoreCollection
-  ├─ generatedRecommendationStoreInfoMap  ← embedding scores (already here!)
-  ├─ storePredictionScoresMap             ← VP/Sibyl scores
-  └─ trackingPayload                      ← carousel_rank, day_part (+ alpha/beta after our change)
-       │
-       ▼
-GeneratedRecommendationCarouselService.rerankStoreByBlockReranking()
-  reads alpha, beta, k from DV config:
-    cx_profile_generated_carousels/reranking_coeff.json
-  builds storeSimilarityEmbeddingMap from generatedRecommendationData.storeInfoMap
-  combinedScore = finalScore^alpha * embeddingScore^beta
-       │
-       ▼
-HomepageProgrammaticCarouselGenerationService.generateStoreCarousel()
-  copies trackingPayload → StoreCarousel.trackingPayload
-       │
-       ▼
-StoreCarouselDataAdapterUtil.generateLogging()  ← container level
-  if trackingPayload.isNotEmpty() → writes carousel_details JSON
-       │
-StoreCarouselDataAdapter.generateStoreLogging()  ← child/store level
-  writes per-store fields into logging struct
-       │
-       ▼
-ContainerEventsGenerator → LoggedValue.assign()
-  reads keys from logging struct → calls proto setters
-       │
-       ▼
-cx_cross_vertical_homepage_feed (Snowflake)
-```
-
 ### Two Retrieval Paths
 
-| Path | Source | trackingPayload? | Controlled By |
-|------|--------|-----------------|---------------|
-| A: Direct fetcher | CRDB / in-process | Works | Experiment flag |
-| B: Content Systems RPC (EBR) | EBR model via RPC | **DROPPED** — serializer omits it | Default for most traffic |
+There are two code paths that fetch GenAI carousels. They diverge at **fetch time** and converge at **collection building**.
 
-**Path B bug**: `GeneratedRecommendationCarouselsSerializer.serialize()` does not serialize `trackingPayload`. The deserializer in `GeneratedRecommendationContentSystemsFetcherUtil.toGeneratedRecommendationData()` defaults it to `emptyMap()`. This is why `carousel_details = {}` in Snowflake for most GenAI traffic.
+| Path | What It Does | trackingPayload? | embeddingScore? |
+|------|-------------|-----------------|----------------|
+| A: Direct fetcher | Runs EBR retrieval in-process inside feed-service | Yes | Yes |
+| B: Content Systems RPC | Calls `ContentSystemsFeedService.GetGeneratedRecommendationCarousels()` gRPC to a separate service (`web-content-systems`) that does the EBR retrieval | **No** — `trackingPayload` not in `content_systems.proto` | **Yes** — `GeneratedRecommendationStoreInfo.embedding_score` (field 3) IS in the proto |
 
-### Key Files — Ranking
+**Why Path B exists**: Architectural separation — EBR retrieval logic (calling embedding models, k-NN, store decoration) runs in a dedicated Content Systems service. Feed-service handles ranking, logging, and response serialization. Path B is the default for most traffic.
 
-| File (feed-service) | Purpose |
-|------|---------|
-| `libraries/discovery/.../GeneratedRecommendationCarouselService.kt` | `rerankStoreByBlockReranking()` — block reranking (line ~138-210). Alpha/beta/k read at line ~148-153 via `DiscoveryRuntimeUtil.getRerankingCoefficientsForCxProfile()` |
-| `libraries/discovery/.../HomepageGeneratedRecommendationProduct.kt` | Invokes reranking (line ~103), builds collection with `.trackingPayload(data.trackingPayload)` (line ~196) |
-| `libraries/domain-util/.../contentsystems/GeneratedRecommendationDataService.kt` | EBR retrieval, carousel creation, sets initial `trackingPayload` (line ~551-555) |
-| `libraries/discovery-utils/.../models/GeneratedRecommendationData.kt` | `GeneratedRecommendationStoreInfo(storeId, itemId, embeddingScore, imageUrl)` |
-| `libraries/domain-util/.../carousel/models/collections/LiteStoreCollection.kt` | `generatedRecommendationStoreInfoMap` (line 92), `trackingPayload` (line 94), `storePredictionScoresMap` (line 58) |
+**Key insight for our work**: `embeddingScore` flows through both paths. Alpha/beta are read from DV inside feed-service (in the reranker), not from Content Systems. So our logging changes work on 100% of traffic. The `trackingPayload` gap only affects the *original* carousel metadata (`carousel_rank`, `day_part`), which is a pre-existing issue.
 
-### Key Files — Logging
+Switch controlled by: `DiscoveryExperimentManager.shouldUseGeneratedRecommendationEBROption2(experimentMap)`
 
-| File | Purpose |
-|------|---------|
-| `services-protobuf: protos/feed_service/events.proto` | `CrossVerticalHomePageFeedEvent` (line 80-219) — proto schema |
-| `libraries/domain-util/.../iguazu/ContainerEventsGenerator.kt` | `LoggedValue` enum: key → proto setter. Child logging (~line 266-311), container logging (~line 160-209) |
-| `libraries/domain-util/.../facets/adapters/StoreCarouselDataAdapter.kt` | `generateStoreLogging()` (line ~2337) — per-store logging struct. Writes `expected_commission`/`expected_dasher_cost` at line ~2510-2516 |
-| `libraries/domain-util/.../carousel/utils/StoreCarouselDataAdapterUtil.kt` | `generateLogging()` — container level. Writes `carousel_details` from `trackingPayload` (line ~663-672) |
-| `libraries/domain-util/.../utils/logging/DomainUtilLoggingConstants.kt` | Key string constants |
-| `libraries/discovery/.../programmatic/util/HomepageProgrammaticProductServiceUtil.kt` | `updateStoreEntity()` (line ~204) — copies ScoreWithFactors fields to StoreEntity |
-| `pipelines/homepage/.../HomepageProgrammaticCarouselGenerationService.kt` | `generateStoreCarousel()` (line ~561) — copies `trackingPayload` to StoreCarousel (line ~599) |
+---
 
-### Existing score_modifiers Pattern (expected_commission trace)
+## Full Call Stacks
+
+### Shared Entry Point
 
 ```
-ScoreWithFactors.expectedCommission
-  → StoreCarouselService.decorateEntities() copies to StoreEntity.expectedCommission
-  → StoreCarouselDataAdapter.generateStoreLogging() writes to struct[EXPECTED_COMMISSION_KEY]
-  → LoggedValue.EXPECTED_VP_SCORE reads struct, calls builder.addScoreModifiers(name, value)
-  → Appears in score_modifiers JSON array in Snowflake
+HomepagePipeline.constructWorkflow()
+  └─ programmaticProductsJob
+       └─ HomepageProgrammaticProductRegistry.registerAllProducts()
+            └─ registers HomepageGeneratedRecommendationProductName
+                 if shouldEnableGeneratedRecommendationProduct(experimentMap)
+       └─ DiscoveryFlow.runFlow()
+            └─ BaseDynamicProgrammaticProductService.process()
+                 └─ preRankJob  → preRank()  → preRankImpl()
+                 │    └─ fetch()          ← PATHS DIVERGE HERE
+                 │    └─ contextDecorate()
+                 │    └─ contentDecorate()
+                 │    └─ getProductList()
+                 │    └─ dynamicPreFilter()  → buildCollection()
+                 └─ rankJob     → rank()     → DiscoveryRanker.rank()
+                 └─ postFilterJob → dynamicPostFilter()
 ```
 
-### What's Already Logged (CrossVerticalHomePageFeedEvent)
+### Path A: Direct Fetcher
 
-| Proto Field | # | What It Logs |
-|-------------|---|--------------|
-| `horizontal_element_score` | 19 | VP prediction score per store |
-| `raw_horizontal_element_score` | 80 | Raw Sibyl score pre-multipliers |
-| `facet_score` | 20 | Carousel-level aggregate score |
-| `raw_facet_score` | 79 | Raw carousel score |
-| `score_modifiers` | 59 | Named score components (VP, dasher cost, uncertainty, etc.) |
-| `carousel_details` | 81 | JSON: `{carousel_id, carousel_rank, day_part, last_update_date}` |
-| `predictor_names` / `model_ids` | 57/58 | Model predictor names and IDs |
+```
+HomepageGeneratedRecommendationProductService.fetch()
+  └─ fetcher.fetch(context)
+       └─ GeneratedRecommendationFetcher.fetch()
+            ├─ storeListFetchJob.fetch()                    ← fetch store entities from search
+            ├─ GeneratedRecommendationCarouselService
+            │    .getGeneratedRecommendationDataListFromDB()
+            │    └─ if EBR treatment:
+            │    │    GeneratedRecommendationWorkflowService
+            │    │      .fetchCarouselsWithEbrStores()
+            │    │      ├─ getRetrievalContext()
+            │    │      ├─ getCarouselsForCxEBR()           ← CRDB EBR table
+            │    │      ├─ extractCarouselEmbeddings()
+            │    │      ├─ getEBRStoreIdsAndScoresWithLocation()  ← EBR model call → embeddingScore
+            │    │      ├─ getEBRItemIdsMap()                     ← EBR item model
+            │    │      └─ createGeneratedRecommendationCarousels()
+            │    │           → sets storeInfoMap[storeId].embeddingScore
+            │    │           → sets trackingPayload = {carousel_rank, day_part, last_update_date}
+            │    └─ else:
+            │         GeneratedRecommendationWorkflowService
+            │           .fetchCarouselsWithPreComputedStores()
+            │           ├─ getCarouselsForCx()              ← CRDB pre-computed table
+            │           └─ createGeneratedRecommendationCarousels()
+            │                → embeddingScore from CRDB storeIdsAndEmbeddingScoreMap
+            │                → trackingPayload set same as above
+            └─ filterGeneratedRecommendationDataList()
+```
 
-### What's NOT Logged (The Gap)
+### Path B: Content Systems RPC
 
-| Signal | Level | Target |
-|--------|-------|--------|
-| **EBR embedding similarity score** | Per store | → `score_modifiers` |
-| **Alpha** | Per carousel | → `carousel_details` via `trackingPayload` |
-| **Beta** | Per carousel | → `carousel_details` via `trackingPayload` |
-| **Future formula params** | Per carousel | → `carousel_details` via `trackingPayload` (auto) |
+```
+HomepageGeneratedRecommendationProductService.fetch()
+  └─ contentSystemsFetcher.fetch(context)
+       └─ GeneratedRecommendationContentSystemsFetcher.fetch()
+            └─ ContentSystemsRepository.fetchGeneratedRecommendationCarousels()
+                 └─ ContentSystemsClient.getGeneratedRecommendationCarousels()
+                      └─ gRPC to web-content-systems service
+                           └─ [SERVER SIDE]
+                              ContentSystemsController.getGeneratedRecommendationCarousels()
+                              └─ GeneratedRecommendationCarouselsPipeline.constructWorkflow()
+                                   ├─ requestToContextTransformer.transform()
+                                   ├─ retriever.getQueryEmbeddings()       ← carousel embeddings from CRDB
+                                   ├─ retriever.retrieve()                 ← EBR store/item models
+                                   ├─ contentSystemsStoreDecorationService.decorate()
+                                   ├─ createGeneratedRecommendationCarousels()
+                                   │    → embeddingScore + trackingPayload set (same as Path A)
+                                   └─ GeneratedRecommendationCarouselsSerializer.serialize()
+                                        → embeddingScore: SERIALIZED (in proto)
+                                        → trackingPayload: NOT SERIALIZED (not in proto)
+            └─ GeneratedRecommendationContentSystemsFetcherUtil
+                 .toGeneratedRecommendationData(response)
+                 → embeddingScore: DESERIALIZED from proto
+                 → trackingPayload: defaults to emptyMap()
+```
+
+### Shared Path (After Fetch Converges)
+
+```
+HomepageGeneratedRecommendationProductService.getProductList()
+  └─ GeneratedRecommendationCarouselService.generateHomepageProduct()
+       └─ creates HomepageGeneratedRecommendationProduct per carousel
+
+HomepageGeneratedRecommendationProduct.buildCollection()
+  └─ LiteStoreCollection.Builder
+       .generatedRecommendationStoreInfoMap(data.storeInfoMap)  ← embeddingScore here
+       .trackingPayload(data.trackingPayload)                    ← carousel_rank, day_part
+       .build()
+
+DiscoveryRanker.rank()
+  └─ populates collection.storePredictionScoresMap              ← ScoreWithFactors per store
+
+HomepageProgrammaticCarouselGenerationService.generate()
+  └─ postFilterGeneratedRecommendationCollections()
+       └─ HomepageGeneratedRecommendationProduct.getPostFilterResult()
+            ├─ image contextualization from generatedRecommendationStoreInfoMap
+            ├─ store filtering (empty headers, delivery unavailable, etc.)
+            ├─ GeneratedRecommendationCarouselService                    ★ RERANKER
+            │    .reRankStoresByScoreAndSimilarity()
+            │    └─ rerankStoreByBlockReranking()
+            │         ├─ reads alpha, beta, k from DV
+            │         ├─ builds storeSimilarityEmbeddingMap from data.storeInfoMap
+            │         ├─ combinedScore = finalScore^alpha * embeddingScore^beta
+            │         └─ returns collection.copy(entities=reranked, trackingPayload+=alpha,beta)  ★ OUR CHANGE
+            └─ deduplication (Option 2 only)
+  └─ updateStoreEntity()                                         ★ COPIES embeddingScore TO StoreEntity
+       └─ copies ScoreWithFactors fields + embeddingScore to StoreEntity
+  └─ generateStoreCarousel()
+       └─ StoreCarousel.Builder
+            .trackingPayload(collection.trackingPayload)         ← flows alpha/beta through
+            .build()
+```
+
+### Logging & Iguazu Event Emission
+
+```
+StoreCarouselDataAdapter.toFacetV2()
+  └─ StoreCarouselDataAdapterUtil.generateLogging()              ← CONTAINER level
+       └─ if trackingPayload.isNotEmpty():
+            carousel_details = JSON({carousel_id, ...trackingPayload})   ★ alpha/beta land here
+  └─ StoreCarouselDataAdapter.generateStoreLogging()             ← CHILD/STORE level
+       └─ map[EXPECTED_COMMISSION_KEY] = store.expectedCommission
+       └─ map[EXPECTED_DASHER_COST_KEY] = store.expectedDasherCost
+       └─ map[EMBEDDING_SIMILARITY_SCORE_KEY] = store.embeddingScore    ★ OUR CHANGE
+
+SerializerHelperUtil.sendHomePageFeedEventLogging()
+  └─ IguazuEventUtil.generateXVerticalHomePageFeedSegmentEvents()
+       └─ processFilteredSections()
+            └─ ContainerEventsGenerator.StoreCarouselGenerator.generateEvents()
+                 └─ per store:
+                      additionalContainerLogging()
+                        └─ LoggedValue.CAROUSEL_DETAILS reads carousel_details from struct
+                      additionalChildLogging()
+                        └─ LoggedValue.EMBEDDING_SIMILARITY_SCORE                ★ OUR CHANGE
+                             reads from struct, calls builder.addScoreModifiers()
+                      addEvent(builder.build())
+  └─ IguazuModule.sendEvent()
+       └─ proxyEventSender.send(event)                           → Kafka → Snowflake
+```
+
+### Key Files Reference
+
+| File (feed-service) | Key Methods |
+|------|---------|
+| `libraries/discovery/.../GeneratedRecommendationCarouselService.kt` | `rerankStoreByBlockReranking()` (line ~138), `reRankStoresByScoreAndSimilarity()` (line ~117) |
+| `libraries/discovery/.../HomepageGeneratedRecommendationProduct.kt` | `buildCollection()` (line ~136), `getPostFilterResult()` (line ~53) |
+| `libraries/discovery/.../HomepageGeneratedRecommendationProductService.kt` | `fetch()` (line ~47), `rank()` (line ~132) |
+| `libraries/discovery/.../fetcher/GeneratedRecommendationFetcher.kt` | `fetch()` (line ~44) — Path A |
+| `libraries/discovery/.../fetcher/GeneratedRecommendationContentSystemsFetcher.kt` | `fetch()` (line ~30) — Path B |
+| `libraries/domain-util/.../contentsystems/GeneratedRecommendationDataService.kt` | `createGeneratedRecommendationCarousels()` (line ~524) |
+| `libraries/domain-util/.../contentsystems/GeneratedRecommendationWorkflowService.kt` | `fetchCarouselsWithEbrStores()` (line ~145), `fetchCarouselsWithPreComputedStores()` (line ~27) |
+| `libraries/domain-util/.../carousel/models/collections/LiteStoreCollection.kt` | Data class — `generatedRecommendationStoreInfoMap` (line 92), `trackingPayload` (line 94) |
+| `pipelines/homepage/.../HomepageProgrammaticCarouselGenerationService.kt` | `generate()` (line ~64), `generateStoreCarousel()` (line ~561) |
+| `libraries/domain-util/.../iguazu/ContainerEventsGenerator.kt` | `LoggedValue` enum (line ~1848), `StoreCarouselGenerator` (line ~396) |
+| `libraries/domain-util/.../facets/adapters/StoreCarouselDataAdapter.kt` | `generateStoreLogging()` (line ~2337) |
+| `libraries/domain-util/.../carousel/utils/StoreCarouselDataAdapterUtil.kt` | `generateLogging()` (line ~494) — writes `carousel_details` |
+
+### What's Already Logged vs The Gap
+
+| Proto Field | # | What It Logs | Status |
+|-------------|---|--------------|--------|
+| `horizontal_element_score` | 19 | VP prediction score per store | Logged |
+| `raw_horizontal_element_score` | 80 | Raw Sibyl score pre-multipliers | Logged |
+| `facet_score` | 20 | Carousel-level aggregate score | Logged |
+| `score_modifiers` | 59 | Named score components | Logged (adding `embedding_similarity_score`) |
+| `carousel_details` | 81 | JSON carousel metadata | Logged on Path A (adding `reranker_alpha`, `reranker_beta`) |
+| `predictor_names` / `model_ids` | 57/58 | Model names and IDs | Logged |
+| **EBR embedding similarity score** | — | Per-store cosine similarity | **NOT LOGGED → score_modifiers** |
+| **Alpha, Beta** | — | Reranker formula exponents | **NOT LOGGED → carousel_details** |

@@ -30,7 +30,8 @@ Agreed with Dipali (meeting 2026-03-20):
 ### Confirmed from Snowflake data
 
 - `horizontal_element_score` IS populated for GenAI carousels (values like `0.1001`, `0.003`, sometimes `0` when store skips SR).
-- `carousel_details` is `{}` for some GenAI traffic — known bug: the Content Systems / EBR fetch path (Path B) drops `trackingPayload` during proto serialization. Path A (direct fetcher) works fine. We need to fix the Path B gap.
+- `carousel_details` has non-empty records on Path A traffic. Records showing `{}` are from Path B (Content Systems RPC) which drops `trackingPayload` during serialization — pre-existing gap, not ours to fix in this PR.
+- `embedding_score` is already in the `content_systems.proto` (`GeneratedRecommendationStoreInfo.embedding_score` field 3) — both paths deliver it to feed-service. Our logging works on 100% of traffic.
 
 ### Why not a dedicated proto field for embedding score?
 
@@ -52,5 +53,5 @@ Simpler to use `score_modifiers` — no proto change, no Snowflake schema change
 
 ## Related Docs
 
-- [01-rfc-and-architecture.md](01-rfc-and-architecture.md) — RFC + codebase reference
-- [02-implementation-plan.md](02-implementation-plan.md) — Step-by-step plan
+- [01-rfc-and-architecture.md](01-rfc-and-architecture.md) — RFC + codebase reference + full call stacks
+- [02-implementation-plan.md](02-implementation-plan.md) — Step-by-step plan + DV sandbox config

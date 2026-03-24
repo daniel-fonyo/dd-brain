@@ -3,7 +3,7 @@
 **Status**: Ready to implement
 **Target table**: `cx_cross_vertical_homepage_feed` (Snowflake, via Iguazu)
 **Urgency**: High — GenAI V1 live on 60% of orders; need 1+ week of data before experiments.
-**Proto changes to events.proto**: None required.
+**Proto changes**: None required.
 
 ## Approach
 
@@ -13,6 +13,11 @@ Two existing logging channels, matched to data grain:
 |--------|-------|---------|--------------|
 | Embedding score | Per store | `score_modifiers` (LoggedValue pattern) | New per-store signals = new LoggedValue entry |
 | Alpha, beta, future params | Per carousel | `carousel_details` JSON (via `trackingPayload`) | New param = one line in reranker map. Auto-logged. |
+
+Both channels work on **100% of traffic** (Path A + Path B):
+- `embeddingScore` is in `content_systems.proto` — both paths deliver it to `generatedRecommendationStoreInfoMap`
+- Alpha/beta are read from DV inside feed-service's reranker — independent of fetch path
+- `trackingPayload` is set in the reranker (our change), which runs after both paths converge
 
 ## Changes by File
 
@@ -76,25 +81,15 @@ return collection.copy(
 ```
 
 No other changes needed — `trackingPayload` already flows through:
-`LiteStoreCollection` → `generateStoreCarousel()` → `StoreCarousel.trackingPayload` → `StoreCarouselDataAdapterUtil.generateLogging()` → `carousel_details` JSON.
-
-### Part C: Fix Path B trackingPayload Drop (Content Systems RPC)
-
-`carousel_details` is `{}` for GenAI traffic on the Content Systems / EBR path because the serializer/deserializer drops `trackingPayload`.
-
-**C1. `content_systems.proto`** (services-protobuf) — add field to `GeneratedRecommendationCarousel`
-```protobuf
-map<string, string> tracking_payload = <next_field>;
+```
+LiteStoreCollection.trackingPayload
+  → generateStoreCarousel() copies to StoreCarousel.trackingPayload
+  → StoreCarouselDataAdapterUtil.generateLogging() writes to carousel_details JSON
+  → ContainerEventsGenerator reads CAROUSEL_DETAILS from container logging struct
+  → Appears in carousel_details column in Snowflake
 ```
 
-**C2. `GeneratedRecommendationCarouselsSerializer.kt`** — serialize trackingPayload into proto
-
-**C3. `GeneratedRecommendationContentSystemsFetcherUtil.kt`** — deserialize trackingPayload from proto
-```kotlin
-trackingPayload = carousel.trackingPayloadMap,
-```
-
-**Note**: Part C requires a proto change in `content_systems.proto` (internal RPC proto, not logging proto — smaller blast radius). Could be deferred if Path A has enough traffic, but needed for full coverage.
+**Note**: On Path B traffic, the original `trackingPayload` from Content Systems is empty (pre-existing gap — `carousel_rank`, `day_part` missing). But our alpha/beta values are injected by the reranker *after* fetch, so they will appear regardless. The carousel_details JSON will contain `{carousel_id, reranker_alpha, reranker_beta}` on Path B (without carousel_rank/day_part), and the full set on Path A.
 
 ## Summary
 
@@ -107,12 +102,26 @@ trackingPayload = carousel.trackingPayloadMap,
 | `DomainUtilLoggingConstants.kt` | A5 | ~1 |
 | `ContainerEventsGenerator.kt` | A6 | ~20 |
 | `GeneratedRecommendationCarouselService.kt` | B1 | ~5 |
-| `content_systems.proto` | C1 | ~1 |
-| `GeneratedRecommendationCarouselsSerializer.kt` | C2 | ~3 |
-| `GeneratedRecommendationContentSystemsFetcherUtil.kt` | C3 | ~2 |
 
-**Parts A + B**: ~32 lines across 7 files in feed-service. Zero proto changes.
-**Part C**: ~6 lines across 3 files (1 proto + 2 Kotlin). Needed for full coverage.
+**Total: ~32 lines across 7 files. Zero proto changes.**
+
+## Sandbox DV Overrides
+
+To see GenAI carousels with the reranker in sandbox:
+
+| DV | Type | Value | Notes |
+|----|------|-------|-------|
+| `should_enable_discovery_flow_in_homepage` | Boolean | `true` | Gates entire discovery SDK flow |
+| `enable_generated_recommendation_product` | String | `ebr_cx_profile_store_first` | Enables GenAI carousels. Any `ebr_*` arm works |
+| `cx_homepage_programmatic_carousel_dropping` | String | `control` | Must NOT be `treatment_2` |
+| `enable_generated_recommendation_product_mock` | String | `treatment` | Only if CRDB has no data for test consumer |
+
+Runtime config (already synced to sandbox):
+| Path | Value |
+|------|-------|
+| `cx_profile_generated_carousels/reranking_coeff.json` | Must have entry for variant, e.g. `{"ebr_cx_profile_store_first": [0.0, 1.0, 10]}` |
+
+Test consumer `757606047L` (per CLAUDE.md) must have data in `cx_profile_generated_carousels` CRDB tables, or use mock data DV.
 
 ## Verification
 
@@ -125,8 +134,9 @@ trackingPayload = carousel.trackingPayloadMap,
 
 ## Open Questions
 
-- [x] ~~Where to log embedding score?~~ → `score_modifiers` (per-store, no proto change)
-- [x] ~~Where to log alpha/beta?~~ → `carousel_details` via `trackingPayload` (per-carousel, auto-extensible)
-- [x] ~~Does `horizontal_element_score` populate for GenAI?~~ → Yes, confirmed from Snowflake data
-- [ ] Can Part C be deferred? Depends on Path A vs Path B traffic split.
+- [x] ~~Where to log embedding score?~~ → `score_modifiers`
+- [x] ~~Where to log alpha/beta?~~ → `carousel_details` via `trackingPayload`
+- [x] ~~Does `horizontal_element_score` populate for GenAI?~~ → Yes
+- [x] ~~Does embedding score flow through Path B?~~ → Yes, it's in `content_systems.proto`
+- [x] ~~Do alpha/beta work on Path B?~~ → Yes, read from DV in reranker after fetch converges
 - [ ] Do we need embedding score in `CardView`/`CardClick` protos? (Likely no for initial ask)
