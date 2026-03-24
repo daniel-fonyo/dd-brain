@@ -26,8 +26,8 @@ The Unified Blending Platform (UBP) is DoorDash's long-term vision for homepage 
 Getting there is a multi-step journey. This RFC addresses the first and most foundational piece: defining the interfaces and abstractions that everything else builds on. We propose three concepts, applicable to both inter-carousel (vertical) and intra-carousel (horizontal) ranking:
 
 - **A shared interface for ranked content.** Domain types implement this directly. No wrapper classes, no adapters. The fields the ranking pipeline needs already exist on these types; we formalize them into a compile-time contract.
-- **A contract for ranking logic.** Each ranking operation becomes a self-contained step with a clear signature: items in, items out. Steps are identified by type, independently testable, and swappable.
-- **A config-driven ranking engine.** The engine assembles steps into a pipeline and executes them in sequence. The step list is assembled at request time, not hardwired in the pipeline. The same engine serves both vertical and horizontal ranking, differing only in which steps it runs.
+- **A contract for ranking logic.** Each ranking operation becomes a self-contained step with a clear signature: items in, items out. Steps are independently testable, swappable, and composable.
+- **A composable ranking engine.** The engine assembles steps into a pipeline and executes them in sequence. The step list is assembled at request time, not hardwired in the pipeline. This composability is the foundation for config-driven experimentation, where MLEs control which steps run without code changes. The same engine serves both vertical and horizontal ranking, differing only in which steps it runs.
 
 These don't change any ranking behavior. They formalize existing conventions into compile-time contracts so that everything UBP needs can be built on top without rearchitecting.
 
@@ -171,7 +171,7 @@ data class StoreCarousel(
 
 Adding a new carousel type means implementing `Rankable` on one class. No wrappers, no writeback threading.
 
-Extension functions `toRankableList()` and `toRankableContent()` handle conversion between the existing typed container (`RankableContent`) and `List<Rankable>`. Concrete types are preserved through the round-trip: `toRankableContent()` uses an exhaustive `when` (no `else` branch) over runtime type to reconstruct the typed container, so the compiler forces an update when a new type is added. A count assertion on the round-trip (`input.size == output.size`) guards against silent item loss.
+Extension functions `toRankableList()` and `toRankableContent()` handle conversion between the existing typed container (`RankableContent`) and `List<Rankable>`. Concrete types are preserved through the round-trip: `toRankableContent()` filters by runtime type (`is StoreCarousel`, `is ItemCarousel`, etc.) to reconstruct the typed container. A count assertion on the round-trip (`input.size == output.size`) guards against silent item loss if a new type is added but the conversion function is not updated.
 
 ## `RankingStep`
 
@@ -233,6 +233,8 @@ class RankingPipeline {
 
 The step list is assembled at request time, not hardwired in the pipeline. Today it is `[CarouselRankAllStep]`. As decomposition progresses, it becomes config-driven: `[ModelScoringStep, MultiplierBoostStep, DiversityRerankStep, StorePinningStep]`. The engine does not change; only the step list does.
 
+**Error handling.** If a step throws, the exception propagates out of the pipeline to the caller. This preserves existing behavior: the call site (`rankContent()` in `DefaultHomePagePostProcessor`) already wraps ranking in a try-catch that logs the error and returns content unchanged. The pipeline does not add its own error handling; it relies on the same call-site fallback that exists today.
+
 ## Step Assembly
 
 Step assembly lives outside the pipeline. The assembler produces the step list for each request; the pipeline just runs whatever it's given.
@@ -292,7 +294,7 @@ class CarouselRankAllStep(
 }
 ```
 
-This is intentional. By keeping all ranking logic inside one step, we preserve exactly the current behavior while proving out the interfaces. Once the abstraction layer is validated in production, we can decompose `RANK_ALL` into distinct, independently testable steps (scoring, boosting, diversity, pinning) to support UBP goals. The engine and interfaces remain unchanged; only the step list grows.
+This is intentional. By keeping all ranking logic inside one step, we preserve exactly the current behavior while proving out the interfaces. Note that Phase 1 incurs an extra type conversion round-trip inside this step: the pipeline converts `RankableContent → List<Rankable>` at entry, then the step converts back to `RankableContent` to call legacy code, then back to `List<Rankable>` on exit. This is inherent to wrapping the legacy API and goes away as steps are decomposed to operate on `List<Rankable>` directly. The engine and interfaces remain unchanged; only the step list grows.
 
 ## Class Diagram
 
