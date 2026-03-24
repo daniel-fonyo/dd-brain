@@ -81,74 +81,91 @@ Add to existing meta.json structure:
 
 ## Snowflake Query Design
 
+### MCP Tool
+
+All queries execute via the **Snowflake MCP server** tool: `mcp__snowflake__run_snowflake_query`. Pass SQL as the `statement` parameter. Returns JSON rows. If MCP connection drops, user runs `/mcp` to reconnect.
+
 ### Target table
 
 ```
 IGUAZU.SERVER_EVENTS_PRODUCTION.CX_CROSS_VERTICAL_HOME_PAGE_FEED_ICE
 ```
 
+### Key column names (actual Snowflake identifiers)
+
+- `IGUAZU_PARTITION_DATE` — VARCHAR, format `'YYYY-MM-DD'` (**NOT** `PARTITION_DATE` — that column does not exist, causes SQL error 000904)
+- `IGUAZU_PARTITION_HOUR` — NUMBER (0-23, UTC)
+- `CONSUMER_ID` — NUMBER
+- `REQUEST_ID` — VARCHAR
+
 ### Partition filter (required for performance)
 
-Always include `iguazu_partition_date` to avoid full table scan:
+Always include BOTH `IGUAZU_PARTITION_DATE` AND `IGUAZU_PARTITION_HOUR`. Derive hour from test run timestamp (UTC). Use ±1 hour range for propagation delay.
 
 ```sql
-WHERE iguazu_partition_date = CURRENT_DATE()
+WHERE IGUAZU_PARTITION_DATE = '2026-03-24'
+  AND IGUAZU_PARTITION_HOUR BETWEEN <hour - 1> AND <hour + 1>
+  AND CONSUMER_ID = 757606047
 ```
 
 ### Existence check (for polling)
 
 ```sql
-SELECT request_id, COUNT(*) AS row_count
+SELECT REQUEST_ID, COUNT(*) AS ROW_COUNT
 FROM IGUAZU.SERVER_EVENTS_PRODUCTION.CX_CROSS_VERTICAL_HOME_PAGE_FEED_ICE
-WHERE iguazu_partition_date = CURRENT_DATE()
-  AND request_id IN ('<id1>', '<id2>', '<id3>')
-GROUP BY request_id
+WHERE IGUAZU_PARTITION_DATE = '<partition_date>'
+  AND IGUAZU_PARTITION_HOUR BETWEEN <hour - 1> AND <hour + 1>
+  AND CONSUMER_ID = 757606047
+  AND REQUEST_ID IN ('<id1>', '<id2>', '<id3>')
+GROUP BY REQUEST_ID
 ```
 
 ### Full event pull
 
 ```sql
 SELECT
-    request_id,
-    consumer_id,
-    facet_vertical_position,
-    facet_id,
-    facet_type,
-    facet_name,
-    store_id,
-    store_name,
-    horizontal_position_in_facet,
-    facet_score,
-    raw_facet_score,
-    facet_score_multiplier,
-    horizontal_element_score,
-    raw_horizontal_element_score,
-    score_modifiers,
-    predictor_names,
-    model_ids,
-    is_dashpass_user,
-    is_occasional_user,
-    dd_session_id,
-    dd_device_id,
-    submarket_id,
-    district_id,
-    time_zone,
-    store_primary_vertical_id,
-    store_business_vertical_id,
-    store_is_dashpass_partner,
-    store_delivery_fee_amount,
-    store_distance_from_consumer,
-    store_average_rating,
-    entity_has_offer_badge,
-    is_sponsored,
-    item_id,
-    item_name,
-    deal_id,
-    deal_type
+    REQUEST_ID,
+    CONSUMER_ID,
+    FACET_VERTICAL_POSITION,
+    FACET_ID,
+    FACET_TYPE,
+    FACET_NAME,
+    STORE_ID,
+    STORE_NAME,
+    HORIZONTAL_POSITION_IN_FACET,
+    FACET_SCORE,
+    RAW_FACET_SCORE,
+    FACET_SCORE_MULTIPLIER,
+    HORIZONTAL_ELEMENT_SCORE,
+    RAW_HORIZONTAL_ELEMENT_SCORE,
+    SCORE_MODIFIERS,
+    PREDICTOR_NAMES,
+    MODEL_IDS,
+    IS_DASHPASS_USER,
+    IS_OCCASIONAL_USER,
+    DD_SESSION_ID,
+    DD_DEVICE_ID,
+    SUBMARKET_ID,
+    DISTRICT_ID,
+    TIME_ZONE,
+    STORE_PRIMARY_VERTICAL_ID,
+    STORE_BUSINESS_VERTICAL_ID,
+    STORE_IS_DASHPASS_PARTNER,
+    STORE_DELIVERY_FEE_AMOUNT,
+    STORE_DISTANCE_FROM_CONSUMER,
+    STORE_AVERAGE_RATING,
+    ENTITY_HAS_OFFER_BADGE,
+    IS_SPONSORED,
+    ITEM_ID,
+    ITEM_NAME,
+    DEAL_ID,
+    DEAL_TYPE
 FROM IGUAZU.SERVER_EVENTS_PRODUCTION.CX_CROSS_VERTICAL_HOME_PAGE_FEED_ICE
-WHERE iguazu_partition_date = CURRENT_DATE()
-  AND request_id IN ('<id1>', '<id2>', '<id3>')
-ORDER BY request_id, facet_vertical_position, horizontal_position_in_facet
+WHERE IGUAZU_PARTITION_DATE = '<partition_date>'
+  AND IGUAZU_PARTITION_HOUR BETWEEN <hour - 1> AND <hour + 1>
+  AND CONSUMER_ID = 757606047
+  AND REQUEST_ID IN ('<id1>', '<id2>', '<id3>')
+ORDER BY REQUEST_ID, FACET_VERTICAL_POSITION, HORIZONTAL_POSITION_IN_FACET
 ```
 
 ---
@@ -273,9 +290,9 @@ Request IDs: <id1>, <id2>, <id3>
 
 ---
 
-## Implementation Order
+## Implementation Status
 
-1. Test Snowflake MCP connection (restart session required)
-2. Update `sandbox-test.md` — add requestId extraction after each load
-3. Create `validate-iguazu.md` skill
-4. End-to-end test: sandbox-test → wait → validate-iguazu
+1. ~~Test Snowflake MCP connection~~ — **DONE** (2026-03-24). MCP tool `mcp__snowflake__run_snowflake_query` confirmed working. Verified query returns rows from `CX_CROSS_VERTICAL_HOME_PAGE_FEED_ICE`.
+2. ~~Update `sandbox-test.md` — add requestId extraction after each load~~ — **DONE**
+3. ~~Create `validate-iguazu.md` skill~~ — **DONE**
+4. End-to-end test: sandbox-test → wait → validate-iguazu — **PENDING**
