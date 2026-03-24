@@ -37,9 +37,13 @@ For `feed-service`, `services-protobuf`, or any other referenced repo:
 - When the user grants a permission prompt during a session, immediately append the corresponding rule to the `allow` array in `~/.claude/settings.json` so it is pre-approved in future sessions.
 
 ### Personal Sandbox Test Setup (feed-service)
-Before any sandbox deploy/test, apply this local-only change (never commit):
-- In `HomepageRequestToContext.kt`, hardcode `getConsumerIdFromRequest` to `return 757606047L`
-- File: `pipelines/homepage/src/main/kotlin/com/doordash/consumer/pipelines/homepage/HomepageRequestToContext.kt`
+Before any sandbox deploy/test, apply these local-only changes (never commit):
+1. In `HomepageRequestToContext.kt`, hardcode `getConsumerIdFromRequest` to `return 757606047L`
+   - File: `pipelines/homepage/src/main/kotlin/com/doordash/consumer/pipelines/homepage/HomepageRequestToContext.kt`
+2. **DANGER — Iguazu sandbox bypass** — In `IguazuModule.kt`, hardcode `val isSandboxEnv = false` to bypass sandbox Iguazu gating so events publish to Snowflake
+   - File: `libraries/platform/src/main/kotlin/com/doordash/consumer/feed/platform/iguazu/IguazuModule.kt`
+   - Without this, Iguazu events are blocked in sandbox by `enableSandboxIguazu()` and topic allowlist checks
+   - **BE VERY CAREFUL**: This causes sandbox events to flow to PROD Iguazu/Snowflake. Only apply when testing specifically requires Snowflake validation. Revert immediately after testing. NEVER commit this change.
 
 ### Sandbox Browser Test Credentials
 - **Domain**: `https://www.doordashtest.com/` (never `doordash.com`)
@@ -51,6 +55,10 @@ Before any sandbox deploy/test, apply this local-only change (never commit):
 The feed-service pre-commit hook runs `./gradlew detekt` which requires write access to `~/.gradle/wrapper/`. This **always fails** in the Claude Code sandbox because the sandbox blocks writes to `~/.gradle`. The hook output will show "Detekt failed" with empty "Detailed Output" sections — this is a sandbox restriction, not a real lint error.
 
 **Workaround**: Use `git commit --no-verify` (with `dangerouslyDisableSandbox: true`) when committing in feed-service. The user should run detekt locally before pushing.
+
+### Autonomy
+- Do NOT use AskUserQuestion / elicitation prompts. Make your best judgment and proceed. If you're truly blocked with no reasonable default, state your assumption in a text message and continue.
+- This is critical for remote workflows — elicitation prompts cannot be answered via the email bridge.
 
 ### General Rules
 - Always make a plan before starting work. Execute the plan step by step.
