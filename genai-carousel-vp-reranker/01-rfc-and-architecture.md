@@ -58,16 +58,20 @@ val combinedScore = vpScore.pow(alpha) * similarity.pow(beta)
 
 ### Two Retrieval Paths
 
-There are two code paths that fetch GenAI carousels. They diverge at **fetch time** and converge at **collection building**.
+There are two code paths that fetch GenAI carousels. They diverge at **fetch time** and converge at **collection building**. **Both paths produce Iguazu events** — event emission happens at response serialization time in `HomepageResponseSerializer`, long after the paths have merged.
 
-| Path | What It Does | trackingPayload? | embeddingScore? |
-|------|-------------|-----------------|----------------|
-| A: Direct fetcher | Runs EBR retrieval in-process inside feed-service | Yes | Yes |
-| B: Content Systems RPC | Calls `ContentSystemsFeedService.GetGeneratedRecommendationCarousels()` gRPC to a separate service (`web-content-systems`) that does the EBR retrieval | **No** — `trackingPayload` not in `content_systems.proto` | **Yes** — `GeneratedRecommendationStoreInfo.embedding_score` (field 3) IS in the proto |
+| Path | What It Does | Original trackingPayload? | embeddingScore? |
+|------|-------------|--------------------------|----------------|
+| A: Direct fetcher | Runs EBR retrieval in-process inside feed-service | Yes (`carousel_rank`, `day_part`, `last_update_date`) | Yes |
+| B: Content Systems RPC | Calls `ContentSystemsFeedService.GetGeneratedRecommendationCarousels()` gRPC to a separate service (`web-content-systems`) that does the EBR retrieval | **No** — `trackingPayload` not in `content_systems.proto` (defaults to `emptyMap()`) | **Yes** — `GeneratedRecommendationStoreInfo.embedding_score` (field 3) IS in the proto |
 
 **Why Path B exists**: Architectural separation — EBR retrieval logic (calling embedding models, k-NN, store decoration) runs in a dedicated Content Systems service. Feed-service handles ranking, logging, and response serialization. Path B is the default for most traffic.
 
-**Key insight for our work**: `embeddingScore` flows through both paths. Alpha/beta are read from DV inside feed-service (in the reranker), not from Content Systems. So our logging changes work on 100% of traffic. The `trackingPayload` gap only affects the *original* carousel metadata (`carousel_rank`, `day_part`), which is a pre-existing issue.
+**Key insight for our work**: All three new logging fields work on **both paths** (100% of traffic):
+- **`genai_embedding_similarity_score`**: `embeddingScore` is in the content systems proto → deserialized by `GeneratedRecommendationContentSystemsFetcherUtil` → flows through `storeInfoMap` → `StoreEntity.genaiEmbeddingSimilarityScore` → Iguazu event.
+- **`genai_reranker_alpha` / `genai_reranker_beta`**: Injected post-convergence in `rerankStoreByBlockReranking()` via `collection.copy(trackingPayload += {alpha, beta})`. Alpha/beta come from DV coefficients, not the fetch path.
+
+**What IS missing on Path B (pre-existing gap)**: The *original* `trackingPayload` fields from the fetch phase (`carousel_rank`, `day_part`, `last_update_date`) — these are set in `createGeneratedRecommendationCarousels()` but not serialized in `content_systems.proto`. For Path B, `carousel_details` JSON will contain `{carousel_id, genai_reranker_alpha, genai_reranker_beta}` but NOT `carousel_rank` or `day_part`.
 
 Switch controlled by: `DiscoveryExperimentManager.shouldUseGeneratedRecommendationEBROption2(experimentMap)`
 
@@ -240,8 +244,8 @@ SerializerHelperUtil.sendHomePageFeedEventLogging()
 | `horizontal_element_score` | 19 | VP prediction score per store | Logged |
 | `raw_horizontal_element_score` | 80 | Raw Sibyl score pre-multipliers | Logged |
 | `facet_score` | 20 | Carousel-level aggregate score | Logged |
-| `score_modifiers` | 59 | Named score components | Logged (adding `embedding_similarity_score`) |
-| `carousel_details` | 81 | JSON carousel metadata | Logged on Path A (adding `reranker_alpha`, `reranker_beta`) |
+| `score_modifiers` | 59 | Named score components | Logged (adding `genai_embedding_similarity_score` — **both paths**) |
+| `carousel_details` | 81 | JSON carousel metadata | Logged — `genai_reranker_alpha`/`beta` added post-convergence (**both paths**). Path A also has `carousel_rank`, `day_part`; Path B does not (pre-existing proto gap). |
 | `predictor_names` / `model_ids` | 57/58 | Model names and IDs | Logged |
 | **EBR embedding similarity score** | — | Per-store cosine similarity | **NOT LOGGED → score_modifiers** |
 | **Alpha, Beta** | — | Reranker formula exponents | **NOT LOGGED → carousel_details** |
