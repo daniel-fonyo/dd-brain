@@ -64,9 +64,9 @@ Before any sandbox deploy/test, apply these local-only changes (never commit):
 - **CRITICAL**: Always filter by `iguazu_partition_date` AND `iguazu_partition_hour` — the tables are massive. Never scan more than 2 days without additional filters.
 
 ### feed-service: Detekt Pre-Commit Hook
-The feed-service pre-commit hook runs `./gradlew detekt` which requires write access to `~/.gradle/wrapper/`. This **always fails** in the Claude Code sandbox because the sandbox blocks writes to `~/.gradle`. The hook output will show "Detekt failed" with empty "Detailed Output" sections — this is a sandbox restriction, not a real lint error.
+The feed-service pre-commit hook runs `./gradlew detekt` which requires write access to `~/.gradle/wrapper/`. This fails in the default Claude Code sandbox because it blocks writes to `~/.gradle`.
 
-**Workaround**: Use `git commit --no-verify` (with `dangerouslyDisableSandbox: true`) when committing in feed-service. The user should run detekt locally before pushing.
+**Always run the hook** — use `dangerouslyDisableSandbox: true` on the `git commit` so detekt can access `~/.gradle`. Never skip the hook with `--no-verify`; code must be linted before committing.
 
 ### Autonomy
 - Do NOT use AskUserQuestion / elicitation prompts. Make your best judgment and proceed. If you're truly blocked with no reasonable default, state your assumption in a text message and continue.
