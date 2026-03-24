@@ -54,12 +54,12 @@ There are zero tests covering end-to-end ranking behavior. Changes are "edit and
 
 ## Goals
 
-1. **Introduce `Rankable` interface.** Implemented directly by domain types (no wrapper classes). `StoreCarousel`, `ItemCarousel`, etc. implement `Rankable` via `predictionScore` + `withPredictionScore()` copy pattern.
-2. **Introduce ranking engine.** `RankingStep` + `RankingHandler` + `RankingPipeline` with chain-of-responsibility execution. Step assembly is external; the engine runs whatever steps it's given.
-3. **Align on these as the stable contract.** These interfaces and their signatures are the API surface all future UBP work builds on.
-4. **Shadow validate.** Prove the engine produces identical results to the old path before any traffic migrates.
-5. **Roll out.** Gradually migrate traffic from old path to new path behind a DV gate.
-6. **Preserve all existing behavior.** Preserve the legacy coupled ranking in a single step. Build the abstractions to allow decoupling over time. No behavior change.
+- **Introduce `Rankable` interface.** Implemented directly by domain types (no wrapper classes). `StoreCarousel`, `ItemCarousel`, etc. implement `Rankable` via `predictionScore` + `withPredictionScore()` copy pattern.
+- **Introduce ranking engine.** `RankingStep` + `RankingHandler` + `RankingPipeline` with chain-of-responsibility execution. Step assembly is external; the engine runs whatever steps it's given.
+- **Align on these as the stable contract.** These interfaces and their signatures are the API surface all future UBP work builds on.
+- **Shadow validate.** Prove the engine produces identical results to the old path before any traffic migrates.
+- **Roll out.** Gradually migrate traffic from old path to new path behind a DV gate.
+- **Preserve all existing behavior.** Preserve the legacy coupled ranking in a single step. Build the abstractions to allow decoupling over time. No behavior change.
 
 Phase 1 alone delivers concrete value independent of future phases. Today there is no way to test ranking behavior, no interfaces for new engineers to read, and no safe way to refactor. After Phase 1: the ranking pipeline has its first-ever test coverage (characterization tests + unit tests), the interfaces serve as readable documentation of how ranking works, and the shadow validation infrastructure provides a safe foundation for any future changes. These benefits exist whether or not we proceed to granular step decomposition.
 
