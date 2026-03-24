@@ -294,7 +294,7 @@ class CarouselRankAllStep(
 }
 ```
 
-This is intentional. By keeping all ranking logic inside one step, we preserve exactly the current behavior while proving out the interfaces. Note that Phase 1 incurs an extra type conversion round-trip inside this step: the pipeline converts `RankableContent → List<Rankable>` at entry, then the step converts back to `RankableContent` to call legacy code, then back to `List<Rankable>` on exit. This is inherent to wrapping the legacy API and goes away as steps are decomposed to operate on `List<Rankable>` directly. The engine and interfaces remain unchanged; only the step list grows.
+This is intentional. By keeping all ranking logic inside one step, we preserve exactly the current behavior while proving out the interfaces. The step internally bridges back to the legacy `RankableContent`-based API; this is an implementation detail that disappears as steps are decomposed to operate on `List<Rankable>` directly. The engine and interfaces remain unchanged; only the step list grows.
 
 ## Class Diagram
 
