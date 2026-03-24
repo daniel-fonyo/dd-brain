@@ -1,6 +1,7 @@
 # GenAI Carousel Reranker — Embedding Score Logging
 
-**Status**: In Progress
+**Status**: Implemented — pending sandbox test
+**Branch**: `feed-service: feat/genai-reranker-logging`
 **Date**: 2026-03-23
 **RFC Authors**: Dipali, Ranjan, Yu Zhang
 **Urgency**: High — GenAI V1 live on 60% of orders; need 1+ week of logged data before any experiment can start.

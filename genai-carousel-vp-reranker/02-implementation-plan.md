@@ -1,6 +1,7 @@
 # Implementation Plan: GenAI Reranker Signal Logging
 
-**Status**: Ready to implement
+**Status**: Implemented — pending sandbox test
+**Branch**: `feed-service: feat/genai-reranker-logging`
 **Target table**: `cx_cross_vertical_homepage_feed` (Snowflake, via Iguazu)
 **Urgency**: High — GenAI V1 live on 60% of orders; need 1+ week of data before experiments.
 **Proto changes**: None required.
@@ -41,29 +42,29 @@ embeddingScore = liteStoreCollection.generatedRecommendationStoreInfoMap[it.id]?
 **A4. `StoreCarouselDataAdapter.kt`** — write to logging struct in `generateStoreLogging()` (~3 lines)
 ```kotlin
 store.embeddingScore?.let {
-    map[EMBEDDING_SIMILARITY_SCORE_KEY] = getSafeNumberValueWithDefault(it)
+    map[GENAI_EMBEDDING_SIMILARITY_SCORE_KEY] = getSafeNumberValueWithDefault(it)
 }
 ```
 
 **A5. `DomainUtilLoggingConstants.kt`** — add key constant (~1 line)
 ```kotlin
-const val EMBEDDING_SIMILARITY_SCORE_KEY = "embedding_similarity_score"
+const val GENAI_EMBEDDING_SIMILARITY_SCORE_KEY = "genai_embedding_similarity_score"
 ```
 
 **A6. `ContainerEventsGenerator.kt`** — add LoggedValue enum entry + include in child list (~20 lines)
 ```kotlin
-EMBEDDING_SIMILARITY_SCORE(EMBEDDING_SIMILARITY_SCORE_KEY, { b, v ->
+GENAI_EMBEDDING_SIMILARITY_SCORE(GENAI_EMBEDDING_SIMILARITY_SCORE_KEY, { b, v ->
     when (b) {
         is Events.CrossVerticalHomePageFeedEvent.Builder ->
             b.addScoreModifiers(
                 Events.CrossVerticalHomePageFeedEvent.ScoreModifier.newBuilder()
-                    .setName(EMBEDDING_SIMILARITY_SCORE_KEY).setValue(v.numberValue).build(),
+                    .setName(GENAI_EMBEDDING_SIMILARITY_SCORE_KEY).setValue(v.numberValue).build(),
             )
         else -> b
     }
 }),
 ```
-Then add `LoggedValue.EMBEDDING_SIMILARITY_SCORE` to child logging lists.
+Then add `LoggedValue.GENAI_EMBEDDING_SIMILARITY_SCORE` to child logging lists.
 
 ### Part B: Alpha/Beta → carousel_details via trackingPayload
 
@@ -127,7 +128,7 @@ Test consumer `757606047L` (per CLAUDE.md) must have data in `cx_profile_generat
 
 1. Deploy to sandbox
 2. Hit homepage, check Iguazu events contain:
-   - `score_modifiers` array includes `{"name": "embedding_similarity_score", "value": ...}`
+   - `score_modifiers` array includes `{"name": "genai_embedding_similarity_score", "value": ...}`
    - `carousel_details` JSON includes `reranker_alpha` and `reranker_beta`
 3. Confirm in Snowflake `cx_cross_vertical_homepage_feed`
 4. Share sample query with Dipali for validation
