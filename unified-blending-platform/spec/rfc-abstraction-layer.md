@@ -21,15 +21,13 @@
 
 # What?
 
-The homepage ranking pipeline has grown organically over years. Ranking logic is scattered across utility classes, helper methods, and inline call chains with no interfaces between them. There are no shared types for the content being ranked, no contracts between ranking stages, and no way to test, configure, or reason about one stage independently of the rest. Nine carousel types go through the same ranking flow, but each is wrapped in a bespoke adapter class just to give them a common shape. Understanding what happens to a carousel's score means tracing through half a dozen files. Changing one experiment parameter means touching ten to fifteen files and weeks of engineer time.
-
 The Unified Blending Platform (UBP) is DoorDash's long-term vision for homepage ranking: a single, config-driven system where ranking is composed of discrete, testable steps operating on a uniform data type. In the northstar state, MLEs configure ranking experiments by swapping step implementations without code deploys. New content types plug in by implementing one interface. Whole-page optimization, partner self-service, and ads blending become possible because every content type speaks the same language and every ranking stage has a clean contract.
 
 Getting there is a multi-step journey. This RFC addresses the first and most foundational piece: defining the interfaces and abstractions that everything else builds on. We propose three concepts, applicable to both inter-carousel (vertical) and intra-carousel (horizontal) ranking:
 
 - **A shared interface for ranked content.** Domain types implement this directly. No wrapper classes, no adapters. The fields the ranking pipeline needs already exist on these types; we formalize them into a compile-time contract.
 - **A contract for ranking logic.** Each ranking operation becomes a self-contained step with a clear signature: items in, items out. Steps are identified by type, independently testable, and swappable.
-- **A config-driven ranking engine.** The engine assembles steps into a pipeline and executes them in sequence. The step list is data, not code. The same engine serves both vertical and horizontal ranking, differing only in which steps it runs.
+- **A config-driven ranking engine.** The engine assembles steps into a pipeline and executes them in sequence. The step list is assembled at request time, not hardwired in the pipeline. The same engine serves both vertical and horizontal ranking, differing only in which steps it runs.
 
 These don't change any ranking behavior. They formalize existing conventions into compile-time contracts so that everything UBP needs can be built on top without rearchitecting.
 
@@ -62,6 +60,8 @@ There are zero tests covering end-to-end ranking behavior. Changes are "edit and
 4. **Shadow validate.** Prove the engine produces identical results to the old path before any traffic migrates.
 5. **Roll out.** Gradually migrate traffic from old path to new path behind a DV gate.
 6. **Preserve all existing behavior.** Preserve the legacy coupled ranking in a single step. Build the abstractions to allow decoupling over time. No behavior change.
+
+Phase 1 alone delivers concrete value independent of future phases. Today there is no way to test ranking behavior, no interfaces for new engineers to read, and no safe way to refactor. After Phase 1: the ranking pipeline has its first-ever test coverage (characterization tests + unit tests), the interfaces serve as readable documentation of how ranking works, and the shadow validation infrastructure provides a safe foundation for any future changes. These benefits exist whether or not we proceed to granular step decomposition.
 
 ## Non-Goals
 
@@ -171,7 +171,7 @@ data class StoreCarousel(
 
 Adding a new carousel type means implementing `Rankable` on one class. No wrappers, no writeback threading.
 
-Extension functions `toRankableList()` and `toRankableContent()` handle conversion between the existing typed container (`RankableContent`) and `List<Rankable>`. Concrete types are preserved through the round-trip: `toRankableContent()` filters by runtime type (`is StoreCarousel`, `is ItemCarousel`, etc.) to reconstruct the typed container, so no type information is lost despite the pipeline operating on `List<Rankable>`.
+Extension functions `toRankableList()` and `toRankableContent()` handle conversion between the existing typed container (`RankableContent`) and `List<Rankable>`. Concrete types are preserved through the round-trip: `toRankableContent()` uses an exhaustive `when` (no `else` branch) over runtime type to reconstruct the typed container, so the compiler forces an update when a new type is added. A count assertion on the round-trip (`input.size == output.size`) guards against silent item loss.
 
 ## `RankingStep`
 
@@ -182,6 +182,8 @@ interface RankingStep {
     suspend fun execute(items: List<Rankable>, context: RankingContext): List<Rankable>
 }
 ```
+
+`RankingContext` is an existing object (not introduced by this RFC) that carries request metadata, user context, feature flags, and experiment assignments through the ranking pipeline.
 
 That's the entire contract. Every step, whether it scores, boosts, reranks, or pins, implements this one method. Steps are independently testable, swappable, and composable.
 
@@ -213,7 +215,9 @@ class RankingStepHandler(
 }
 ```
 
-The separation is deliberate. Steps contain domain logic and know nothing about chaining. Handlers own orchestration. Step authors write pure ranking logic; the engine takes care of composition. Cross-cutting infrastructure (metrics, tracing, timeouts, experiment gating) can be injected at the handler level without touching any step.
+The separation is deliberate. Steps contain domain logic and know nothing about chaining. Handlers own orchestration. Step authors write pure ranking logic; the engine takes care of composition.
+
+A simple `steps.fold(items) { acc, step -> step.execute(acc, context) }` achieves the same sequential execution. The handler chain exists because the wrapper is the extension point. Metrics, tracing, timeouts, and experiment gating each wrap at the handler level as orthogonal decorators. With a fold, composing N cross-cutting concerns requires nesting N wrapper functions around each step before folding; with CoR, each concern is a handler layer that composes naturally with the chain.
 
 ## `RankingPipeline` Engine
 
@@ -227,38 +231,19 @@ class RankingPipeline {
 }
 ```
 
-The step list is data, not code. Today it is `[CarouselRankAllStep]`. Tomorrow it could be `[ModelScoringStep, MultiplierBoostStep, DiversityRerankStep, StorePinningStep]`. The engine does not change; only the step list does.
+The step list is assembled at request time, not hardwired in the pipeline. Today it is `[CarouselRankAllStep]`. As decomposition progresses, it becomes config-driven: `[ModelScoringStep, MultiplierBoostStep, DiversityRerankStep, StorePinningStep]`. The engine does not change; only the step list does.
 
 ## Step Assembly
 
-Step assembly lives outside the pipeline. The assembler resolves feature flags, experiment assignments, and runtime config to produce the step list for each request. The pipeline just runs whatever it's given.
+Step assembly lives outside the pipeline. The assembler produces the step list for each request; the pipeline just runs whatever it's given.
+
+Today the assembler is straightforward:
 
 ```kotlin
-// Step implementations are singletons created at DI time.
-// Each implements RankingStep with its own internal logic.
 class RankingStepAssembler(
     private val rankAllStep: CarouselRankAllStep,
-    private val modelScoringStep: ModelScoringStep,
-    private val diversityRerankStep: DiversityRerankStep,
-    private val storePinningStep: StorePinningStep,
-    private val itemPinningStep: ItemPinningStep,
-    // new diversity algorithm behind a feature flag
-    private val merchantDiversityStep: MerchantDiversityStep,
 ) {
-    fun assembleSteps(context: RankingContext): List<RankingStep> = buildList {
-        // Today: single step wrapping all legacy logic
-        add(rankAllStep)
-
-        // Future: decomposed steps, conditionally assembled
-        // add(modelScoringStep)
-        // if (context.featureFlag("merchant_diversity")) {
-        //     add(merchantDiversityStep)
-        // } else {
-        //     add(diversityRerankStep)
-        // }
-        // if (hasStoreCarousels) add(storePinningStep)
-        // if (hasItemCarousels) add(itemPinningStep)
-    }
+    fun assembleSteps(context: RankingContext): List<RankingStep> = listOf(rankAllStep)
 }
 
 // Caller
@@ -266,7 +251,30 @@ val steps = assembler.assembleSteps(context)
 val ranked = pipeline.rank(items, steps, context)
 ```
 
-This separation means new step implementations (e.g., a new diversity algorithm) can be swapped in by changing the assembly logic. No modifications to the engine, the handler chain, or any existing step.
+As steps are decomposed, the assembler grows to resolve feature flags, experiment assignments, and runtime config:
+
+```kotlin
+class RankingStepAssembler(
+    private val modelScoringStep: ModelScoringStep,
+    private val diversityRerankStep: DiversityRerankStep,
+    private val merchantDiversityStep: MerchantDiversityStep,
+    private val storePinningStep: StorePinningStep,
+    private val itemPinningStep: ItemPinningStep,
+) {
+    fun assembleSteps(context: RankingContext): List<RankingStep> = buildList {
+        add(modelScoringStep)
+        if (context.featureFlag("merchant_diversity")) {
+            add(merchantDiversityStep)
+        } else {
+            add(diversityRerankStep)
+        }
+        if (hasStoreCarousels) add(storePinningStep)
+        if (hasItemCarousels) add(itemPinningStep)
+    }
+}
+```
+
+Step implementations are singletons created at DI time. The assembler composes references into a list per request; no new objects are created. New step implementations (e.g., a new diversity algorithm) can be swapped in by changing the assembly logic. No modifications to the engine, the handler chain, or any existing step.
 
 ## `CarouselRankAllStep`: Preserving Existing Behavior
 
@@ -357,7 +365,7 @@ classDiagram
 
 ## Extensibility
 
-The same interfaces apply to both ranking layers. Each capability below adds step implementations; the engine, the interfaces, and the wiring stay unchanged.
+The same interfaces apply to both ranking layers. The next capability after rollout is granular step decomposition (Phase 4), followed by config-driven experimentation. The remaining capabilities below are enabled by the interfaces but have no committed timeline. Each adds step implementations; the engine, the interfaces, and the wiring stay unchanged.
 
 **Intra-carousel (horizontal) ranking.** Store ordering within each carousel today uses a separate ranker with no shared abstraction. `StoreEntity` implements `Rankable`, and new `RankingStep` implementations handle horizontal ranking logic. The engine, handler chain, and step interface are reused identically. Only the step implementations and assembler entry point differ.
 
@@ -489,7 +497,7 @@ After both paths complete, we compare ranking output ordering and latency. Both 
 
 Once shadow proves equivalence, the DV switches to rollout mode and the new path becomes primary. Ramp gradually (1% → 5% → 25% → 50% → 100%). The old path remains the `else` branch. If the engine throws, latency regresses, or ranking quality degrades (CTR/conversion), ramp the DV down. Rollback is immediate, no deploy required.
 
-After rollout, there is zero duplication of network calls. The only additional overhead is in-process type conversion and handler chain assembly, totaling <3ms.
+After rollout, there is zero duplication of network calls. The only additional overhead is in-process type conversion and handler chain assembly.
 
 ### Test Coverage
 
