@@ -21,7 +21,7 @@ Sandbox-verified. PR #62113 pushed with production-ready code (7 files, +27/-2 l
 
 ## Sandbox Verification Evidence
 
-Sandbox rd3987f9, pod m5xjq. Selective bootJar patching (iguazu classes only from platform, 4 packages from domain-util).
+Sandbox rd3987f9, pod m5xjq. Local code synced to pod via `devbox run web-group1-remote`.
 
 ```
 DEBUG_IGUAZU_SUMMARY: batch stats | {

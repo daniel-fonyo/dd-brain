@@ -34,27 +34,16 @@ DEBUG_IGUAZU_SENT: sent 180 events for topic=cx_cross_vertical_homepage_feed
 
 ### What Was Deployed
 
-Two modules patched into the base image bootJar using selective class injection:
+Local code changes synced to sandbox pod via `devbox run web-group1-remote` (syncs local working directory to the remote k8s pod — no git commit required).
 
-**Platform module (3 iguazu classes):**
+**Platform module changes:**
 - `IguazuModule.kt` — Debug logging for cx_cross_vertical_homepage_feed events, sandbox bypass (`isSandboxEnv = false`)
 
-**Domain-util module (337 classes from 4 packages):**
+**Domain-util module changes:**
 - `ContainerEventsGenerator.kt` — Added `GENAI_EMBEDDING_SIMILARITY_SCORE` LoggedValue enum entry
 - `DomainUtilLoggingConstants.kt` — Added `genai_embedding_similarity_score` constant key
 - `StoreCarouselDataAdapter.kt` — Hardcoded `genai_embedding_similarity_score = 0.42` in logging map (test value)
 - `StoreCarouselDataAdapterUtil.kt` — Injected `reranker_alpha: 0.5, reranker_beta: 1.5` when trackingPayload empty
-
-### Build Strategy
-
-Full build fails due to unrelated modules (`:notification`, `:offers`, `:verticalpage`). Solution: **selective class-level bootJar patching**.
-
-1. Build `:platform` and `:domain-util` modules only (both compile fine)
-2. Extract original JARs from base image bootJar
-3. Inject ONLY changed package classes into the original JARs
-4. Patch bootJar with hybrid JARs (our changes + base image's StoreEntity for binary compat)
-
-Key constraint: `StoreEntity.embeddingScore` field CANNOT be deployed via patching because it changes the Builder constructor signature, causing `NoSuchMethodError` in other modules. Instead, the score is injected directly in `StoreCarouselDataAdapter` logging map.
 
 ### All Iguazu Topics Observed (doortest tenant)
 

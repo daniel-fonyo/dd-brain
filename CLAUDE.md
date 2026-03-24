@@ -36,6 +36,9 @@ For `feed-service`, `services-protobuf`, or any other referenced repo:
 ### Permissions
 - When the user grants a permission prompt during a session, immediately append the corresponding rule to the `allow` array in `~/.claude/settings.json` so it is pre-approved in future sessions.
 
+### Sandbox Code Sync (feed-service)
+`devbox run web-group1-remote` syncs the **local working directory** to the running k8s pod. Code does NOT need to be committed or pushed — it takes the local file and syncs it to the matching file on the pod container. This is the **only** method for deploying code to sandbox. Never use bootjar patching, selective class injection, or any other manual JAR manipulation.
+
 ### Personal Sandbox Test Setup (feed-service)
 Before any sandbox deploy/test, apply these local-only changes (never commit):
 1. In `HomepageRequestToContext.kt`, hardcode `getConsumerIdFromRequest` to `return 757606047L`
