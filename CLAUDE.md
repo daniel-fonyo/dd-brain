@@ -70,8 +70,9 @@ The feed-service pre-commit hook runs `./gradlew detekt` which requires write ac
 - This is critical for remote workflows — elicitation prompts cannot be answered via the email bridge.
 
 ### Iguazu Validation
-- Use **pod logging** (`kubectl logs` / `DEBUG_IGUAZU_*` tags) for sandbox event validation — NOT Snowflake.
-- Snowflake is only for post-merge production verification when explicitly requested.
+- **Default (during sandbox dev)**: Use **pod logging** (`kubectl logs` / `DEBUG_IGUAZU_*` tags) for quick event validation — fast, no setup.
+- **Snowflake validation** (`/validate-iguazu` skill): Use when 1:1 matching of browser observations to Snowflake records is needed. Requires the Iguazu sandbox bypass (`val isSandboxEnv = false` in `IguazuModule.kt`) to have been applied before the sandbox test run. Without it, events never reach Snowflake.
+- **Production verification**: Query Snowflake directly after merge — no bypass needed.
 
 ### General Rules
 - Always make a plan before starting work. Execute the plan step by step.
