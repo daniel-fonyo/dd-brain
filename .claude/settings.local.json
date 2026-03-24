@@ -17,7 +17,8 @@
       "Bash(grep storeRanker_scoreSort\\\\|storeRanker_bizRulesSort:*)",
       "WebFetch(domain:karishma-agr1996.medium.com)",
       "WebFetch(domain:refactoring.guru)",
-      "WebSearch"
+      "WebSearch",
+      "WebFetch(domain:cybertron-service-gateway.doordash.team)"
     ]
   },
   "sandbox": {
