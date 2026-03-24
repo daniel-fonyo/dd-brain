@@ -69,6 +69,10 @@ The feed-service pre-commit hook runs `./gradlew detekt` which requires write ac
 - Do NOT use AskUserQuestion / elicitation prompts. Make your best judgment and proceed. If you're truly blocked with no reasonable default, state your assumption in a text message and continue.
 - This is critical for remote workflows — elicitation prompts cannot be answered via the email bridge.
 
+### Iguazu Validation
+- Use **pod logging** (`kubectl logs` / `DEBUG_IGUAZU_*` tags) for sandbox event validation — NOT Snowflake.
+- Snowflake is only for post-merge production verification when explicitly requested.
+
 ### General Rules
 - Always make a plan before starting work. Execute the plan step by step.
 - Always keep relevant brain documents up to date as you work. Create new documents when needed.
