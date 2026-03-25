@@ -160,60 +160,62 @@ boost allow list + DV                 →  boostByPositionCarouselIdAllowList + 
 
 ## Implementation Steps
 
-### Step 1: `Scorable` interface on existing domain types
+### Step 1: `Rankable` interface on existing domain types
 
-**Goal:** Single interface formalizing what 12 types already have. Immediately useful — new carousel types only need to implement `Scorable` + `SortablePlacement`. Solves Frank's #1 pain.
+**Goal:** Single interface formalizing what 12 types already have. Immediately useful — new carousel types only need to implement `Rankable` + `SortablePlacement`. Solves Frank's #1 pain.
 
 **What to build:**
-- `interface Scorable { val id: String; val predictionScore: Double?; fun withPredictionScore(score: Double): Scorable }`
-- Add `Scorable` to all 9 vertical types: `StoreCarousel`, `ItemCarousel`, `DealCarousel`, `StoreCollection`, `CollectionV2`, `ItemCollection`, `MapCarousel`, `ReelsCarousel`, `StoreEntity`
-- Add `Scorable` to 3 horizontal types: `StoreEntity`, `ItemStoreEntity`, `DealStoreEntity`
+- `interface Rankable { fun rankableId(): String; val predictionScore: Double?; fun withPredictionScore(score: Double): Rankable }`
+- Add `Rankable` to all 9 inter-carousel types: `StoreCarousel`, `ItemCarousel`, `DealCarousel`, `StoreCollection`, `CollectionV2`, `ItemCollection`, `MapCarousel`, `ReelsCarousel`, `StoreEntity`
+- Add `Rankable` to intra-carousel types: `DiscoveryStore`, `ItemStoreEntity`, `DealStoreEntity`
 - Each type: add `override` to existing fields + one-line `withPredictionScore` via `copy()`
 
 **Key files:**
-- New: `libraries/common/.../ubp/Scorable.kt`
-- Modified: 12 existing data classes (add `: Scorable` + `override` + `withPredictionScore`)
+- New: `libraries/platform/.../models/Rankable.kt`
+- Modified: 12 existing data classes (add `: Rankable` + `override` + `withPredictionScore`)
 
 **Open question:** `LiteStoreCollection` has no `predictionScore` field (uses maps). Add field? Exclude?
-**Open question:** `StoreEntity` has `id: Long`. Scorable expects `String`. Use `toString()`?
+**Open question:** `StoreEntity` has `id: Long`. `rankableId()` returns `String`. Use `toString()`.
+**Open question:** `DiscoveryStore` has no `predictionScore` field — score lives in `LiteStoreCollection.storePredictionScoresMap`. Add field with `= null` default, hydrate from map before ranking.
 
 **Why first:** Pure seam extraction. Zero behavior change. Compile-time enforcement of existing convention.
 
 ---
 
-### Step 2: `RankingStep` + `RankingHandler` + `Ranker` engine
+### Step 2: `RankingStep` + `RankingHandler` + `RankingPipeline` engine
 
-**Goal:** Extract legacy ranking into one step, wrap in handler chain, orchestrate via Ranker.
+**Goal:** Extract legacy ranking into one step, wrap in handler chain, orchestrate via RankingPipeline.
 
 **What to build:**
 - `interface RankingStep<S : Enum<S>>` — domain logic contract
-- `interface RankingHandler` — chain of responsibility (metrics, conditions)
-- `class Ranker<S : Enum<S>>` — assembles chain from pipeline config, executes
-- `VerticalRankAllStep` — wraps entire `BaseEntityRankerConfiguration.rank()`
-- `HorizontalRankAllStep` — wraps entire `StoreCarouselService.sortEntities()`
+- `fun interface RankingHandler` — chain of responsibility (metrics, conditions)
+- `class StepHandler<S>(step, next)` — wraps step + chains to next handler
+- `class RankingPipeline<S : Enum<S>>` — assembles chain from step registry, executes
+- `CarouselRankAllStep` — wraps entire `RankerConfiguration.rank()`
+- `IntraCarouselRankAllStep` — wraps entire `modifyLiteStoreCollection()` dispatch
 
 **Key files:**
-- New: `libraries/common/.../ubp/RankingStep.kt`
-- New: `libraries/common/.../ubp/RankingHandler.kt` (BaseHandler, StepHandler, MetricsHandler)
-- New: `libraries/common/.../ubp/Ranker.kt`
-- New: `libraries/common/.../ubp/vertical/VerticalRankAllStep.kt`
-- New: `libraries/common/.../ubp/horizontal/HorizontalRankAllStep.kt`
+- New: `libraries/common/.../ubp/RankingEngine.kt` (RankingStep, RankingHandler, StepHandler, RankingPipeline)
+- New: `libraries/common/.../ubp/CarouselRankStepType.kt`
+- New: `libraries/common/.../ubp/CarouselRankAllStep.kt`
+- New: `libraries/common/.../ubp/IntraCarouselRankStepType.kt`
+- New: `libraries/common/.../ubp/IntraCarouselRankAllStep.kt`
 
-**Why second:** Consumes `Scorable` (depends on Step 1). Wraps legacy — no behavior change.
+**Why second:** Consumes `Rankable` (depends on Step 1). Wraps legacy — no behavior change.
 
 ---
 
 ### Step 3: Wire engine into feed-service
 
-**Goal:** Route requests through `Ranker<VerticalStepType>` using `RANK_ALL`. Zero impact — same behavior, new path.
+**Goal:** Route requests through `RankingPipeline<CarouselRankStepType>` using `RANK_ALL`. Zero impact — same behavior, new path.
 
-**Vertical incision:** inside `reOrderGlobalEntitiesV2()`, before `rankAndDedupeContent()`:
+**Inter-carousel incision:** inside `reOrderGlobalEntitiesV2()`, before `rankAndDedupeContent()`:
 ```kotlin
-val items = carousels.filterIsInstance<Scorable>()
-val ranked = verticalRanker.rank(items, listOf(VerticalStepType.RANK_ALL), ctx)
+val items = content.toRankableList()
+val ranked = carouselRankingPipeline.rank(items, listOf(CarouselRankStepType.RANK_ALL), ctx)
 ```
 
-**Horizontal incision:** inside `DefaultHomePageStoreRanker.rank()`, wrapping `modifyLiteStoreCollection()`.
+**Intra-carousel incision:** inside `DefaultHomePageStoreRanker.rank()`, wrapping `modifyLiteStoreCollection()`.
 
 **Key files:**
 - `pipelines/homepage/.../DefaultHomePagePostProcessor.kt`
@@ -255,7 +257,7 @@ val ranked = verticalRanker.rank(items, listOf(VerticalStepType.RANK_ALL), ctx)
 **Goal:** Break `RANK_ALL` into granular steps. Engine unchanged — add enum values + implementations.
 
 ```kotlin
-enum class VerticalStepType {
+enum class CarouselRankStepType {
     RANK_ALL, MODEL_SCORING, MULTIPLIER_BOOST, DIVERSITY_RERANK, POSITION_BOOSTING, FIXED_PINNING,
 }
 ```
@@ -281,8 +283,8 @@ This solves YZ's #1 pain (DV waterfall). Depends on working engine with config-d
 Experiments mutually exclusive WITHIN a layer, orthogonal ACROSS layers.
 
 ```
-Layer: vertical    → Experiment A (5%), Experiment B (10%), Control (85%)
-Layer: horizontal  → Experiment C (3%), Control (97%)
+Layer: carousel_rank      → Experiment A (5%), Experiment B (10%), Control (85%)
+Layer: intra_carousel_rank → Experiment C (3%), Control (97%)
 → Any (vertical, horizontal) combination is valid
 ```
 
@@ -310,16 +312,16 @@ After UBP: implement `Rankable` on one class, done.
 
 | Layer | Key File | What it does |
 |---|---|---|
-| Vertical entry | `DefaultHomePagePostProcessor.kt` | `reOrderGlobalEntitiesV2()` — incision point |
-| Vertical scoring | `EntityRankerConfiguration.kt` | Calls Sibyl + blending (wrapped by `VerticalRankAllStep`) |
-| Vertical blending | `VerticalBlending.kt` | Calibration x intent x boost weight multipliers |
-| Vertical pinning | `Boosting.kt` | `enforceManualSortOrder` enforcement |
+| Inter-carousel entry | `DefaultHomePagePostProcessor.kt` | `reOrderGlobalEntitiesV2()` — incision point |
+| Inter-carousel scoring | `EntityRankerConfiguration.kt` | Calls Sibyl + blending (wrapped by `CarouselRankAllStep`) |
+| Inter-carousel blending | `VerticalBlending.kt` | Calibration x intent x boost weight multipliers |
+| Inter-carousel pinning | `Boosting.kt` | `enforceManualSortOrder` enforcement |
 | Pinned order config | `PinnedCarouselUtil.kt` | Reads `pinned_carousel_ranking_order.json` |
 | Post-ranking fixups | `NonRankableHomepageOrderingUtil.kt` | NV, PAD, gap rules |
 | Blending config | `VerticalBlendingConfig.kt` | Existing blending params |
-| Horizontal entry | `DefaultHomePageStoreRanker.kt` | `rank()` — incision point |
-| Horizontal when-chain | `DefaultHomePageStoreRanker.kt` | `modifyLiteStoreCollection()` |
-| Horizontal scoring | `StoreCollectionScorer.kt` | Sibyl RPC + feature construction |
+| Intra-carousel entry | `DefaultHomePageStoreRanker.kt` | `rank()` — incision point |
+| Intra-carousel when-chain | `DefaultHomePageStoreRanker.kt` | `modifyLiteStoreCollection()` |
+| Intra-carousel scoring | `StoreCollectionScorer.kt` | Sibyl RPC + feature construction |
 | Experiment manager | `DiscoveryExperimentManager.kt` | DV manifest |
 | Pipeline DAG | `DefaultHomePagePipeline.kt` | Job dependency graph |
 
@@ -348,21 +350,27 @@ See `CLAUDE.md` naming conventions table for the full canonical list.
 - [ ] Get sign-off from Yu, Frank, Dipali
 
 **POC (private branch — validates design, not production code)**
-- [x] POC: `Rankable` interface on 9 carousel domain types
-- [x] POC: `RankingStep` + `RankingHandler` + `RankingPipeline` engine + `RANK_ALL` step
+- [x] POC: `Rankable` interface on 9 carousel domain types (POC used stale name `Scorable`)
+- [x] POC: `RankingStep` + `RankingHandler` + `RankingPipeline` engine + `RANK_ALL` step (POC used stale name `Ranker`)
 - [x] POC: Wire engine into `DefaultHomePagePostProcessor.rankContent()` (shadow mode)
 - [x] POC: Shadow validation on sandbox (450 log entries, 99% orderMatch, 0 failures, parallel coroutines confirmed)
-- Branch: `feed-service: feat/vertical-ranking-abstraction-phase1` (uses old naming — will be rewritten post-RFC)
+- Branch: `feed-service: parallel-shadow-ranking` worktree (uses stale naming — will be rewritten to RFC names)
 
-**Phase 1: Carousel rank interfaces (post-RFC approval)**
-- [ ] Implement with correct naming (`CarouselRankStepType`, `CarouselRankAllStep`)
+**Phase 1: Inter-carousel ranking (post-RFC approval)**
+- [ ] Rewrite POC with RFC naming (`Rankable`, `RankingPipeline`, `CarouselRankStepType`, `CarouselRankAllStep`)
 - [ ] Shadow validation on production traffic
-- [ ] Intra-carousel ranking (`IntraCarouselRankStepType`, `IntraCarouselRankAllStep`)
 - [ ] Standardized tracing
 
+**Phase 1.5: Intra-carousel ranking**
+- [ ] `DiscoveryStore` implements `Rankable` (add `predictionScore` field, hydrate from score map)
+- [ ] `IntraCarouselRankStepType { RANK_ALL }`
+- [ ] `IntraCarouselRankAllStep` wrapping `modifyLiteStoreCollection()` dispatch
+- [ ] Wire into `DefaultHomePageStoreRanker.rank()`
+- [ ] Shadow validation
+
 **Phase 2: Granular Steps (decompose RANK_ALL)**
-- [ ] Step 6: Break vertical `RANK_ALL` into `MODEL_SCORING`, `MULTIPLIER_BOOST`, `DIVERSITY_RERANK`, `POSITION_BOOSTING`, `FIXED_PINNING`
-- [ ] Break horizontal `RANK_ALL` into granular steps
+- [ ] Break inter-carousel `RANK_ALL` into `MODEL_SCORING`, `MULTIPLIER_BOOST`, `DIVERSITY_RERANK`, `POSITION_BOOSTING`, `FIXED_PINNING`
+- [ ] Break intra-carousel `RANK_ALL` into `AVAILABILITY_SORT`, `BUSINESS_PRIORITY`, `ML_SCORE`, etc.
 
 **Future: Traffic + Experiments**
 - [ ] Per-layer traffic splitting design + implementation
