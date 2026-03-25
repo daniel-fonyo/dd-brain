@@ -366,6 +366,63 @@ classDiagram
 
 The same interfaces apply to both ranking layers. Each capability below adds step types and implementations; the engine, the interfaces, and the wiring stay unchanged.
 
+The Architecture Overview shows today's state: a single `RANK_ALL` step. Below is the same architecture after step decomposition — same engine, same wiring, only the step list changes:
+
+```mermaid
+flowchart LR
+    subgraph sources["9 Carousel Types"]
+        direction TB
+        T1["StoreCarousel"]
+        T2["ItemCarousel"]
+        T3["DealCarousel"]
+        T4["...6 more"]
+    end
+
+    subgraph convert["toRankableList()"]
+        A["RankableContent → List&lt;Rankable&gt;"]
+    end
+
+    T1 --> A
+    T2 --> A
+    T3 --> A
+    T4 --> A
+
+    subgraph pipeline["RankingPipeline — future state"]
+        direction LR
+        subgraph h1["StepHandler"]
+            S1["MODEL_SCORING"]
+        end
+        subgraph h2["StepHandler"]
+            S2["MULTIPLIER_BOOST"]
+        end
+        subgraph h3["StepHandler"]
+            S3["DIVERSITY_RERANK"]
+        end
+        subgraph h4["StepHandler"]
+            S4["FIXED_PINNING"]
+        end
+        h1 -- "next" --> h2
+        h2 -- "next" --> h3
+        h3 -- "next" --> h4
+    end
+
+    A --> h1
+    h4 --> WB
+
+    subgraph writeback["toRankableContent()"]
+        WB["List&lt;Rankable&gt; → RankableContent"]
+    end
+
+    style sources fill:#fff3f3,stroke:#cc0000
+    style convert fill:#ffffcc,stroke:#aaaa00
+    style pipeline fill:#e6ffe6,stroke:#00aa00
+    style h1 fill:#ccf2cc,stroke:#00aa00
+    style h2 fill:#ccf2cc,stroke:#00aa00
+    style h3 fill:#ccf2cc,stroke:#00aa00
+    style h4 fill:#ccf2cc,stroke:#00aa00
+    style writeback fill:#ffffcc,stroke:#aaaa00
+```
+
 **Intra-carousel (horizontal) ranking.** Store ordering within each carousel today uses a separate ranker with no shared abstraction. `StoreEntity` implements `Rankable`, and a new step type enum (`IntraCarouselRankStepType`) defines the horizontal ranking vocabulary. The engine, handler chain, and step interface are reused identically. Only the step type enum and entry point differ.
 
 **Composable steps via chain of responsibility.** Today the entire ranking pipeline is one monolithic call. Once the interfaces are proven, we decompose `RANK_ALL` into granular steps: `MODEL_SCORING → MULTIPLIER_BOOST → DIVERSITY_RERANK → FIXED_PINNING`. Each step is a `RankingStep` registered by enum key, and the engine dispatches them in order. Adding, removing, or reordering steps is a config change, not a code change.
