@@ -364,23 +364,17 @@ classDiagram
 
 ## Extensibility
 
-The same interfaces apply to both ranking layers. Each capability below adds step types and implementations; the engine, the interfaces, and the wiring stay unchanged.
+This RFC ships `Rankable`, `RankingStep`, `RankingHandler`, `RankingPipeline`, and a single step that preserves existing behavior. The value lies in what these interfaces unlock. Every UBP goal that previously required rearchitecting the pipeline becomes "add a step" or "implement an interface."
 
-**Intra-carousel (horizontal) ranking.** Store ordering within each carousel today uses a separate ranker with no shared abstraction. `StoreEntity` implements `Rankable`, and a new step type enum (`IntraCarouselRankStepType`) defines the horizontal ranking vocabulary. The engine, handler chain, and step interface are reused identically. Only the step type enum and entry point differ.
+**Horizontal ranking.** Store ordering within each carousel today uses a separate ranker with no shared abstraction. With these interfaces, `StoreEntity` implements `Rankable` and a new step type enum (`IntraCarouselRankStepType`) defines the horizontal vocabulary. The engine, handler chain, and step contract are reused identically — two ranking layers, one architecture.
 
-**Composable steps via chain of responsibility.** Today the entire ranking pipeline is one monolithic call. Once the interfaces are proven, we decompose `RANK_ALL` into granular steps: `MODEL_SCORING → MULTIPLIER_BOOST → DIVERSITY_RERANK → FIXED_PINNING`. Each step is a `RankingStep` registered by enum key, and the engine dispatches them in order. Adding, removing, or reordering steps is a config change, not a code change.
+**Experiment velocity.** This is the single biggest bottleneck today: 2-3 weeks and 10-15 files per ranking experiment. Once steps are decomposed, the step list becomes the experiment surface. An MLE swaps a diversity algorithm by registering a different `RankingStep` for that step type. They change step ordering via the assembler. No code deploy, no HP engineer involvement — a config change.
 
-**Config-driven experimentation.** Each step type is an enum value in the step registry. An experiment can swap one step implementation for another (e.g., a new diversity algorithm) by registering a different `RankingStep` for that enum key. The MLE experiment config drives which steps run and in what order, with no code deployment needed for new ranking experiments.
+**Unified value function.** Today, scoring, boosting, and blending are entangled inside one monolithic call. With granular steps, calibration and value weighting become explicit: `CALIBRATION` normalizes scores across content types, `VALUE_FUNCTION` applies `EV(c,k) = pImp(k) × pAct(c) × vAct(c)`. The scoring model becomes legible and tunable rather than buried in legacy code. See Appendix A.
 
-**Cross-cutting concerns injected transparently.** Because `StepHandler` wraps each step, infrastructure concerns (metrics, per-step tracing, latency budgets, circuit-breaking) can be added in one place without modifying any step. Shadow comparison, A/B metrics emission, and timeout enforcement all live at the handler level.
+**Partner self-service.** NV, Ads, and Merch teams today submit ranking changes as cross-team PRs that HP engineers must review, integrate, and test. With `RankingStep`, each team implements and owns their step. HP owns the engine and the registry. The ownership boundary is the step interface, not a shared codebase.
 
-**Per-layer traffic management.** Vertical and horizontal ranking are separate `RankingPipeline<S>` instances with different step type enums. Each layer can be shadow-validated and rolled out independently. Future layers (e.g., ads ranking, cross-page ranking) follow the same pattern: new enum, new steps, same engine.
-
-**Unified value function.** Once steps are decomposed, calibration and value weighting become explicit steps: `CALIBRATION` (normalizes scores across content types) followed by `VALUE_FUNCTION` (applies `EV(c,k) = pImp(k) × pAct(c) × vAct(c)`). The engine is unchanged; just more steps in the chain. See Appendix A.
-
-**Partner self-service.** NV, Ads, and Merch teams implement their own `RankingStep` and HP registers it. Each partner owns their step's logic; HP owns the engine and the step registry. No more cross-team code entanglement.
-
-**New carousel type onboarding.** Implement `Rankable` on one class. No other files change. The pipeline, conversion functions, and all existing steps work automatically.
+**Independent layer rollout.** Vertical and horizontal ranking are separate `RankingPipeline` instances with different step type enums. Each can be shadow-validated and rolled out independently. Future layers (ads ranking, cross-page ranking) follow the same pattern: new enum, new steps, same engine. Risk is always scoped to the layer being changed.
 
 ## Safe Delivery: Shadow → Rollout
 
