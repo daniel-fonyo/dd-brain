@@ -290,30 +290,35 @@ This preserves current behavior exactly while proving the abstractions. The step
 ## Class Diagram
 
 ```mermaid
+---
+config:
+  class:
+    padding: 20
+---
 classDiagram
     direction TB
 
     class Rankable {
         <<interface>>
-        +rankableId(): String
-        +predictionScore: Double?
-        +withPredictionScore(score: Double): Rankable
+        +rankableId() String
+        +predictionScore Double?
+        +withPredictionScore(score) Rankable
     }
 
     class StoreCarousel {
-        +id: String
-        +predictionScore: Double?
-        +withPredictionScore(score): StoreCarousel
+        +id String
+        +predictionScore Double?
+        +withPredictionScore(score) StoreCarousel
     }
     class ItemCarousel {
-        +id: String
-        +predictionScore: Double?
-        +withPredictionScore(score): ItemCarousel
+        +id String
+        +predictionScore Double?
+        +withPredictionScore(score) ItemCarousel
     }
     class DealCarousel {
-        +id: String
-        +predictionScore: Double?
-        +withPredictionScore(score): DealCarousel
+        +id String
+        +predictionScore Double?
+        +withPredictionScore(score) DealCarousel
     }
 
     Rankable <|.. StoreCarousel
@@ -323,8 +328,8 @@ classDiagram
 
     class RankingStep~S~ {
         <<interface>>
-        +stepType: S
-        +execute(items, context): List~Rankable~
+        +stepType S
+        +execute(items, ctx) List~Rankable~
     }
 
     class CarouselRankStepType {
@@ -333,8 +338,8 @@ classDiagram
     }
 
     class CarouselRankAllStep {
-        -rankerConfiguration: RankerConfiguration
-        +execute(items, context): List~Rankable~
+        -rankerConfig RankerConfiguration
+        +execute(items, ctx) List~Rankable~
     }
 
     RankingStep <|.. CarouselRankAllStep
@@ -342,20 +347,20 @@ classDiagram
 
     class RankingHandler {
         <<fun interface>>
-        +handle(items, context): List~Rankable~
+        +handle(items, ctx) List~Rankable~
     }
 
     class StepHandler~S~ {
-        -step: RankingStep~S~
-        -next: RankingHandler?
+        -step RankingStep~S~
+        -next RankingHandler?
     }
 
     RankingHandler <|.. StepHandler
     StepHandler --> RankingStep : wraps
 
     class RankingPipeline~S~ {
-        -stepRegistry: Map~S, RankingStep~
-        +rank(items, stepTypes, context): List~Rankable~
+        -stepRegistry Map~S to RankingStep~
+        +rank(items, steps, ctx) List~Rankable~
     }
 
     RankingPipeline --> RankingHandler : builds chain of
