@@ -65,6 +65,21 @@ STORE_PREDICTION_SCORE(STORE_PREDICTION_SCORE_KEY, { b, v ->
 - `libraries/domain-util/.../iguazu/ContainerEventsGenerator.kt`
 - `libraries/domain-util/.../facets/LoggingConstants.kt` (STORE_PREDICTION_SCORE_KEY = "store_prediction_score", line 75)
 
+## Snowflake Column Read Cost: Array vs Map
+
+The existing `SCORE_MODIFIERS` column is a VARIANT containing a JSON **array** of `{name, value}` objects (from proto `repeated ScoreModifier`). Querying a specific modifier requires `LATERAL FLATTEN` — this explodes each row into N rows (one per array element), then filters. On a massive table like `cx_cross_vertical_homepage_feed`, this is expensive and has been flagged by stakeholders as a concern.
+
+A proto `map<string, double>` serializes as a JSON **object** and lands in Snowflake as a VARIANT. Keys are directly addressable:
+```sql
+-- Array (FLATTEN required, expensive):
+SELECT f.value:value::DOUBLE FROM table, LATERAL FLATTEN(input => SCORE_MODIFIERS) f WHERE f.value:name = 'key'
+
+-- Map (direct access, same cost as scalar column):
+SELECT STORE_RANKING_METRICS:key_name::DOUBLE FROM table
+```
+
+This is why `store_ranking_metrics` uses `map<string, double>` — direct key access, no flatten, no row multiplication. The existing `score_modifiers` array stays untouched (consumed by prod ML jobs).
+
 ## Related
 - `brain/genai-reranker-logging/` — PR #62113 adds embeddingScore + alpha/beta logging
 - With alpha, beta, finalScore, and embeddingScore all logged, combinedScore can be **recomputed** from Snowflake. But logging it directly would simplify analysis and avoid floating-point discrepancies.
