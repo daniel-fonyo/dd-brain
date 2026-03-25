@@ -124,6 +124,15 @@ Note: `putStoreRankingMetrics` is the generated method for proto `map<string, do
 ./gradlew :libraries:domain-util:test --tests "*ContainerEventsGeneratorTest*"
 ```
 
+## TODO: Verify Snowflake Column Creation
+After merging the proto change, verify how the new `store_ranking_metrics` map field surfaces in Snowflake:
+- Does Iguazu auto-create a `STORE_RANKING_METRICS` VARIANT column on the `cx_cross_vertical_homepage_feed` table?
+- Or does it require a manual schema migration / Iguazu config change / topic registration?
+- Confirm the `map<string, double>` proto type lands as a JSON object (not array) in the VARIANT column.
+- Test `:` key access works: `STORE_RANKING_METRICS:some_key::DOUBLE`
+
+This must be answered before Plan 2 can be validated end-to-end in Snowflake.
+
 ## PR
 - Title: `Add store_ranking_metrics pipeline for per-store Iguazu logging`
 - Description: Adds `StoreEntity.scoreModifiers` map with automatic forwarding to a new `store_ranking_metrics` proto map field. Queryable in Snowflake as `STORE_RANKING_METRICS:key::DOUBLE` without FLATTEN. Existing `score_modifiers` is untouched.
