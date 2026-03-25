@@ -87,6 +87,76 @@ Pipeline: [CANDIDATE_MERGE] → [CALIBRATION] → [VALUE_FUNCTION] → [AD_AUCTI
 Input: List<Scorable>  (organic + ad candidates on same interface)
 ```
 
+### Pipeline Diagram — Unified Ads + Organic Ranking
+
+```mermaid
+flowchart LR
+    subgraph sources["Candidate Sources"]
+        direction TB
+        O["Organic Carousels/Stores\n(9 types via Scorable)"]
+        AD["Ad Candidates\n(from ICP Auction/Retrieval)"]
+    end
+
+    subgraph pipeline["RankingPipeline — with Ads Support"]
+        direction LR
+        subgraph h1["StepHandler"]
+            S1["CANDIDATE_MERGE\n─────────────\nPool organic + ads\ninto one List‹Scorable›"]
+        end
+        subgraph h2["StepHandler"]
+            S2["MODEL_SCORING\n─────────────\nSibyl pAct for organic\nAds model pCTR for ads"]
+        end
+        subgraph h3["StepHandler"]
+            S3["CALIBRATION\n─────────────\nNormalize organic &\nads pAct to common\nprobability scale"]
+        end
+        subgraph h4["StepHandler"]
+            S4["VALUE_FUNCTION\n─────────────\nEV = pAct × vAct\nOrganic: GOV/FIV/strategic\nAds: bid amount"]
+        end
+        subgraph h5["StepHandler"]
+            S5["AD_AUCTION\n─────────────\nGSP pricing: winner\npays min to hold position\nLog opportunity cost"]
+        end
+        subgraph h6["StepHandler"]
+            S6["CONSTRAINT_ENFORCEMENT\n─────────────\nAd load caps, quality\nfloors, pacing, ghost\nads, min-organic"]
+        end
+        subgraph h7["StepHandler"]
+            S7["DIVERSITY_RERANK\n─────────────\nContent type mix,\nadvertiser diversity"]
+        end
+        subgraph h8["StepHandler"]
+            S8["FIXED_PINNING\n─────────────\nBusiness-rule\nposition overrides"]
+        end
+        h1 -- "next" --> h2
+        h2 -- "next" --> h3
+        h3 -- "next" --> h4
+        h4 -- "next" --> h5
+        h5 -- "next" --> h6
+        h6 -- "next" --> h7
+        h7 -- "next" --> h8
+    end
+
+    O --> h1
+    AD --> h1
+    h8 --> OUT
+
+    subgraph output["Output"]
+        OUT["Ranked List‹Scorable›\nAds + organic interleaved\nby EV, subject to constraints"]
+    end
+
+    style sources fill:#fff3f3,stroke:#cc0000
+    style pipeline fill:#e6f0ff,stroke:#0055cc
+    style h1 fill:#ffe6cc,stroke:#cc6600
+    style h2 fill:#cce0ff,stroke:#0055cc
+    style h3 fill:#e6ffe6,stroke:#00aa00
+    style h4 fill:#e6ffe6,stroke:#00aa00
+    style h5 fill:#ffe6cc,stroke:#cc6600
+    style h6 fill:#ffe6cc,stroke:#cc6600
+    style h7 fill:#cce0ff,stroke:#0055cc
+    style h8 fill:#cce0ff,stroke:#0055cc
+    style output fill:#ffffcc,stroke:#aaaa00
+```
+
+**Color key:** Blue = existing organic steps. Green = calibration/value (shared infra). Orange = ads-specific steps.
+
+The engine is identical to the organic-only pipeline — same `RankingPipeline<S>`, same `StepHandler` chain, same `Scorable` interface. Only the step list grows.
+
 ### New Step Types for Ads
 
 | Step | What It Does | Industry Pattern |
