@@ -18,7 +18,19 @@
       "WebFetch(domain:karishma-agr1996.medium.com)",
       "WebFetch(domain:refactoring.guru)",
       "WebSearch",
-      "WebFetch(domain:cybertron-service-gateway.doordash.team)"
+      "WebFetch(domain:cybertron-service-gateway.doordash.team)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:pypi.org)",
+      "WebFetch(domain:ddartifacts.jfrog.io)",
+      "WebFetch(domain:gist.github.com)",
+      "WebFetch(domain:cmux.com)",
+      "WebFetch(domain:www.bitdoze.com)",
+      "WebFetch(domain:registry.npmjs.org)",
+      "WebFetch(domain:npm.im)",
+      "WebFetch(domain:www.npmjs.com)",
+      "mcp__snowflake__run_snowflake_query",
+      "mcp__snowflake__describe_object",
+      "WebFetch(domain:buildkite.com)"
     ]
   },
   "sandbox": {
