@@ -393,21 +393,29 @@ flowchart LR
             S1["MODEL_SCORING"]
         end
         subgraph h2["StepHandler"]
-            S2["MULTIPLIER_BOOST"]
+            S2["CALIBRATION"]
         end
         subgraph h3["StepHandler"]
-            S3["DIVERSITY_RERANK"]
+            S3["VALUE_FUNCTION"]
         end
         subgraph h4["StepHandler"]
-            S4["FIXED_PINNING"]
+            S4["MULTIPLIER_BOOST"]
+        end
+        subgraph h5["StepHandler"]
+            S5["DIVERSITY_RERANK"]
+        end
+        subgraph h6["StepHandler"]
+            S6["FIXED_PINNING"]
         end
         h1 -- "next" --> h2
         h2 -- "next" --> h3
         h3 -- "next" --> h4
+        h4 -- "next" --> h5
+        h5 -- "next" --> h6
     end
 
     A --> h1
-    h4 --> WB
+    h6 --> WB
 
     subgraph writeback["toRankableContent()"]
         WB["List&lt;Rankable&gt; → RankableContent"]
@@ -420,6 +428,8 @@ flowchart LR
     style h2 fill:#ccf2cc,stroke:#00aa00
     style h3 fill:#ccf2cc,stroke:#00aa00
     style h4 fill:#ccf2cc,stroke:#00aa00
+    style h5 fill:#ccf2cc,stroke:#00aa00
+    style h6 fill:#ccf2cc,stroke:#00aa00
     style writeback fill:#ffffcc,stroke:#aaaa00
 ```
 
