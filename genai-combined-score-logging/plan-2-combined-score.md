@@ -1,11 +1,11 @@
-# Plan 2: Log genai_combined_score via Score Modifier Pipeline
+# Plan 2: Log GenAI Combined Score via Store Ranking Metrics
 
 **Date**: 2026-03-25
 **Depends on**: Plan 1 (infrastructure)
 
 ## Goal
 
-Log `combinedScore` (`finalScore^alpha * similarity^beta`) to Snowflake `SCORE_MODIFIERS` column as `genai_combined_score`. Uses the generic `scoreModifiers` pipeline from Plan 1.
+Log `combinedScore` (`finalScore^alpha * similarity^beta`) to the new Snowflake `STORE_RANKING_METRICS` column as `genai_combined_score`. Uses the generic pipeline from Plan 1.
 
 ## Files to Modify (3 production + tests)
 
@@ -66,6 +66,20 @@ scoreModifiers = listOfNotNull(
 
 This is the only code needed — the adapter and event generator handle it automatically via Plan 1's generic loop.
 
+## Snowflake Query
+
+After deploy, query the new column directly:
+```sql
+SELECT
+    STORE_RANKING_METRICS:genai_combined_score::DOUBLE AS genai_combined_score,
+    STORE_ID,
+    FACET_NAME
+FROM IGUAZU.SERVER_EVENTS_PRODUCTION.CX_CROSS_VERTICAL_HOMEPAGE_FEED
+WHERE IGUAZU_PARTITION_DATE = CURRENT_DATE()
+  AND IGUAZU_PARTITION_HOUR = HOUR(CURRENT_TIMESTAMP())
+  AND STORE_RANKING_METRICS:genai_combined_score IS NOT NULL
+```
+
 ## Unit Tests
 
 ### GeneratedRecommendationCarouselServiceTest
@@ -83,8 +97,8 @@ This is the only code needed — the adapter and event generator handle it autom
 ## Sandbox Verification
 - `/sandbox-setup` → deploy local code (Plan 1 + Plan 2)
 - `/sandbox-test` → load homepage, trigger GenAI carousels
-- `/validate-iguazu` → query Snowflake for `genai_combined_score` in `SCORE_MODIFIERS`
+- `/validate-iguazu` → query Snowflake for `genai_combined_score` in `STORE_RANKING_METRICS`
 
 ## PR
-- Title: `Log genai_combined_score to Iguazu score modifiers`
-- Description: Adds `combinedScore` to `GeneratedRecommendationStoreInfo`, computes it during reranking, and populates `StoreEntity.scoreModifiers`. Automatically emitted to Snowflake via the generic score modifier pipeline.
+- Title: `Log genai_combined_score to store_ranking_metrics`
+- Description: Adds `combinedScore` to `GeneratedRecommendationStoreInfo`, computes it during reranking, and populates `StoreEntity.scoreModifiers`. Automatically emitted to Snowflake `STORE_RANKING_METRICS` column via the generic pipeline.
