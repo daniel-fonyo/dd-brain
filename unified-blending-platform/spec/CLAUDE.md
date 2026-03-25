@@ -29,12 +29,14 @@ The RFC (`rfc-abstraction-layer.md`) defines canonical names. The POC branch (`p
 | Engine | `RankingPipeline<S : Enum<S>>` | `Ranker<S>` |
 | Inter-carousel step type | `CarouselRankStepType { RANK_ALL }` | `VerticalStepType { RANK_ALL }` |
 | Inter-carousel RANK_ALL step | `CarouselRankAllStep` | `VerticalRankAllStep` |
-| Intra-carousel step type | `IntraCarouselRankStepType { RANK_ALL }` | (not implemented yet) |
 | Conversion functions | `toRankableList()` / `toRankableContent()` | `toScorableList()` / `toRankableContent()` |
+
+## Scope
+
+**This RFC covers inter-carousel ranking only.** Intra-carousel ranking (`IntraCarouselRankStepType`, `DiscoveryStore` as `Rankable`) is future work pending Phase 1 results.
 
 ## Current Status
 
 - **Phase 1 inter-carousel: POC validated** — shadow mode on sandbox, 99% match
 - **Next: rename POC to RFC names, then production shadow validation**
-- **Next: Phase 1.5 intra-carousel** — `DiscoveryStore` implements `Rankable`, `IntraCarouselRankAllStep`
 - See `plan.md` in parent directory for full progress tracker

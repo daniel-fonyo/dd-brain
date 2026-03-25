@@ -25,11 +25,13 @@ The homepage ranking pipeline has grown organically over years. Ranking logic is
 
 The Unified Blending Platform (UBP) is DoorDash's long-term vision for homepage ranking: a single, config-driven system where ranking is composed of discrete, testable steps operating on a uniform data type. In the northstar state, MLEs configure ranking experiments by swapping step implementations without code deploys. New content types plug in by implementing one interface. Whole-page optimization, partner self-service, and ads blending become possible because every content type speaks the same language and every ranking stage has a clean contract.
 
-Getting there is a multi-step journey. This RFC addresses the first and most foundational piece: defining the interfaces and abstractions that everything else builds on. We propose three concepts, applicable to both inter-carousel (vertical) and intra-carousel (horizontal) ranking:
+Getting there is a multi-step journey. This RFC addresses the first and most foundational piece: defining the interfaces and abstractions for **inter-carousel ranking** — the layer that decides which carousel goes in which vertical slot on the page. We prove the abstractions on this one layer first. If they work, they extend naturally to intra-carousel ranking (store ordering within a carousel) and future layers. If they don't, we learn and adapt before committing further.
 
-- **A shared interface for ranked content.** Domain types implement this directly. No wrapper classes, no adapters. The fields the ranking pipeline needs already exist on these types; we formalize them into a compile-time contract.
+We propose three concepts:
+
+- **A shared interface for ranked content.** Nine carousel types go through the same ranking flow today, but each is wrapped in a bespoke adapter class (`RankingCandidate`, `BoostingCandidate`) just to give them a common shape. This is the classic "Replace Type Code with State/Strategy" code smell (Fowler, *Refactoring*): sealed class subtypes acting as type codes, with `when`-blocks scattered across 7 files. `Rankable` replaces these type codes with polymorphic dispatch. Domain types implement the interface directly — no wrapper classes, no adapters. The fields the ranking pipeline needs already exist on these types; we formalize them into a compile-time contract.
 - **A contract for ranking logic.** Each ranking operation becomes a self-contained step with a clear signature: items in, items out. Steps are identified by type, independently testable, and swappable.
-- **A composable ranking engine.** The engine assembles steps into a pipeline and executes them in sequence. The step list is assembled at request time, not hardwired in the pipeline. This composability makes it straightforward to add, remove, or reorder ranking steps, increasing feature velocity for ranking and blending changes. It also opens the door to config-driven experimentation and higher-velocity MLE iteration. The same engine serves both vertical and horizontal ranking, differing only in which steps it runs.
+- **A composable ranking engine.** The engine assembles steps into a pipeline and executes them in sequence. The step list is assembled at request time, not hardwired in the pipeline. This composability makes it straightforward to add, remove, or reorder ranking steps, increasing feature velocity for ranking and blending changes. It also opens the door to config-driven experimentation and higher-velocity MLE iteration.
 
 These don't change any ranking behavior. They formalize existing conventions into compile-time contracts so that everything UBP needs can be built on top without rearchitecting.
 
@@ -76,6 +78,7 @@ There are zero tests covering end-to-end ranking behavior. Changes are "edit and
 - **Self-service MLE experiments.** Future work built on these interfaces.
 - **Unified value function.** Future work, requires calibration infrastructure.
 - **Ads blending.** Requires shared scoring scale across content types.
+- **Intra-carousel (horizontal) ranking.** Store ordering within carousels. Future work pending Phase 1 results.
 - **Granular step decomposition.** Decomposing into `MODEL_SCORING`, `DIVERSITY_RERANK`, etc. is future work once the interfaces are proven.
 
 ---
@@ -216,7 +219,7 @@ interface RankingStep<S : Enum<S>> {
 }
 ```
 
-The generic `S` lets different ranking layers (vertical, horizontal) define their own step type taxonomy. `RankingContext` is the existing sdk-dex object that carries request metadata, user context, feature flags, and experiment assignments.
+The generic `S` parameterizes step types so different ranking layers can define their own taxonomy. For inter-carousel ranking, `S` is `CarouselRankStepType`. `RankingContext` is the existing sdk-dex object that carries request metadata, user context, feature flags, and experiment assignments.
 
 Initially, all existing logic lives inside a single step type (`RANK_ALL`), preserving current behavior while proving the interfaces:
 
@@ -369,7 +372,7 @@ classDiagram
 
 ## Extensibility
 
-The same interfaces apply to both ranking layers. Each capability below adds step types and implementations; the engine, the interfaces, and the wiring stay unchanged.
+This RFC targets inter-carousel ranking. The interfaces are designed to extend to other ranking layers (e.g., intra-carousel store ordering), but that is future work pending Phase 1 results. Each capability below adds step types and implementations; the engine, the interfaces, and the wiring stay unchanged.
 
 The Architecture Overview shows today's state: a single `RANK_ALL` step. Below is the same architecture after step decomposition — same engine, same wiring, only the step list changes:
 
@@ -438,21 +441,21 @@ flowchart LR
     style writeback fill:#ffffcc,stroke:#aaaa00
 ```
 
-**Intra-carousel (horizontal) ranking.** Store ordering within each carousel today uses a separate ranker with no shared abstraction. `StoreEntity` implements `Rankable`, and a new step type enum (`IntraCarouselRankStepType`) defines the horizontal ranking vocabulary. The engine, handler chain, and step interface are reused identically. Only the step type enum and entry point differ.
-
 **Composable steps via chain of responsibility.** Today the entire ranking pipeline is one monolithic call. Once the interfaces are proven, we decompose `RANK_ALL` into granular steps: `MODEL_SCORING → MULTIPLIER_BOOST → DIVERSITY_RERANK → FIXED_PINNING`. Each step is a `RankingStep` registered by enum key, and the engine dispatches them in order. Adding, removing, or reordering steps is a config change, not a code change.
 
 **Config-driven experimentation.** Each step type is an enum value in the step registry. An experiment can swap one step implementation for another (e.g., a new diversity algorithm) by registering a different `RankingStep` for that enum key. The MLE experiment config drives which steps run and in what order, with no code deployment needed for new ranking experiments.
 
 **Cross-cutting concerns injected transparently.** Because `StepHandler` wraps each step, infrastructure concerns (metrics, per-step tracing, latency budgets, circuit-breaking) can be added in one place without modifying any step. Shadow comparison, A/B metrics emission, and timeout enforcement all live at the handler level.
 
-**Per-layer traffic management.** Vertical and horizontal ranking are separate `RankingPipeline<S>` instances with different step type enums. Each layer can be shadow-validated and rolled out independently. Future layers (e.g., ads ranking, cross-page ranking) follow the same pattern: new enum, new steps, same engine.
+**Per-layer traffic management.** Because `RankingPipeline<S>` is parameterized by step type, future ranking layers (intra-carousel, ads, cross-page) can be separate pipeline instances shadow-validated and rolled out independently. New layer = new enum, new steps, same engine.
 
 **Unified value function.** Once steps are decomposed, calibration and value weighting become explicit steps: `CALIBRATION` (normalizes scores across content types) followed by `VALUE_FUNCTION` (applies `EV(c,k) = pImp(k) × pAct(c) × vAct(c)`). The engine is unchanged; just more steps in the chain. See Appendix A.
 
 **Partner self-service.** NV, Ads, and Merch teams implement their own `RankingStep` and HP registers it. Each partner owns their step's logic; HP owns the engine and the step registry. No more cross-team code entanglement.
 
 **New carousel type onboarding.** Implement `Rankable` on one class. No other files change. The pipeline, conversion functions, and all existing steps work automatically.
+
+**Intra-carousel (horizontal) ranking (future).** Store ordering within each carousel today uses a separate ranker with no shared abstraction. If the inter-carousel abstractions prove out, `DiscoveryStore` implements `Rankable`, a new `IntraCarouselRankStepType` enum defines the step vocabulary, and the same engine/handler/step infrastructure applies. This is future work — we prove the pattern on one layer first.
 
 ## Safe Delivery: Shadow → Rollout
 
@@ -470,8 +473,7 @@ After both paths complete, we compare ranking output ordering and latency. Both 
 
 **Mitigations:**
 1. Shadow at a low sample rate (1-5%) to cap network overhead proportionally.
-2. Validate vertical and horizontal layers separately, never both simultaneously.
-3. Shadow is temporary. Once divergence reaches zero sustained, rollout replaces shadow and duplication drops to zero.
+2. Shadow is temporary. Once divergence reaches zero sustained, rollout replaces shadow and duplication drops to zero.
 
 > **TODO:** Determine current Sibyl QPS baseline to calculate the maximum safe shadow sample rate.
 

@@ -121,7 +121,6 @@ All agree: code is messy, no abstraction layer, adding anything requires deep HP
 | Handler | `RankingHandler` | `fun interface` — infrastructure wrapper (metrics, conditions, shadow). Chain of Responsibility pattern. |
 | Engine | `RankingPipeline<S : Enum<S>>` | Assembles handler chain from step registry, executes via `foldRight`. Zero business logic. |
 | Carousel rank step enum | `CarouselRankStepType` | Inter-carousel ranking. Phase 1: `RANK_ALL`. Phase 2: `MODEL_SCORING`, `MULTIPLIER_BOOST`, `DIVERSITY_RERANK`, `POSITION_BOOSTING`, `FIXED_PINNING`. |
-| Intra-carousel rank step enum | `IntraCarouselRankStepType` | Within-carousel store ranking. Phase 1: `RANK_ALL`. Phase 2: granular steps TBD. |
 
 **Why not "Vertical/Horizontal"?** "Vertical" is overloaded with business verticals (grocery, convenience landing pages). `CarouselRank` / `IntraCarouselRank` removes ambiguity.
 
@@ -167,16 +166,14 @@ boost allow list + DV                 →  boostByPositionCarouselIdAllowList + 
 **What to build:**
 - `interface Rankable { fun rankableId(): String; val predictionScore: Double?; fun withPredictionScore(score: Double): Rankable }`
 - Add `Rankable` to all 9 inter-carousel types: `StoreCarousel`, `ItemCarousel`, `DealCarousel`, `StoreCollection`, `CollectionV2`, `ItemCollection`, `MapCarousel`, `ReelsCarousel`, `StoreEntity`
-- Add `Rankable` to intra-carousel types: `DiscoveryStore`, `ItemStoreEntity`, `DealStoreEntity`
 - Each type: add `override` to existing fields + one-line `withPredictionScore` via `copy()`
 
 **Key files:**
 - New: `libraries/platform/.../models/Rankable.kt`
-- Modified: 12 existing data classes (add `: Rankable` + `override` + `withPredictionScore`)
+- Modified: 9 existing data classes (add `: Rankable` + `override` + `withPredictionScore`)
 
 **Open question:** `LiteStoreCollection` has no `predictionScore` field (uses maps). Add field? Exclude?
 **Open question:** `StoreEntity` has `id: Long`. `rankableId()` returns `String`. Use `toString()`.
-**Open question:** `DiscoveryStore` has no `predictionScore` field — score lives in `LiteStoreCollection.storePredictionScoresMap`. Add field with `= null` default, hydrate from map before ranking.
 
 **Why first:** Pure seam extraction. Zero behavior change. Compile-time enforcement of existing convention.
 
@@ -192,14 +189,11 @@ boost allow list + DV                 →  boostByPositionCarouselIdAllowList + 
 - `class StepHandler<S>(step, next)` — wraps step + chains to next handler
 - `class RankingPipeline<S : Enum<S>>` — assembles chain from step registry, executes
 - `CarouselRankAllStep` — wraps entire `RankerConfiguration.rank()`
-- `IntraCarouselRankAllStep` — wraps entire `modifyLiteStoreCollection()` dispatch
 
 **Key files:**
 - New: `libraries/common/.../ubp/RankingEngine.kt` (RankingStep, RankingHandler, StepHandler, RankingPipeline)
 - New: `libraries/common/.../ubp/CarouselRankStepType.kt`
 - New: `libraries/common/.../ubp/CarouselRankAllStep.kt`
-- New: `libraries/common/.../ubp/IntraCarouselRankStepType.kt`
-- New: `libraries/common/.../ubp/IntraCarouselRankAllStep.kt`
 
 **Why second:** Consumes `Rankable` (depends on Step 1). Wraps legacy — no behavior change.
 
@@ -209,17 +203,14 @@ boost allow list + DV                 →  boostByPositionCarouselIdAllowList + 
 
 **Goal:** Route requests through `RankingPipeline<CarouselRankStepType>` using `RANK_ALL`. Zero impact — same behavior, new path.
 
-**Inter-carousel incision:** inside `reOrderGlobalEntitiesV2()`, before `rankAndDedupeContent()`:
+**Incision point:** inside `reOrderGlobalEntitiesV2()`, before `rankAndDedupeContent()`:
 ```kotlin
 val items = content.toRankableList()
 val ranked = carouselRankingPipeline.rank(items, listOf(CarouselRankStepType.RANK_ALL), ctx)
 ```
 
-**Intra-carousel incision:** inside `DefaultHomePageStoreRanker.rank()`, wrapping `modifyLiteStoreCollection()`.
-
 **Key files:**
 - `pipelines/homepage/.../DefaultHomePagePostProcessor.kt`
-- `pipelines/homepage/.../DefaultHomePageStoreRanker.kt`
 
 ---
 
@@ -319,9 +310,6 @@ After UBP: implement `Rankable` on one class, done.
 | Pinned order config | `PinnedCarouselUtil.kt` | Reads `pinned_carousel_ranking_order.json` |
 | Post-ranking fixups | `NonRankableHomepageOrderingUtil.kt` | NV, PAD, gap rules |
 | Blending config | `VerticalBlendingConfig.kt` | Existing blending params |
-| Intra-carousel entry | `DefaultHomePageStoreRanker.kt` | `rank()` — incision point |
-| Intra-carousel when-chain | `DefaultHomePageStoreRanker.kt` | `modifyLiteStoreCollection()` |
-| Intra-carousel scoring | `StoreCollectionScorer.kt` | Sibyl RPC + feature construction |
 | Experiment manager | `DiscoveryExperimentManager.kt` | DV manifest |
 | Pipeline DAG | `DefaultHomePagePipeline.kt` | Job dependency graph |
 
@@ -336,7 +324,6 @@ Resolved naming collisions with existing monorepo types:
 | `Rankable` | `Scorable` | sdk-core's `Scorable` (ML feature extraction interface) |
 | `RankingPipeline` | `Ranker` | sdk-p13n's `abstract class Ranker` |
 | `CarouselRankStepType` | `VerticalStepType` | "vertical" overloaded with business verticals |
-| `IntraCarouselRankStepType` | `HorizontalStepType` | clarity over brevity |
 
 See `CLAUDE.md` naming conventions table for the full canonical list.
 
@@ -361,7 +348,8 @@ See `CLAUDE.md` naming conventions table for the full canonical list.
 - [ ] Shadow validation on production traffic
 - [ ] Standardized tracing
 
-**Phase 1.5: Intra-carousel ranking**
+**Phase 1.5: Intra-carousel ranking (future — pending Phase 1 results)**
+- [ ] Validate that inter-carousel abstractions extend cleanly to intra-carousel
 - [ ] `DiscoveryStore` implements `Rankable` (add `predictionScore` field, hydrate from score map)
 - [ ] `IntraCarouselRankStepType { RANK_ALL }`
 - [ ] `IntraCarouselRankAllStep` wrapping `modifyLiteStoreCollection()` dispatch

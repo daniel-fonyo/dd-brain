@@ -21,9 +21,10 @@ Design a unified blending platform for the feed-service homepage pipeline.
 | `RankingHandler` | Infrastructure wrapper (fun interface) | — |
 | `toRankableList()` / `toRankableContent()` | Bridge functions between `RankableContent` and `List<Rankable>` | — |
 | `CarouselRankStepType` | Step type enum for inter-carousel ranking | NOT "vertical" (avoids business-vertical confusion) |
-| `IntraCarouselRankStepType` | Step type enum for within-carousel store ranking | NOT "horizontal" (clarity over brevity) |
 
-**Why not "Vertical/Horizontal"?** "Vertical" is overloaded — it means both "ranking carousels on the page" and "business vertical" (grocery, convenience, etc. landing pages). `CarouselRank` / `IntraCarouselRank` removes ambiguity. Shipped code currently uses `VerticalStepType` / `VerticalRankAllStep` — renaming to align with RFC.
+**Why not "Vertical"?** "Vertical" is overloaded — it means both "ranking carousels on the page" and "business vertical" (grocery, convenience, etc. landing pages). `CarouselRank` removes ambiguity. Shipped code currently uses `VerticalStepType` / `VerticalRankAllStep` — renaming to align with RFC.
+
+**Scope:** This RFC covers inter-carousel ranking only. Intra-carousel ranking (`IntraCarouselRankStepType`, `DiscoveryStore` as `Rankable`) is future work pending Phase 1 results.
 
 ## Context Files
 - `plan.md` — current plan and progress tracker
