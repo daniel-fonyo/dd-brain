@@ -1,13 +1,22 @@
-# Fix Feed-Service Logging
+# Fix Feed-Service Logging — Investigation Context
 
-## Goal
-Design and implement proper logging for the feed-service homepage pipeline:
-1. Define a Snowflake table schema (`CX_HOMEPAGE_STORE_LOADS`) that captures one row per store loaded on a `getHomepageFeed` request
-2. Extend the existing Iguazu event (`cx_home_page_feed` / `HomePageFeedEvent`) with missing fields
-3. Update `LegacyHomePageIguazuEventUtil` to populate those fields
+## What This Directory Is
+
+Investigation and impact analysis of the store carousel Iguazu events regression (Jan 21 – Mar 10, 2026). ~32B events lost over 49 days due to a broken facet ID format in the Andromeda code path.
+
+## Context Files
+
+- `context/Store Carousel Iguazu Events Regression.md` — Full regression doc: what happened, why, how it was fixed, DV timeline, daily breakdown
+- `context/impact-report.md` — CX user impact analysis: before/after, treatment/control, CTR-based GOV estimation, findings (no measurable CX impact detected)
+- `context/order-impact-analysis.md` — SQL queries (1–7) for measuring order rate, CTR, and GOV impact
+- `context/impact-analysis-segments.md` — Stable DV windows per platform for clean comparisons
+- `context/discovery-data-sources.md` — Snowflake table reference: server events, client events, join keys, business vertical IDs
 
 ## Key Files in feed-service
-- Proto: `services/feed-service/build/extracted-include-protos/main/feed_service/events.proto` — `HomePageFeedEvent`
-- Event generator: `libraries/domain-util/src/main/kotlin/com/doordash/consumer/feed/domainUtil/iguazu/LegacyHomePageIguazuEventUtil.kt`
-- Emit point: `pipelines/homepage/src/main/kotlin/com/doordash/consumer/pipelines/homepage/DefaultHomePageResponseSerializer.kt`
-- Iguazu infrastructure: `libraries/platform/src/main/kotlin/com/doordash/consumer/feed/platform/iguazu/IguazuModule.kt`
+
+- Event generator: `libraries/domain-util/src/main/kotlin/com/doordash/consumer/feed/domainUtil/iguazu/IguazuEventUtil.kt`
+- Emit point (realtime): `libraries/domain-util/src/main/kotlin/com/doordash/consumer/feed/domainUtil/serializer/SerializerHelperUtil.kt`
+- Emit point (legacy): `pipelines/homepage/src/main/kotlin/com/doordash/consumer/pipelines/homepage/DefaultHomePageResponseSerializer.kt`
+- Proto: `build/extracted-include-protos/main/feed_service/events.proto` — `HomePageFeedEvent`, `CrossVerticalHomePageFeedEvent`
+- Iguazu infra: `libraries/platform/src/main/kotlin/com/doordash/consumer/feed/platform/iguazu/IguazuModule.kt`
+- Fix PR: https://github.com/doordash/feed-service/pull/60973
