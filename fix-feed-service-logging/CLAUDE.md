@@ -11,6 +11,7 @@ Investigation and impact analysis of the store carousel Iguazu events regression
 - `context/order-impact-analysis.md` — SQL queries (1–7) for measuring order rate, CTR, and GOV impact
 - `context/impact-analysis-segments.md` — Stable DV windows per platform for clean comparisons
 - `context/discovery-data-sources.md` — Snowflake table reference: server events, client events, join keys, business vertical IDs
+- `context/gap-analysis-plan.md` — Next steps: 3-layer validation plan (facet matching, event generation, field completeness)
 
 ## Key Files in feed-service
 
@@ -20,3 +21,5 @@ Investigation and impact analysis of the store carousel Iguazu events regression
 - Proto: `build/extracted-include-protos/main/feed_service/events.proto` — `HomePageFeedEvent`, `CrossVerticalHomePageFeedEvent`
 - Iguazu infra: `libraries/platform/src/main/kotlin/com/doordash/consumer/feed/platform/iguazu/IguazuModule.kt`
 - Fix PR: https://github.com/doordash/feed-service/pull/60973
+- FDM logging fix PR: https://github.com/doordash/feed-service/pull/61283
+- Coverage analysis PR: https://github.com/doordash/feed-service/pull/61377
