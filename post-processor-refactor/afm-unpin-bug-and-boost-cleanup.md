@@ -60,17 +60,53 @@ return primaryVerticalIds?.isNotEmpty() == true
 
 Fixes AFM. Breaks again for the next Rx-like vertical with a non-1 ID.
 
-### Option 2 — Allowlist protects against unpin (hours)
+### Option 2 — Allowlist protects against unpin (hours, recommended)
 
-Wire the existing `boostByPositionAllowList` into the unpin filter:
+**The idea:** Wire the existing `boostByPositionAllowList` (already in scope at L90) into the unpin filter at L139, so carousels explicitly configured for boosting are protected from unpinning.
+
+**The code change** — one `&&` condition added to `Boosting.kt` L139:
 
 ```kotlin
+// Today (L139)
+val eligiblePairs = toBoostPairs.filter { pair ->
+    isEligibleForUnpin(pair.second)
+}
+
+// Option 2
 val eligiblePairs = toBoostPairs.filter { pair ->
     isEligibleForUnpin(pair.second) && pair.second.id() !in boostByPositionAllowList
 }
 ```
 
-Logic becomes: "unpin NV carousels UNLESS they were explicitly configured for boosting." Fixes AFM and any future carousel in the allowlist. No new config needed — just wires up what's already there.
+**Key terminology:**
+- **Boosting** = the 4-pass algorithm in `Boosting.kt` that takes pinned positions as inputs and fills remaining slots with ML-score-ordered entities. It's the mechanism that honors pins.
+- **Pinning** = a carousel with `enforceManualSortOrder = true` + a configured `sortOrder`. This is set upstream in the content system (CMS/catalog), not in ranking code.
+- **`boostByPositionAllowList`** = runtime config (`boost_by_position_carousel_id_allow_list.json` on `FEED_RUNTIME`). Controls which carousel IDs are eligible to participate in the boosting algorithm. Poorly named — it's really "eligible for position boosting."
+
+**Why this works — trace with the fix applied:**
+
+1. **L90-98** — `boostByPositionAllowList` built from `PersonalizationRuntimeUtil.boostByPositionCarouselIdAllowList()`. AFM carousel ID is in the set.
+2. **L112** — `isBoostingEnabled(boostByPositionAllowList, afmId)` → `true` → enters boost logic.
+3. **L122-125** — `hinter(afmCandidate)` calls `BoostingCandidate.getBoostingHint()`. AFM has `enforceManualSortOrder=true` + `sortOrder` configured → returns `Boosted(position)`. **AFM goes into `toBoostPairs`.**
+4. **L139 (with fix)** — `isEligibleForUnpin(afm)` → `true` (vertical 100322 ≠ 1), BUT `afmId !in boostByPositionAllowList` → `false` (it IS in the list). The `&&` short-circuits. **AFM stays in `toBoostPairs`. Not unpinned.**
+
+Meanwhile, a genuine NV carousel (e.g. grocery) that's NOT in the allowlist: `isEligibleForUnpin` → `true`, `id !in allowlist` → `true` → gets unpinned as intended.
+
+**What changes per carousel type:**
+
+| Carousel | In allowlist? | NV vertical? | Today | Option 2 |
+|---|---|---|---|---|
+| AFM | Yes | Yes (100322) | Unpinned | **Stays pinned** |
+| Grocery | No | Yes | Unpinned | Unpinned (no change) |
+| Gen-ai | Yes | Depends | Unpinned if NV | **Stays pinned** |
+| Regular Rx | Yes | No (ID=1) | Stays pinned | Stays pinned (`isEligibleForUnpin` returns false) |
+| Random NV not in allowlist | No | Yes | Unpinned | Unpinned (no change) |
+
+**The logic becomes:** "unpin NV carousels UNLESS they were explicitly configured for boosting." The allowlist already represents "carousels we explicitly want boosted" — Option 2 just makes the unpin step honor that intent instead of ignoring it.
+
+**No new config needed.** The `boostByPositionAllowList` variable is already in scope at L90. We're just referencing it where it's currently ignored. Stale entries in the allowlist are harmless — they'd protect dead carousels from unpinning they'll never encounter.
+
+**Note on AFM's pin config:** We infer AFM has `enforceManualSortOrder=true` + `sortOrder` because the bug report says carousels are "unintentionally unboosted." Without those fields, the hinter at L122 would return `Unboosted` and AFM would never enter `toBoostPairs` — the unpin at L139 would have nothing to remove. The boosting code logs `enforce_manual_sort_order` per carousel (Boosting.kt L289) which can be verified in prod/sandbox logs.
 
 ### Option 3 — Runtime "restaurant-equivalent" vertical IDs (days)
 
