@@ -188,6 +188,8 @@
     <rect x="130" y="60" width="330" height="34" rx="6" fill="#E8FFF2" stroke="#2D8B5E" stroke-width="1.2" filter="url(#sh)"/>
     <text x="295" y="75" text-anchor="middle" font-size="10" font-weight="700" fill="#245761">Centralized DV Resolution</text>
     <text x="295" y="88" text-anchor="middle" font-size="7.5" fill="#2D8B5E">31 DVs resolved once per request into RankingPipelineState</text>
+    <rect x="465" y="67" width="20" height="13" rx="3" fill="#FF3008" fill-opacity="0.85"/>
+    <text x="475" y="76" text-anchor="middle" font-size="6.5" fill="white" font-weight="700">DV</text>
 
     <!-- DV channel bar on right -->
     <text x="548" y="56" text-anchor="middle" font-size="7" fill="#2D8B5E" font-weight="600">DV Context</text>
