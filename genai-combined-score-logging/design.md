@@ -109,7 +109,7 @@ Different input types, different output types, different method signatures. Unif
 ```
 Pipeline step → collector.record(carouselId, entityId, key, value)
                                     ↓
-Adapter → RankingSignalWriter.writeToLogging(collector, carouselId, entityId, loggingMap)
+Adapter → RankingSignalWriter.writeEntitySignals(collector, carouselId, entityId, loggingMap)
                                     ↓
 Existing logging infrastructure → proto event → Iguazu → Snowflake
 ```
@@ -131,7 +131,7 @@ No entity class changes. No decoration step changes. The collector and writer ar
 │ Pipeline Steps       │          │ RankingSignalWriter       │
 │ (any carousel type)  │          │ (static utility)          │
 │                      │          │                            │
-│ GenAI reranker       │          │ writeToLogging(            │
+│ GenAI reranker       │          │ writeEntitySignals(            │
 │ Taste ranker         │          │   collector, carouselId,   │
 │ Unified ranker       │          │   entityId, loggingMap)    │
 │ Deal scorer          │          │                            │

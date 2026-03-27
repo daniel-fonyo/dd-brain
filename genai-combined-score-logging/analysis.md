@@ -80,6 +80,10 @@ SELECT STORE_RANKING_METRICS:key_name::DOUBLE FROM table
 
 This is why `store_ranking_metrics` uses `map<string, double>` — direct key access, no flatten, no row multiplication. The existing `score_modifiers` array stays untouched (consumed by prod ML jobs).
 
+## Solution
+
+See [design.md](design.md) for the RankingSignalCollector architecture that solves this gap universally across all carousel types.
+
 ## Related
 - `brain/genai-reranker-logging/` — PR #62113 adds embeddingScore + alpha/beta logging
 - With alpha, beta, finalScore, and embeddingScore all logged, combinedScore can be **recomputed** from Snowflake. But logging it directly would simplify analysis and avoid floating-point discrepancies.
