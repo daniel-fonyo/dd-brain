@@ -46,7 +46,7 @@ Anyone can describe a homepage change they want validated, collaborate briefly w
 
 I've used this workflow successfully 3-4 times on real PRs. Each cycle, I improved the agent's skills: browser interaction patterns, log analysis, error recovery, and report formatting. It gets significantly better with each iteration because corrections are persisted into the agent's playbooks and self-healing protocols.
 
-There is a working local proof of concept. What we are proposing is to **productionalize it**. That means spending dedicated time to make the workflow robust, shareable, and easily usable for all homepage-related tasks. The goal is a self-contained unit that any engineer can run on their local machine using Claude Code. They describe the change they want to test, collaborate briefly with the agent on a plan, and the agent executes end-to-end validation autonomously. This requires Claude Code to be set up locally, which aligns with the broader company rollout.
+There is a working local proof of concept. We are proposing to **productionalize it** to support the vision above and solve the testing bottleneck.
 
 ## What We Need
 
