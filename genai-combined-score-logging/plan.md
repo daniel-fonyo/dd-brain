@@ -22,10 +22,10 @@ Adding a new ranking signal after this is **one `record()` call** at the source.
 
 ### [Plan 1: Infrastructure](plan-1-infrastructure.md)
 - Create `RankingSignalCollector` and `RankingSignalWriter`
-- Add collector to `ExploreContext`
+- Add collector to `BaseDiscoveryProductContext` interface (default) + `ExploreContext` (override)
 - Add proto `ranking_signals` map field
 - Wire `StoreCarouselDataAdapter` and `ContainerEventsGenerator`
-- **Files**: 2 new + 4 modified (feed-service) + 1 modified (services-protobuf)
+- **Files**: 2 new + 5 modified (feed-service) + 1 modified (services-protobuf)
 
 ### [Plan 2: GenAI Combined Score](plan-2-combined-score.md)
 - Add `collector.record()` calls in `GeneratedRecommendationCarouselService`
@@ -36,7 +36,7 @@ Adding a new ranking signal after this is **one `record()` call** at the source.
 
 | Decision | Choice | Why |
 |---|---|---|
-| Where collector lives | `ExploreContext` (not collection types) | Only universal convergence point — works for store, item, deal, announcement carousels |
+| Where collector lives | `BaseDiscoveryProductContext` interface (default getter) + `ExploreContext` (stored override) | Accessible at every pipeline step without casting — even methods typed as `BaseDiscoveryProductContext` |
 | How adapters consume | `RankingSignalWriter` utility (not shared interface) | Adapters have no shared base class; writer is a one-line call |
 | Entity field needed? | No — signals bypass `StoreEntity` entirely | Writer reads collector → writes directly to logging map |
 | Proto type | `map<string, string>` (not `map<string, double>`) | Supports both numbers and strings (model names, strategies) |

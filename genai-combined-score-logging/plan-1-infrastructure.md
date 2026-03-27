@@ -16,14 +16,15 @@ Build the universal ranking signal logging pipeline: `RankingSignalCollector` (o
 | 1 | `RankingSignalCollector.kt` | feed-service | Mutable request-scoped collector |
 | 2 | `RankingSignalWriter.kt` | feed-service | Static utility — flushes signals into adapter logging maps |
 
-## Files to Modify (4 production + tests)
+## Files to Modify (5 production + tests)
 
 | # | File | Repo | Change |
 |---|------|------|--------|
 | 3 | `events.proto` | services-protobuf | Add `map<string, string> ranking_signals = 86` to `CrossVerticalHomePageFeedEvent` |
-| 4 | `ExploreContext.kt` (or equivalent) | feed-service | Add `val rankingSignalCollector: RankingSignalCollector = RankingSignalCollector()` |
-| 5 | `StoreCarouselDataAdapter.kt` | feed-service | One-line call to `RankingSignalWriter.writeEntitySignals()` + `writeCarouselSignals()` |
-| 6 | `ContainerEventsGenerator.kt` | feed-service | Generic loop: unhandled logging map keys → `ranking_signals` proto map |
+| 4 | `BaseDiscoveryContext.kt` | feed-service | Add `val rankingSignalCollector` with default getter to `BaseDiscoveryProductContext` interface |
+| 5 | `ExploreContext.kt` | feed-service | Override with stored `RankingSignalCollector` instance |
+| 6 | `StoreCarouselDataAdapter.kt` | feed-service | One-line call to `RankingSignalWriter.writeEntitySignals()` + `writeCarouselSignals()` |
+| 7 | `ContainerEventsGenerator.kt` | feed-service | Generic loop: unhandled logging map keys → `ranking_signals` proto map |
 
 ## Code Changes
 
@@ -139,13 +140,26 @@ map<string, string> ranking_signals = 86;
 //next id: 87
 ```
 
-### 4. ExploreContext — add collector field
+### 4. BaseDiscoveryProductContext — add interface default
 
-**File**: Exact location TBD — need to confirm which class is the request-scoped context threaded through the full pipeline. Likely `ExploreContext` in `libraries/platform/`.
+**File**: `libraries/sdk-dex/src/main/kotlin/com/doordash/consumer/discovery/sdk/dex/models/context/BaseDiscoveryContext.kt`
 
+In the `BaseDiscoveryProductContext` interface, add:
 ```kotlin
-val rankingSignalCollector: RankingSignalCollector = RankingSignalCollector(),
+val rankingSignalCollector: RankingSignalCollector
+    get() = RankingSignalCollector()  // default: fresh throwaway instance for non-homepage contexts
 ```
+
+### 5. ExploreContext — override with stored instance
+
+**File**: `libraries/sdk-dex/src/main/kotlin/com/doordash/consumer/discovery/sdk/dex/models/context/ExploreContext.kt`
+
+Add to the data class constructor:
+```kotlin
+override val rankingSignalCollector: RankingSignalCollector = RankingSignalCollector(),
+```
+
+This ensures the same mutable collector instance is used for the entire request. Survives `.copy()` (shallow copy preserves the reference). Accessible everywhere via `context.rankingSignalCollector` — whether `context` is typed as `ExploreContext` or `BaseDiscoveryProductContext`.
 
 ### 5. StoreCarouselDataAdapter — one-line writer call
 
@@ -220,7 +234,7 @@ storeLogging.forEach { (key, value) ->
 
 ## TODO: Verify Before Plan 2
 
-1. Confirm `ExploreContext` is the right host for the collector (check it's accessible from all pipeline steps and all adapters).
+1. ~~Confirm `ExploreContext` is the right host for the collector~~ — **Confirmed**. ExploreContext is threaded through every pipeline path. Collector goes on `BaseDiscoveryProductContext` interface (with default) so it's accessible even in methods that take the parent interface.
 2. Confirm the proto field number 86 is available (check latest `events.proto`).
 3. Verify Iguazu auto-creates `RANKING_SIGNALS` VARIANT column from proto map field — or identify manual steps needed.
 4. Confirm `currentLoggedValues` variable name in ContainerEventsGenerator (it may be called `STORE_LOGGED_VALUES` directly or passed as a parameter).

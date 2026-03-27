@@ -21,23 +21,53 @@ The immediate need is logging GenAI `combinedScore`, but the same gap exists for
 
 ## Key Decisions
 
-### 1. Standalone collector on ExploreContext, not a field on collection types
+### 1. Collector on BaseDiscoveryProductContext interface with default implementation
 
-**Decision**: `RankingSignalCollector` is a standalone mutable object living on `ExploreContext`.
+**Decision**: `RankingSignalCollector` is defined on the `BaseDiscoveryProductContext` interface with a default getter. `ExploreContext` overrides it with a stored instance.
 
-**Why not on LiteStoreCollection?**
+```kotlin
+// Interface — default creates a throwaway collector (no-op for non-homepage contexts)
+interface BaseDiscoveryProductContext : RankerContext {
+    val rankingSignalCollector: RankingSignalCollector
+        get() = RankingSignalCollector()
+}
+
+// ExploreContext — overrides with a real stored instance
+data class ExploreContext(
+    override val rankingSignalCollector: RankingSignalCollector = RankingSignalCollector(),
+    // ... existing fields ...
+) : BaseDiscoveryProductContext
+```
+
+**Why on the interface?**
+- Pipeline steps like `GeneratedRecommendationCarouselService.reRankStoresByScoreAndSimilarity()` receive `BaseDiscoveryProductContext`, not `ExploreContext`. Putting the collector on the interface means these methods can call `context.rankingSignalCollector.record()` without casting.
+- Kotlin interfaces support default property getters. The default creates a fresh throwaway instance — non-homepage contexts (notifications, category filters) are unaffected and need no code changes.
+- `ExploreContext` overrides with a `val` stored in the constructor — same mutable instance for the entire request lifetime. Signals recorded in Phase 2 are readable in Phase 6.
+
+**Why not on ExploreContext only?**
+- Would require casting (`context as ExploreContext`) or passing the collector as a separate parameter at every call site where the method signature uses `BaseDiscoveryProductContext`. The interface default avoids this.
+
+**Why not on collection types (LiteStoreCollection, etc.)?**
 - `LiteStoreCollection` is immutable (data class), copied 4-8 times per request. A mutable collector inside an immutable class is a code smell, and an immutable map means verbose `.copy()` chains for every signal.
 - More importantly, `LiteStoreCollection` only covers store carousels. Item carousels (`ItemCarousel`), deal carousels (`DealCarousel`), reels (`AnnouncementCollection`) use completely different models with **no shared base class**. The only common interface is `SortablePlacement` (just `sortOrder`).
-- `ExploreContext` is already threaded through the entire pipeline for all carousel types. It's the one convergence point.
 
 **Why not on entity types (StoreEntity, etc.)?**
 - Each carousel type has its own entity (`StoreEntity`, `ItemStoreEntity`, `Deal`, `AnnouncementEntity`) with no shared hierarchy.
-- Adding `rankingSignals: Map<String, String>` to each entity duplicates the pattern without a shared contract.
-- The collector-to-adapter path can bypass entities entirely (see RankingSignalWriter below).
+- The collector-to-adapter path bypasses entities entirely (see RankingSignalWriter below).
 
-**Alternatives considered**:
-- Interface `RankingSignalCarrier` implemented by all collection types → too invasive, 6+ data classes, no existing shared contract to hook into.
-- Map field on `LiteStoreCollection` with extension function → works for store carousels only, not universal.
+**Implementations of BaseDiscoveryProductContext** (none require changes):
+| Class | Domain | Impact |
+|---|---|---|
+| `ExploreContext` | Homepage | Overrides with stored instance |
+| `ProgrammaticProductContext` | Programmatic products | Gets default (no-op) |
+| `ConsumerNotificationStoresContext` | Notifications | Gets default (no-op) |
+| `CategoryFilterContext` | Bundle/category | Gets default (no-op) |
+| `CarouselContext` | Carousel-level | Gets default (no-op) |
+| `CuratedContext` (interface) | Curated products | Inherits default |
+
+**Thread safety**: The collector uses `ConcurrentHashMap` internally. The homepage pipeline processes carousels in parallel via `async/awaitAll` — different carousels write to different keys, but the concurrent maps prevent race conditions.
+
+**Survives .copy()**: `ExploreContext` is a data class. `.copy()` creates a shallow copy — the `rankingSignalCollector` reference points to the **same** mutable object. Signals recorded before a copy are still readable after.
 
 ### 2. RankingSignalWriter utility, not per-adapter polymorphism
 
@@ -46,12 +76,12 @@ The immediate need is logging GenAI `combinedScore`, but the same gap exists for
 **Why not a shared adapter interface?**
 The homepage adapters have **no shared base class or interface** for cross-type dispatch:
 
-| Adapter | Input Type | Output Type | Interface |
-|---|---|---|---|
-| `StoreCarouselDataAdapter` | `StoreCarousel` | `FacetV2` | `StoreCarouselAdapterInterface` |
-| `DealCarouselDataAdapter` | `DealCarousel` | `FacetV2` / `FacetSection` | None |
-| `ItemCarouselPageDataAdapter` | `ItemCarousel` | `FacetSection` | None |
-| `AnnouncementsAdapter` | `AnnouncementCollection` | `MxCrmAnnouncement` | None |
+| Adapter                       | Input Type               | Output Type                | Interface                       |
+| ----------------------------- | ------------------------ | -------------------------- | ------------------------------- |
+| `StoreCarouselDataAdapter`    | `StoreCarousel`          | `FacetV2`                  | `StoreCarouselAdapterInterface` |
+| `DealCarouselDataAdapter`     | `DealCarousel`           | `FacetV2` / `FacetSection` | None                            |
+| `ItemCarouselPageDataAdapter` | `ItemCarousel`           | `FacetSection`             | None                            |
+| `AnnouncementsAdapter`        | `AnnouncementCollection` | `MxCrmAnnouncement`        | None                            |
 
 Different input types, different output types, different method signatures. Unifying them would require a major refactor unrelated to our goal.
 
@@ -384,7 +414,8 @@ All types except banners have an adapter that builds a logging map. All have acc
 ### Modified Files (feed-service)
 | File | Change |
 |---|---|
-| `libraries/platform/.../models/ExploreContext.kt` (or equivalent) | Add `val rankingSignalCollector: RankingSignalCollector = RankingSignalCollector()` |
+| `libraries/sdk-dex/.../models/context/BaseDiscoveryContext.kt` | Add `val rankingSignalCollector` with default getter to `BaseDiscoveryProductContext` interface |
+| `libraries/sdk-dex/.../models/context/ExploreContext.kt` | Override with `override val rankingSignalCollector: RankingSignalCollector = RankingSignalCollector()` |
 | `libraries/domain-util/.../facets/adapters/StoreCarouselDataAdapter.kt` | One-line call to `RankingSignalWriter.writeEntitySignals()` in logging method |
 | `libraries/domain-util/.../iguazu/ContainerEventsGenerator.kt` | Generic loop: unhandled logging map keys → `ranking_signals` proto map |
 
@@ -404,7 +435,7 @@ All types except banners have an adapter that builds a logging map. All have acc
 
 1. **Iguazu column auto-creation**: Does Iguazu automatically create a `RANKING_SIGNALS` VARIANT column when it sees the new proto map field? Or is a manual schema migration needed? Must verify before end-to-end validation.
 
-2. **ExploreContext location**: Need to confirm the exact class/field where the collector lives. `ExploreContext` is the main candidate but there may be a more appropriate request-scoped object.
+2. ~~**ExploreContext location**~~ — **Resolved**. Collector is defined on `BaseDiscoveryProductContext` interface (in `BaseDiscoveryContext.kt`) with a default getter. `ExploreContext` overrides with a stored instance. Accessible at every pipeline step — even methods that take `BaseDiscoveryProductContext` (like GenAI reranking).
 
 3. **Carousel-level signals proto field**: The current proto change only adds an entity-level `ranking_signals` field. Carousel-level signals (alpha, beta) currently go through `trackingPayload` → `CAROUSEL_DETAILS`. Do we also want a structured `carousel_ranking_signals` proto field, or is `CAROUSEL_DETAILS` sufficient for now?
 

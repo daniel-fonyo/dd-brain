@@ -45,7 +45,7 @@ return collection.copy(
 )
 ```
 
-**Note**: `context` here is the `ExploreContext` passed through the pipeline. If it's not directly available in this method, it may need to be threaded from the caller (`HomepageGeneratedRecommendationProduct.getPostFilterResult()`).
+**Note**: This method receives `BaseDiscoveryProductContext` (not `ExploreContext` directly). Since the collector is defined on the `BaseDiscoveryProductContext` interface with a default getter, `context.rankingSignalCollector` works without casting. The actual `ExploreContext` instance overrides the default with a stored collector, so signals are retained.
 
 ### What about embeddingScore?
 
