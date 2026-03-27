@@ -14,7 +14,7 @@ The homepage is a black box. Ranking inputs go in, a feed comes out, and verifyi
 
 The volume of homepage-related asks is increasing: new verticals, ranking experiments, blending changes, cross-vertical expansion. If we try to absorb this with the current manual workflow, either we slow down (testing bottlenecks delivery) or we cut corners (regressions slip through). Neither is acceptable.
 
-**We need to zoom out.** Instead of grinding through each ask with the current workflow, we should improve the workflow itself. Invest in testing infrastructure that unlocks higher throughput and velocity for *all* homepage work going forward.
+**We need to zoom out.** Instead of churning through each ask with the current workflow, we should improve the workflow itself. Invest in testing infrastructure that unlocks higher throughput and velocity for *all* homepage work going forward.
 
 ## The Solution: Autonomous Agent-Driven Sandbox Testing
 
@@ -86,6 +86,8 @@ There is a working local proof of concept. What we are proposing is to **product
 ## Alignment
 
 This aligns with the broader company investment in agentic engineering workflows. We are applying AI tooling to a real engineering bottleneck, not experimenting in a vacuum but solving the specific problem of homepage validation throughput that constrains our delivery velocity.
+
+This pattern is not novel to us. Industry leaders like Meta have deployed autonomous agent systems for their ranking engineering workflows, using agents that can independently make code changes, run experiments, and validate results in ranking pipelines. We are applying the same concept to our domain.
 
 ---
 
