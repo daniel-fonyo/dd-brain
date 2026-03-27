@@ -191,6 +191,8 @@
     <rect x="130" y="60" width="330" height="34" rx="6" fill="#E8FFF2" stroke="#2D8B5E" stroke-width="1.2" filter="url(#sh)"/>
     <text x="295" y="75" text-anchor="middle" font-size="10" font-weight="700" fill="#245761">Centralized DV Resolution</text>
     <text x="295" y="88" text-anchor="middle" font-size="7.5" fill="#2D8B5E">31 DVs resolved once per request into RankingPipelineState</text>
+    <rect x="438" y="68" width="20" height="13" rx="3" fill="#FF3008" fill-opacity="0.85"/>
+    <text x="448" y="77" text-anchor="middle" font-size="6.5" fill="white" font-weight="700">DV</text>
     <!-- DV channel bar on right -->
     <text x="548" y="56" text-anchor="middle" font-size="7" fill="#2D8B5E" font-weight="600">DV Context</text>
     <rect x="542" y="60" width="10" height="600" rx="5" fill="#2D8B5E" fill-opacity="0.15" stroke="#2D8B5E" stroke-width="0.8"/>
@@ -206,6 +208,7 @@
     <!-- EntityExtractionStep (y=150, h=26, center=163) -->
     <rect x="25" y="150" width="500" height="26" rx="5" fill="#EBF5FF" stroke="#4A90C4" stroke-width="0.9" filter="url(#sh)"/>
     <text x="43" y="167" font-size="9.5" font-weight="600" fill="#173162">EntityExtractionStep</text>
+    <text x="370" y="167" font-size="7.5" fill="#777">Flatten to ScorableEntity</text>
     <line x1="542" y1="163" x2="530" y2="163" stroke="#2D8B5E" stroke-width="0.7"/>
     <line x1="295" y1="176" x2="295" y2="190" stroke="#245761" stroke-width="0.9" marker-end="url(#arrowTeal)"/>
 
