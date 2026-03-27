@@ -59,8 +59,7 @@ Before any sandbox deploy/test, apply these local-only changes (never commit):
 - **Database/Schema**: `IGUAZU.SERVER_EVENTS_PRODUCTION` (for Iguazu server events)
 - **Auth**: `externalbrowser` (SSO via Okta — opens browser popup)
 - **Connection config**: `~/.snowflake/connections.toml`
-- **Python connector**: available at `/Users/daniel.fonyo/.local/share/uv/tools/mlf-tools/bin/python3` (has `snowflake.connector`)
-- **MCP server**: configured in `~/.claude/mcp.json` as `snowflake` (requires session restart to activate)
+- **MCP server**: configured in `~/.claude/mcp.json` as `snowflake`
 - **CRITICAL**: Always filter by `iguazu_partition_date` AND `iguazu_partition_hour` — the tables are massive. Never scan more than 2 days without additional filters.
 
 ### feed-service: Detekt Pre-Commit Hook
