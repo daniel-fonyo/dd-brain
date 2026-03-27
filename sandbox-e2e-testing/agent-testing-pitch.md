@@ -48,17 +48,6 @@ I've used this workflow successfully 3-4 times on real PRs. Each cycle, I improv
 
 There is a working local proof of concept. What we are proposing is to **productionalize it**. That means spending dedicated time to make the workflow robust, shareable, and easily usable for all homepage-related tasks. The goal is a self-contained unit that any engineer can run on their local machine using Claude Code. They describe the change they want to test, collaborate briefly with the agent on a plan, and the agent executes end-to-end validation autonomously. This requires Claude Code to be set up locally, which aligns with the broader company rollout.
 
-## Expected Impact
-
-| Metric | Today (manual) | With agent testing |
-|---|---|---|
-| Time to validate a homepage change | 30-60 min | ~5 min (agent runs autonomously) |
-| Confidence in validation | Inconsistent, depends on engineer thoroughness | Consistent, same checks every time, multi-load |
-| Regression detection | Caught in review or production | Caught before PR merge |
-| Evidence trail | Screenshots in Slack, verbal "looks good" | Structured report with video, logs, queries, and scores |
-| Scalability | Linear with engineer time | Parallel. Agent tests while engineer works on next change |
-| Onboarding | New engineers struggle to test homepage changes | Agent guides testing plan and handles execution |
-
 ## What We Need
 
 - **Engineering time** to productionalize the workflow: build the orchestrator, add remaining assertion layers, integrate with CI
