@@ -176,6 +176,14 @@ The framework works for every carousel type on the homepage because `ExploreCont
 
 Initial scope wires `StoreCarouselDataAdapter` only. Other adapters require adding one `RankingSignalWriter` call each.
 
+### Context Availability
+
+This framework requires `BaseDiscoveryProductContext` to be accessible where signals are recorded. We validated this against every signal currently logged in `SCORE_MODIFIERS` (see [research](research-explore-context-availability.md) for full trace).
+
+`ExploreContext` is available at every place where scores are currently computed, transferred, or logged in the homepage pipeline. This includes the ranking phase (`rankAndMergeContent`), the decoration phase (`updateStoreEntity`), the GenAI reranking step (`reRankStoresByScoreAndSimilarity`), and every adapter that builds a logging map.
+
+The one place it is intentionally not available is inside the deepest scorer implementations like `ContextualStoreScorer` and `SibylRegressor`. These are pure computation functions that receive narrow, scorer specific context types. They should not be responsible for logging. The right pattern is: the scorer computes the value, and the **caller** that invoked the scorer and holds pipeline context records it. This is the same separation of concerns that already exists in the codebase. The scorer does not know about Iguazu or Snowflake. The pipeline orchestration layer does. The framework reinforces this boundary rather than breaking it.
+
 ## Adding a New Signal After This Ships
 
 This is the target experience. An engineer working on a ranking feature wants to log a new signal to Snowflake.
