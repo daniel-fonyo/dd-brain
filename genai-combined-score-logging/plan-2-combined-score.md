@@ -74,10 +74,12 @@ No code changes needed for any of these steps.
 
 ```sql
 SELECT
-    RANKING_SIGNALS:genai_combined_score::DOUBLE AS genai_combined_score,
-    RANKING_SIGNALS:genai_reranker_alpha::DOUBLE AS alpha,
-    RANKING_SIGNALS:genai_reranker_beta::DOUBLE AS beta,
-    RANKING_SIGNALS:genai_ranking_model::VARCHAR AS ranking_model,
+    -- Per-entity (different per store)
+    RANKING_SIGNALS:genai_combined_score::DOUBLE AS combined_score,
+    -- Per-carousel (same for all stores in carousel)
+    CAROUSEL_RANKING_SIGNALS:genai_reranker_alpha::DOUBLE AS alpha,
+    CAROUSEL_RANKING_SIGNALS:genai_reranker_beta::DOUBLE AS beta,
+    CAROUSEL_RANKING_SIGNALS:genai_ranking_model::VARCHAR AS ranking_model,
     STORE_ID,
     FACET_NAME
 FROM IGUAZU.SERVER_EVENTS_PRODUCTION.CX_CROSS_VERTICAL_HOME_PAGE_FEED_ICE

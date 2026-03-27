@@ -39,7 +39,7 @@ Adding a new ranking signal after this is **one `record()` call** at the source.
 | Where collector lives | `BaseDiscoveryProductContext` interface (default getter) + `ExploreContext` (stored override) | Accessible at every pipeline step without casting — even methods typed as `BaseDiscoveryProductContext` |
 | How adapters consume | `RankingSignalWriter` utility (not shared interface) | Adapters have no shared base class; writer is a one-line call |
 | Entity field needed? | No — signals bypass `StoreEntity` entirely | Writer reads collector → writes directly to logging map |
-| Proto type | `map<string, string>` (not `map<string, double>`) | Supports both numbers and strings (model names, strategies) |
+| Proto type | Two `map<string, string>` fields: `ranking_signals` (entity) + `carousel_ranking_signals` (carousel) | Supports both numbers and strings. Two Snowflake columns with clean entity/carousel separation |
 | Naming | `rankingSignals` | Avoids collisions with `scoreModifiers`, `rankingMetadata`, `RankingContext` |
 | Typed intermediary fields? | No | One `record()` call at source. No `StoreEntity` fields, no `GeneratedRecommendationStoreInfo` fields |
 

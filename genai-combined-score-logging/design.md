@@ -308,12 +308,17 @@ object RankingSignalWriter {
 In `services-protobuf/protos/feed_service/events.proto`, on `CrossVerticalHomePageFeedEvent`:
 
 ```protobuf
-// Per-entity ranking signals as a flat key-value map.
-// Queryable in Snowflake as RANKING_SIGNALS:key_name::DOUBLE or ::VARCHAR.
+// Per-entity ranking signals (vary per store within a carousel).
+// Queryable in Snowflake as RANKING_SIGNALS:key_name::DOUBLE or ::VARCHAR (no FLATTEN).
 // Populated by RankingSignalCollector via RankingSignalWriter in feed-service.
 // Existing score_modifiers (field 59) is unchanged.
 map<string, string> ranking_signals = 86;
-//next id: 87
+
+// Per-carousel ranking signals (same for all stores in a carousel).
+// Queryable in Snowflake as CAROUSEL_RANKING_SIGNALS:key_name::DOUBLE or ::VARCHAR.
+// Duplicated across each store event in the carousel (same pattern as carousel_details).
+map<string, string> carousel_ranking_signals = 87;
+//next id: 88
 ```
 
 ### ContainerEventsGenerator Change
@@ -325,26 +330,18 @@ map<string, string> ranking_signals = 86;
 **RankingSignalWriter (updated)**:
 ```kotlin
 object RankingSignalWriter {
-    const val RANKING_SIGNAL_PREFIX = "rs:"
+    const val ENTITY_PREFIX = "rs:"      // entity-level → ranking_signals proto
+    const val CAROUSEL_PREFIX = "crs:"   // carousel-level → carousel_ranking_signals proto
 
-    fun writeEntitySignals(
-        collector: RankingSignalCollector,
-        carouselId: String,
-        entityId: Long,
-        map: MutableMap<String, Value>,
-    ) {
+    fun writeEntitySignals(collector, carouselId, entityId, map) {
         collector.forEntity(carouselId, entityId).forEach { (key, value) ->
-            map[RANKING_SIGNAL_PREFIX + key] = toValue(value)
+            map[ENTITY_PREFIX + key] = toValue(value)
         }
     }
 
-    fun writeCarouselSignals(
-        collector: RankingSignalCollector,
-        carouselId: String,
-        map: MutableMap<String, Value>,
-    ) {
+    fun writeCarouselSignals(collector, carouselId, map) {
         collector.forCarousel(carouselId).forEach { (key, value) ->
-            map[RANKING_SIGNAL_PREFIX + key] = toValue(value)
+            map[CAROUSEL_PREFIX + key] = toValue(value)
         }
     }
 
@@ -354,14 +351,25 @@ object RankingSignalWriter {
 
 **ContainerEventsGenerator (after `LoggedValue.assign()`)**:
 ```kotlin
-// Forward ranking signals (prefixed with "rs:") to ranking_signals proto map.
-// Only rs:-prefixed keys are forwarded — existing unhandled keys are not affected.
+// Forward ranking signals to their respective proto map fields.
+// rs: prefix → ranking_signals (per-entity), crs: prefix → carousel_ranking_signals (per-carousel).
+// Prefixes are stripped — Snowflake sees clean key names.
 storeLogging.forEach { (key, value) ->
-    if (key.startsWith(RankingSignalWriter.RANKING_SIGNAL_PREFIX)) {
-        val signalKey = key.removePrefix(RankingSignalWriter.RANKING_SIGNAL_PREFIX)
-        when (this) {
-            is Events.CrossVerticalHomePageFeedEvent.Builder ->
-                putRankingSignals(signalKey, if (value.hasNumberValue()) value.numberValue.toString() else value.stringValue)
+    val stringVal = if (value.hasNumberValue()) value.numberValue.toString() else value.stringValue
+    when {
+        key.startsWith(RankingSignalWriter.ENTITY_PREFIX) -> {
+            val signalKey = key.removePrefix(RankingSignalWriter.ENTITY_PREFIX)
+            when (this) {
+                is Events.CrossVerticalHomePageFeedEvent.Builder ->
+                    putRankingSignals(signalKey, stringVal)
+            }
+        }
+        key.startsWith(RankingSignalWriter.CAROUSEL_PREFIX) -> {
+            val signalKey = key.removePrefix(RankingSignalWriter.CAROUSEL_PREFIX)
+            when (this) {
+                is Events.CrossVerticalHomePageFeedEvent.Builder ->
+                    putCarouselRankingSignals(signalKey, stringVal)
+            }
         }
     }
 }
@@ -381,8 +389,12 @@ After the proto change deploys and Iguazu picks up the new field:
 ```sql
 -- Direct key access (no FLATTEN):
 SELECT
-    RANKING_SIGNALS:genai_combined_score::DOUBLE AS genai_combined_score,
-    RANKING_SIGNALS:ranking_model::VARCHAR AS ranking_model,
+    -- Per-entity signals (vary per store)
+    RANKING_SIGNALS:genai_combined_score::DOUBLE AS combined_score,
+    -- Per-carousel signals (same for all stores in carousel)
+    CAROUSEL_RANKING_SIGNALS:genai_reranker_alpha::DOUBLE AS alpha,
+    CAROUSEL_RANKING_SIGNALS:genai_reranker_beta::DOUBLE AS beta,
+    CAROUSEL_RANKING_SIGNALS:genai_ranking_model::VARCHAR AS ranking_model,
     STORE_ID,
     FACET_NAME
 FROM IGUAZU.SERVER_EVENTS_PRODUCTION.CX_CROSS_VERTICAL_HOME_PAGE_FEED_ICE
@@ -504,13 +516,13 @@ All types except banners have an adapter that builds a logging map. All have acc
 
 ## Open Questions
 
-1. **Iguazu column auto-creation**: Does Iguazu automatically create a `RANKING_SIGNALS` VARIANT column when it sees the new proto map field? Or is a manual schema migration needed? Must verify before end-to-end validation.
+1. **Iguazu column auto-creation**: Does Iguazu automatically create `RANKING_SIGNALS` and `CAROUSEL_RANKING_SIGNALS` VARIANT columns when it sees the new proto map fields? Or is a manual schema migration needed? Must verify before end-to-end validation.
 
-2. ~~**ExploreContext location**~~ — **Resolved**. Collector is defined on `BaseDiscoveryProductContext` interface (in `BaseDiscoveryContext.kt`) with a default getter. `ExploreContext` overrides with a stored instance. Accessible at every pipeline step — even methods that take `BaseDiscoveryProductContext` (like GenAI reranking).
+2. ~~**ExploreContext location**~~ — **Resolved**. Collector is defined on `BaseDiscoveryProductContext` interface (in `BaseDiscoveryContext.kt`) with a no-op default. `ExploreContext` overrides with `DefaultRankingSignalCollector`. Accessible at every pipeline step — even methods typed as `BaseDiscoveryProductContext`.
 
-3. **Carousel-level signals proto field**: The current proto change only adds an entity-level `ranking_signals` field. Carousel-level signals (alpha, beta) currently go through `trackingPayload` → `CAROUSEL_DETAILS`. Do we also want a structured `carousel_ranking_signals` proto field, or is `CAROUSEL_DETAILS` sufficient for now?
+3. ~~**Carousel-level signals proto field**~~ — **Resolved**. Added `map<string, string> carousel_ranking_signals = 87`. Carousel-level signals use `crs:` prefix in the logging map. Two Snowflake columns: `RANKING_SIGNALS` (per-entity) and `CAROUSEL_RANKING_SIGNALS` (per-carousel).
 
-4. **Other event types**: The proto change targets `CrossVerticalHomePageFeedEvent`. Other event types (`HomePageFeedEvent`, `VerticalPageFeedEvent`) may need the same field if ranking signals should be logged on non-cross-vertical pages.
+4. ~~**Other event types**~~ — **Not needed**. Only `CrossVerticalHomePageFeedEvent` is in scope.
 
 ## Related
 - `brain/genai-combined-score-logging/analysis.md` — Original gap analysis for combinedScore

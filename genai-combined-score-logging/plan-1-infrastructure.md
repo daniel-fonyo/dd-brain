@@ -101,7 +101,8 @@ import com.google.protobuf.Value
  */
 object RankingSignalWriter {
 
-    const val RANKING_SIGNAL_PREFIX = "rs:"
+    const val ENTITY_PREFIX = "rs:"      // → ranking_signals proto field
+    const val CAROUSEL_PREFIX = "crs:"   // → carousel_ranking_signals proto field
 
     fun writeEntitySignals(
         collector: RankingSignalCollector,
@@ -110,7 +111,7 @@ object RankingSignalWriter {
         map: MutableMap<String, Value>,
     ) {
         collector.forEntity(carouselId, entityId).forEach { (key, value) ->
-            map[RANKING_SIGNAL_PREFIX + key] = toValue(value)
+            map[ENTITY_PREFIX + key] = toValue(value)
         }
     }
 
@@ -120,7 +121,7 @@ object RankingSignalWriter {
         map: MutableMap<String, Value>,
     ) {
         collector.forCarousel(carouselId).forEach { (key, value) ->
-            map[RANKING_SIGNAL_PREFIX + key] = toValue(value)
+            map[CAROUSEL_PREFIX + key] = toValue(value)
         }
     }
 
@@ -141,12 +142,16 @@ object RankingSignalWriter {
 
 In `CrossVerticalHomePageFeedEvent`, after `video_id` (field 84):
 ```protobuf
-// Per-entity ranking signals as a flat key-value map.
-// Populated by RankingSignalCollector in feed-service.
+// Per-entity ranking signals (vary per store within a carousel).
 // Queryable in Snowflake as RANKING_SIGNALS:key_name::DOUBLE or ::VARCHAR (no FLATTEN).
 // Existing score_modifiers (field 59) is unchanged and consumed by production ML jobs.
 map<string, string> ranking_signals = 86;
-//next id: 87
+
+// Per-carousel ranking signals (same for all stores in a carousel).
+// Queryable in Snowflake as CAROUSEL_RANKING_SIGNALS:key_name::DOUBLE or ::VARCHAR.
+// Duplicated across each store event (same pattern as carousel_details field 81).
+map<string, string> carousel_ranking_signals = 87;
+//next id: 88
 ```
 
 ### 4. BaseDiscoveryProductContext — add interface default (no-op)
@@ -194,24 +199,31 @@ RankingSignalWriter.writeCarouselSignals(
 After `LoggedValue.assign(storeLogging, this, STORE_LOGGED_VALUES)`, add prefix-based forwarding:
 
 ```kotlin
-// Forward ranking signals (rs:-prefixed) to ranking_signals proto map.
-// Only rs:-prefixed keys are forwarded — existing unhandled keys are not affected.
-// Prefix is stripped so Snowflake sees clean key names.
+// Forward ranking signals to their respective proto map fields.
+// rs: → ranking_signals (per-entity), crs: → carousel_ranking_signals (per-carousel).
+// Prefixes stripped — Snowflake sees clean key names.
 storeLogging.forEach { (key, value) ->
-    if (key.startsWith(RankingSignalWriter.RANKING_SIGNAL_PREFIX)) {
-        val signalKey = key.removePrefix(RankingSignalWriter.RANKING_SIGNAL_PREFIX)
-        when (this) {
-            is Events.CrossVerticalHomePageFeedEvent.Builder ->
-                putRankingSignals(
-                    signalKey,
-                    if (value.hasNumberValue()) value.numberValue.toString() else value.stringValue,
-                )
+    val stringVal = if (value.hasNumberValue()) value.numberValue.toString() else value.stringValue
+    when {
+        key.startsWith(RankingSignalWriter.ENTITY_PREFIX) -> {
+            val signalKey = key.removePrefix(RankingSignalWriter.ENTITY_PREFIX)
+            when (this) {
+                is Events.CrossVerticalHomePageFeedEvent.Builder ->
+                    putRankingSignals(signalKey, stringVal)
+            }
+        }
+        key.startsWith(RankingSignalWriter.CAROUSEL_PREFIX) -> {
+            val signalKey = key.removePrefix(RankingSignalWriter.CAROUSEL_PREFIX)
+            when (this) {
+                is Events.CrossVerticalHomePageFeedEvent.Builder ->
+                    putCarouselRankingSignals(signalKey, stringVal)
+            }
         }
     }
 }
 ```
 
-**Why prefix instead of forwarding all unhandled keys?** The adapter's logging map contains ~40+ keys. `LoggedValue.assign()` handles ~66 known keys. Many existing keys are intentionally unhandled (like `PAGE_KEY`, `BADGES_LOGGING_KEY`). Forwarding ALL unhandled keys would pollute `ranking_signals` with non-ranking data. The `rs:` prefix cleanly separates ranking signals from everything else.
+**Why prefix instead of forwarding all unhandled keys?** The adapter's logging map contains ~40+ keys. `LoggedValue.assign()` handles ~66 known keys. Many existing keys are intentionally unhandled (like `PAGE_KEY`, `BADGES_LOGGING_KEY`). Forwarding ALL unhandled keys would pollute `ranking_signals` with non-ranking data. The `rs:` / `crs:` prefixes cleanly separate ranking signals from everything else.
 
 ## Unit Tests
 
