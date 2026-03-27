@@ -38,17 +38,7 @@ The engineer sits down with the agent for 5-10 minutes and collaboratively build
 
 ### The Vision: From Change to Tested PR
 
-The end-state workflow:
-
-1. Anyone comes to homepage and says: *"I want to make change X to have result Y"*
-2. They sit down with the agent for 5-10 minutes and collaborate on a testing plan
-3. Agent takes over: codes the change, deploys to sandbox, runs the full test loop autonomously
-4. Agent returns a PR with the code change AND complete end-to-end testing evidence
-5. Reviewer gets strong signal: the change works, here's the proof
-
-Unit tests are already covered by agentic coding workflows. This fills the gap for **integration and end-to-end validation**, the part that has historically required an engineer sitting in front of a browser.
-
-**A note on timing.** This is not a 5-minute process. The browser interactions, sandbox syncing, agent reasoning, and feedback loops take real time. A full testing cycle runs 30-45 minutes, sometimes longer if the sandbox needs to be provisioned from scratch. But it is almost entirely hands-off. The engineer kicks it off and goes back to other work. They do not need to sit in front of a browser, they do not need to pull in teammates for review, and they do not need to manually correlate logs with what the UI is showing. The agent handles all of that and comes back with a complete report.
+Anyone can describe a homepage change they want validated, collaborate briefly with the agent on a testing plan, and hand it off. The agent returns a PR with the code change and complete end-to-end sandbox testing evidence. The full cycle takes 30-45 minutes but runs in the background while the engineer does other work.
 
 **Future extension.** This same pattern naturally extends to **production shadow testing**, another painfully long and tedious validation workflow we use today. The agent can manage shadow traffic routing, compare sandbox vs. production responses, and report differences using the same autonomous loop.
 
