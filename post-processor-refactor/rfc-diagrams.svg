@@ -166,10 +166,6 @@
     <rect x="130" y="494" width="170" height="22" rx="11" fill="#F0F0F0" stroke="#CCC" stroke-width="0.7"/>
     <text x="215" y="509" text-anchor="middle" font-size="9" fill="#666">RankableContent</text>
 
-    <!-- State label -->
-    <rect x="55" y="540" width="320" height="40" rx="6" fill="#F0FAFA" stroke="#245761" stroke-width="0.8" stroke-dasharray="4,2"/>
-    <text x="215" y="558" text-anchor="middle" font-size="9.5" font-weight="600" fill="#245761">RankingPipelineState</text>
-    <text x="215" y="572" text-anchor="middle" font-size="7.5" fill="#777">Immutable data class flows through all steps</text>
   </g>
 
   <!-- ══════════════ Transition arrow 2 ══════════════ -->
@@ -191,8 +187,8 @@
     <rect x="130" y="60" width="330" height="34" rx="6" fill="#E8FFF2" stroke="#2D8B5E" stroke-width="1.2" filter="url(#sh)"/>
     <text x="295" y="75" text-anchor="middle" font-size="10" font-weight="700" fill="#245761">Centralized DV Resolution</text>
     <text x="295" y="88" text-anchor="middle" font-size="7.5" fill="#2D8B5E">31 DVs resolved once per request into RankingPipelineState</text>
-    <rect x="438" y="68" width="20" height="13" rx="3" fill="#FF3008" fill-opacity="0.85"/>
-    <text x="448" y="77" text-anchor="middle" font-size="6.5" fill="white" font-weight="700">DV</text>
+    <rect x="420" y="67" width="20" height="13" rx="3" fill="#FF3008" fill-opacity="0.85"/>
+    <text x="430" y="76" text-anchor="middle" font-size="6.5" fill="white" font-weight="700">DV</text>
     <!-- DV channel bar on right -->
     <text x="548" y="56" text-anchor="middle" font-size="7" fill="#2D8B5E" font-weight="600">DV Context</text>
     <rect x="542" y="60" width="10" height="600" rx="5" fill="#2D8B5E" fill-opacity="0.15" stroke="#2D8B5E" stroke-width="0.8"/>
