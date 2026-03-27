@@ -42,44 +42,29 @@ The engineer sits down with the agent for 5-10 minutes and collaboratively build
 
 **Results.** The agent produces a PR with full end-to-end testing evidence: session video, structured analysis, log snippets, Snowflake queries, and a pass/fail verdict with reasoning. This is not a unit test result. It is evidence that the homepage *actually works as expected* when a real browser hits it.
 
+**Remote debugging, without the debugger.** One of the most powerful capabilities is the agent's ability to inject temporary debug log statements into the feed-service code, sync them to the sandbox, trigger a homepage load through the browser, and then semantically parse the resulting Kubernetes pod logs to give itself feedback. The agent can form a hypothesis about how a ranking decision is being made, instrument the code to capture the relevant variables, observe the actual values at runtime, and determine whether the behavior matches expectations. This is functionally equivalent to attaching a remote debugger to the service, except the agent drives the entire loop autonomously. It decides what to instrument, what to look for, and what the output means.
+
 ### The Vision: From Change to Tested PR
 
 The end-state workflow:
 
-1. Engineer (or anyone) comes to homepage and says: *"I want to make change X to have result Y"*
-2. Engineer and agent spend 5-10 minutes collaborating on a testing plan
+1. Anyone comes to homepage and says: *"I want to make change X to have result Y"*
+2. They sit down with the agent for 5-10 minutes and collaborate on a testing plan
 3. Agent takes over: codes the change, deploys to sandbox, runs the full test loop autonomously
 4. Agent returns a PR with the code change AND complete end-to-end testing evidence
 5. Reviewer gets strong signal: the change works, here's the proof
 
 Unit tests are already covered by agentic coding workflows. This fills the gap for **integration and end-to-end validation**, the part that has historically required an engineer sitting in front of a browser.
 
-**Future extension:** This same pattern naturally extends to **production shadow testing**, another painfully long and tedious validation workflow we use today. The agent can manage shadow traffic routing, compare sandbox vs. production responses, and report differences, using the same autonomous loop.
+**A note on timing.** This is not a 5-minute process. The browser interactions, sandbox syncing, agent reasoning, and feedback loops take real time. A full testing cycle runs 30-45 minutes, sometimes longer if the sandbox needs to be provisioned from scratch. But it is almost entirely hands-off. The engineer kicks it off and goes back to other work. They do not need to sit in front of a browser, they do not need to pull in teammates for review, and they do not need to manually correlate logs with what the UI is showing. The agent handles all of that and comes back with a complete report.
 
-### This Exists Today
+**Future extension.** This same pattern naturally extends to **production shadow testing**, another painfully long and tedious validation workflow we use today. The agent can manage shadow traffic routing, compare sandbox vs. production responses, and report differences using the same autonomous loop.
+
+### Current State and Proposal
 
 I've used this workflow successfully 3-4 times on real PRs. Each cycle, I improved the agent's skills: browser interaction patterns, log analysis, error recovery, and report formatting. It gets significantly better with each iteration because corrections are persisted into the agent's playbooks and self-healing protocols.
 
-What's needed now is to **productionalize it**: formalize the skills, close the remaining gaps, and make it available for anyone working on homepage changes.
-
-## What's Built vs. What's Needed
-
-| Capability | Status |
-|---|---|
-| Sandbox lifecycle management (spin up, sync, tear down) | Built |
-| Browser automation (navigate, scroll, click, debug overlays) | Built |
-| 3-load homepage testing with cross-load consistency analysis | Built |
-| ML score extraction (carousel scores, store scores, second-pass) | Built |
-| Pod log capture and analysis (ERROR/WARN, request tracing) | Built |
-| Snowflake event 1:1 validation against browser observations | Built |
-| PR evidence packaging (video, screenshots, logs, queries) | Built |
-| Self-healing browser interactions (adapts when UI changes) | Built |
-| **Orchestrator (single-command entry point)** | **Needed** |
-| **DV/experiment enrollment assertion** | **Needed** |
-| **Ranking order assertion (score monotonicity)** | **Needed** |
-| **CI integration (GitHub Actions on every PR)** | **Needed** |
-
-The foundation is solid. The remaining work is formalization and extension, not greenfield.
+There is a working local proof of concept. What we are proposing is to **productionalize it**. That means spending dedicated time to make the workflow robust, shareable, and easily usable for all homepage-related tasks. The goal is a self-contained unit that any engineer can run on their local machine using Claude Code. They describe the change they want to test, collaborate briefly with the agent on a plan, and the agent executes end-to-end validation autonomously. This requires Claude Code to be set up locally, which aligns with the broader company rollout.
 
 ## Expected Impact
 
