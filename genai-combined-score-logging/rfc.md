@@ -8,25 +8,9 @@
 
 ## Background
 
-The homepage pipeline computes dozens of ranking signals to decide what appears on a consumer's screen and in what order. Scores, multipliers, model outputs, reranking weights, strategy labels. These signals are the reasoning behind every ranking decision.
+We all know the logging pain. Most ranking signals never make it to Snowflake because the cost of wiring each one through `StoreEntity`, adapters, and `LoggedValue` enums is too high. The signals that matter most for understanding ranking quality are the ones we lose.
 
-Today, only a fraction of these signals make it to Snowflake. The ones that do survive follow a rigid, per field wiring pattern: a typed field on `StoreEntity`, a hardcoded mapping in `StoreCarouselDataAdapter`, and a `LoggedValue` enum entry in `ContainerEventsGenerator`. This pattern has scaled poorly. `StoreEntity` has grown to 226 constructor parameters. Each new signal requires changes across 3 to 4 files in shared infrastructure. The cost of logging a signal is high enough that most signals are simply never logged.
-
-The result is a blind spot. When a store appears at position 3 in a carousel, we can see its original ML prediction score, but we often cannot see the actual signal that put it there. Reranking scores, blending weights, strategy selections, model identifiers: the signals that matter most for understanding ranking quality are the ones we lose.
-
-## Problem: Concrete Example
-
-GenAI carousels rerank stores using a combined score: `finalScore^alpha * similarity^beta`. This score determines the final store order. After sorting, the score is discarded. The only value that reaches Snowflake is the original `finalScore` via `HORIZONTAL_ELEMENT_SCORE`. The actual reranking signal, the one that decided the order, is invisible.
-
-To log this score using the current pattern, you would need to:
-1. Add `combinedScore: Double?` to `GeneratedRecommendationStoreInfo`
-2. Copy it onto `StoreEntity` during decoration in `HomepageProgrammaticProductServiceUtil`
-3. Add a mapping in `StoreCarouselDataAdapter.generateStoreLogging()`
-4. Add a `LoggedValue` enum entry in `ContainerEventsGenerator`
-
-Four files, all in shared infrastructure, all reviewed by different owners. This is the cost of logging one number.
-
-This RFC introduces a framework where the cost is **one line**.
+This RFC introduces a framework where logging a new signal costs **one line**.
 
 ## Goals
 
