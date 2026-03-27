@@ -2,17 +2,9 @@
 
 ## The Problem
 
-Homepage development in feed-service is bottlenecked by manual testing. Every change, whether it's ranking adjustments, experiment rollouts, new carousel types, or blending logic, requires an engineer to spin up a sandbox, load the homepage, eyeball the feed, cross-reference pod logs, check Snowflake events, verify experiment enrollment, and repeat for different scenarios. A single change can take 30-60 minutes of manual validation, and it's inconsistent. How thorough the validation is depends on who's doing it and how much time they have.
-
-The homepage is a black box. Ranking inputs go in, a feed comes out, and verifying that the feed is *correct* requires correlating signals across multiple systems (service logs, browser rendering, Snowflake analytics events, experiment platforms) that were never designed to be observed together. This makes testing naturally slow, and the slowness compounds as the volume of homepage asks increases.
+The homepage is a black box. Ranking inputs go in, a feed comes out, and verifying that the feed is *correct* requires correlating signals across multiple systems (service logs, browser rendering, Snowflake analytics events, experiment platforms) that were never designed to be observed together. The complexity of this system means a single change can take 30-60 minutes of manual validation. This makes testing naturally slow, and the slowness compounds as the volume of homepage asks increases.
 
 **The result:** Testing is the bottleneck. Requests pile up, regressions risk slipping through, and engineers spend a disproportionate amount of time on repetitive validation work instead of building.
-
-<!-- TODO: Add 2-3 specific recent examples. Include turnaround times, regressions caught late, backlog pressure. -->
-
-## Why This Matters Now
-
-The volume of homepage-related asks is increasing: new verticals, ranking experiments, blending changes, cross-vertical expansion. If we try to absorb this with the current manual workflow, either we slow down (testing bottlenecks delivery) or we cut corners (regressions slip through). Neither is acceptable.
 
 **We need to zoom out.** Instead of churning through each ask with the current workflow, we should improve the workflow itself. Invest in testing infrastructure that unlocks higher throughput and velocity for *all* homepage work going forward.
 
