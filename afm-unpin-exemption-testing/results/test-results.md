@@ -16,7 +16,7 @@
 | Consumer ID | `757606047L` (hardcoded) |
 | PR branch | `syd/afm-unpin-exempt-campaigns` |
 | PR HEAD | `b49946d46c8` ("Register enable_afm_unpin_exemption DV in DiscoveryExperimentManager") |
-| Sandbox pod | *TBD — respawning* |
+| Sandbox pod | `feed-service-web-group1-sandbox-rd36d002-5748ffdb8f-pz4k7` |
 | Sandbox namespace | `feed-service-sandbox` |
 | Sandbox routing URL | `https://www.doordashtest.com/developer/sandbox/W3sic2VydmljZSI6ImZlZWQtc2VydmljZSIsImFwcCI6IndlYi1ncm91cDEiLCJob3N0IjoiZmVlZC1zZXJ2aWNlLXdlYi1ncm91cDEtc2FuZGJveC1yZDM2ZDAwMiIsInBvcnQiOiI1MDA1MSJ9XQ==` |
 | feed-service worktree | `.claude/worktrees/afm-unpin-test` (instrumentation source) |
@@ -34,9 +34,9 @@
 | Sandbox synced v1 | DONE | Service ready at `rd36d002`. Debug logs confirmed in pod. |
 | **PR updated (4 commits)** | DONE | DV moved from `PersonalizationRuntimeUtil` → `DiscoveryExperimentManager.Manifest`. `isExemptAfmCarousel` now takes `experimentMap`. DV values are `treatment`/`control`/`absent` (not `true`/`false`). |
 | Pulled latest + rebased instrumentation | DONE | Main checkout at `b49946d46c8`. Debug log points rewritten for new DV mechanism. Consumer ID re-hardcoded. |
-| Local compile check | PENDING | `./gradlew compileKotlin` running |
-| Sandbox respawn + resync | PENDING | Previous pod died. Respawning via `devbox run web-group1-remote`. |
-| `[AFM_DEBUG]` v2 confirmed in pod | PENDING | |
+| Local compile check | DONE | `./gradlew compileKotlin` BUILD SUCCESSFUL (domain-util) |
+| Sandbox respawn + resync | DONE | New pod `pz4k7`. BUILD SUCCESSFUL in 26m 51s. Service ready. |
+| `[AFM_DEBUG]` v2 confirmed in pod | DONE | All 4 log points firing. `DV=control` (expected — default). `isExemptAfmCarousel` detail log correctly suppressed when DV=control (early return). `unpin_check` shows `nvEligible`/`afmExempt`/`willUnpin` fields. |
 
 ---
 
