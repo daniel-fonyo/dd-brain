@@ -190,20 +190,6 @@ This means every pipeline method that receives `BaseDiscoveryProductContext` (or
 
 The collector is a mutable object held by reference on the immutable `ExploreContext` data class. When `ExploreContext` is copied (which happens 4 to 8 times per request), the reference is preserved. Signals recorded early in the pipeline are readable later.
 
-### Data Flow
-
-```
-Pipeline step                  Adapter                      Iguazu
-    |                              |                            |
-    |  collector.record()          |                            |
-    |  (any phase, any type)       |                            |
-    v                              v                            v
-+------------+  forEntity()   +----------+  rs:/crs:     +----------+
-| Collector  |--------------->|  Writer  |-------------->| Events   |--> Snowflake
-| on Context |  forCarousel() |  (flush) |  prefix       | Generator|
-+------------+                +----------+  routing      +----------+
-```
-
 ### Supported Carousel Types
 
 The framework works for every carousel type on the homepage because `ExploreContext` is passed through every path:
