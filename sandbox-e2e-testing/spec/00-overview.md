@@ -1,16 +1,14 @@
 # Spec Overview — Sandbox E2E
 
-## Implementation Order
+**Last updated:** 2026-03-27
 
-Implement in this order. Each spec is a prerequisite for the next.
+## Specs
 
-1. `03-audit-trail.md` — define the audit structure first; everything else writes into it
-2. `01-sandbox-run.md` — orchestrator skill; depends on audit trail contract
-3. `02-sandbox-test-update.md` — update sandbox-test to write into runDir
-
-Do not implement Phase 2+ specs until Phase 1 is working end-to-end.
-
----
+| Spec | Purpose | Status |
+|---|---|---|
+| `00-browser-playbook.md` | Living reference: deterministic browser interaction sequence | Active |
+| `01-sandbox-run.md` | Orchestrator skill design | Not started |
+| `03-audit-trail.md` | Audit trail contract (directory structure, JSON schemas) | Reference |
 
 ## File Locations
 
@@ -18,20 +16,9 @@ Do not implement Phase 2+ specs until Phase 1 is working end-to-end.
 |---|---|
 | Skill files | `~/.claude/commands/*.md` |
 | Sandbox state | `~/.claude/sandbox-state.json` |
+| Playwright MCP config | `~/.claude/playwright-mcp-config.json` |
 | Audit runs | `feed-service/.claude/sandbox/runs/<run-id>/` |
-| Gitignore entry | `feed-service/.gitignore` |
-
----
-
-## Skill Contract
-
-Every skill must:
-- Start by reading relevant state (sandbox-state.json, runDir)
-- Write to steps.jsonl at each significant step
-- Report progress inline to the user as it goes (not just at the end)
-- Return a structured result the caller can act on
-
----
+| Latest run symlink | `feed-service/.claude/sandbox/runs/latest` |
 
 ## Naming Conventions
 
@@ -39,5 +26,7 @@ Every skill must:
 |---|---|---|
 | Run ID | `<timestamp>_<branch-sanitized>_<short-hash>` | `2026-03-19T14-30-00_feat-dfonyo-ranking-debug_a1b2c3d` |
 | Step names | kebab-case verbs | `pod-check`, `browser-navigate` |
-| Screenshot files | zero-padded sequence + label | `01-homepage.png`, `02-carousel-stores.png` |
+| Per-load data | `load-<N>-carousels.json` | `load-1-carousels.json` |
+| Evidence screenshot | `homepage-evidence.png` | always this name inside runDir |
 | Log file | `feed-service.log` | always this name inside runDir |
+| Video file | `session.webm` | always this name inside runDir |

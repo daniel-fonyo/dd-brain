@@ -2,6 +2,8 @@
 
 Deterministic step sequence for sandbox-test browser interactions. Follow this known path by default. When a step fails, use the self-healing protocol to discover the new correct approach, then update this playbook so the fix persists.
 
+**Last updated:** 2026-03-27 — synced with actual `sandbox-test.md` skill implementation.
+
 ## Credentials
 
 - **Domain**: `https://www.doordashtest.com/`
@@ -20,11 +22,6 @@ The doordashtest.com UI will evolve over time. When any step fails:
 3. **Adapt**: Try alternative selectors/approaches to achieve the same goal
 4. **Verify**: Confirm the adapted approach achieved the intended outcome
 5. **Persist**: Update this playbook AND `~/.claude/commands/sandbox-test.md` with the corrected approach, noting the date and what changed
-
-**Example**: If `.ToggleContainer-sc-ba2scp-0` no longer matches the Debug Mode toggle:
-- Fallback: search for any `input[type="checkbox"]` near bottom-right of viewport
-- If that works, update the primary selector in both files
-- Add the old selector to a "Previously known selectors" note for reference
 
 **Rules:**
 - Never silently skip a failed step — always attempt recovery
@@ -113,24 +110,27 @@ Navigate to `homepageUrl` (the `doordashtest.com/developer/sandbox/...` URL). Wa
 
 #### 1b. Measure homepage load latency
 ```
-browser_evaluate → (() => { window.__navStart = Date.now(); })()
 browser_navigate → https://www.doordashtest.com/
-browser_evaluate → (() => { return Date.now() - window.__navStart; })()
-```
-
-Record result as `homepageLoadMs`. Fallback if variable lost (page reload clears it):
-```
 browser_evaluate → (() => {
   const nav = performance.getEntriesByType('navigation')[0];
   return nav ? Math.round(nav.loadEventEnd - nav.startTime) : null;
 })()
 ```
 
+Record result as `homepageLoadMs`. The Navigation Timing API is the primary method — no need for manual `Date.now()` bookending since page reloads clear JS state.
+
 ### 2. Sign In (conditional — only if not authenticated)
 
-Check: if page shows "Sign In" link → proceed with login. If already on `/home` with carousels → skip to step 3.
+Check via evaluate (avoids snapshot):
+```javascript
+browser_evaluate → (() => {
+  return !document.querySelector('[data-testid="signInButton"]') &&
+         (window.location.pathname === '/home' || window.location.pathname === '/');
+})()
+```
 
-**Proven flow** (tested 2026-03-19, identity.doordash.com):
+If not authenticated, use the proven two-step login flow:
+
 ```
 browser_snapshot → check for "Sign In" link
   if not found → already authenticated, skip to step 3
@@ -261,26 +261,61 @@ browser_evaluate → (() => {
 
 **Self-heal**: The styled-component class hash (`ba2scp-0`) WILL change on builds. The fallback (checkbox near bottom-right) is position-based and more resilient. If even that fails, search for any element containing "Debug" or "Debug Mode" text and look for a nearby toggle/checkbox.
 
-### 5. Click Through ALL Horizontal Components and Analyze Carousels (Three-Phase)
+### 5. Carousel Extraction — Single-Pass Approach
 
 This is the core analysis step. Use `browser_run_code`. Do NOT try to parse the accessibility snapshot — too large with debug mode on.
 
-**Phase 1**: Scroll to the very bottom of the page (dynamic `scrollHeight`, not fixed limit) to trigger all lazy loading, then scroll back to top.
-**Phase 2**: Click through ALL horizontal components — banners, promo carousels, store carousels — anything with `aria-label="Next button of carousel"`. At each vertical position, exhaust all Next buttons, then click all Previous buttons back.
-**Phase 3**: Re-scroll to extract store carousel data with horizontal click-through for store deduplication.
+**Architecture**: Single downward scroll. At each scroll position: discover new carousels, click through non-store horizontal components (banners, promos), then for each newly discovered store carousel, extract stores by exhausting the Next button. No Previous click-back needed — saves time.
 
-#### Proven extraction code (use this exact pattern):
+**Key innovation**: MutationObserver-based content-settled detection replaces fixed waits. Inject an observer that tracks DOM mutations and scroll events, setting `window.__contentSettled = true` after 200ms of quiet.
+
+#### Multi-load strategy (in sandbox-test skill)
+
+The skill runs **3 independent homepage loads**. Each load: fresh `browser_navigate`, re-enable debug mode, full carousel extraction from scratch. Results saved per-load (`load-N-carousels.json`). Cross-load analysis compares carousel consistency, store overlap, and score stability.
+
+Error detection: after each load, check pod logs for Sibyl/dependency errors. Discard bad loads and retry (max 5 attempts for 3 good loads).
+
+#### Proven single-pass extraction code:
 
 ```javascript
 async (page) => {
-  // === PHASE 1: Vertical scroll to discover all carousels ===
-  const carouselPositions = new Map(); // carouselId -> { scrollY, title, secondPassScore }
-  const scrollPositions = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000];
+  // Inject MutationObserver for content-settled detection
+  await page.evaluate(() => {
+    window.__contentSettled = true;
+    let timer = null;
+    const observer = new MutationObserver(() => {
+      window.__contentSettled = false;
+      clearTimeout(timer);
+      timer = setTimeout(() => { window.__contentSettled = true; }, 200);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    window.addEventListener('scroll', () => {
+      window.__contentSettled = false;
+      clearTimeout(timer);
+      timer = setTimeout(() => { window.__contentSettled = true; }, 200);
+    });
+  });
 
-  for (const scrollY of scrollPositions) {
-    await page.evaluate((y) => window.scrollTo(0, y), scrollY);
-    await page.waitForTimeout(800);
+  const waitForContentSettled = async (maxMs = 800) => {
+    await Promise.race([
+      page.waitForFunction(() => window.__contentSettled, { timeout: maxMs }).catch(() => {}),
+      page.waitForTimeout(maxMs)
+    ]);
+  };
 
+  const discoveredIds = new Set();
+  const allCarousels = [];
+  let maxScroll = 0;
+  let currentY = 0;
+
+  while (true) {
+    await page.evaluate((y) => window.scrollTo(0, y), currentY);
+    await waitForContentSettled(800);
+
+    const newHeight = await page.evaluate(() => document.body.scrollHeight);
+    maxScroll = Math.max(maxScroll, newHeight);
+
+    // Discover carousel IDs visible at this scroll position
     const discovered = await page.evaluate((currentScrollY) => {
       const results = [];
       const allEls = document.querySelectorAll('div, span');
@@ -317,137 +352,135 @@ async (page) => {
         results.push({ carouselId: directText, title, secondPassScore: secondPassMatch ? secondPassMatch[1] : null, absY: Math.round(absY) });
       }
       return results;
-    }, scrollY);
+    }, currentY);
 
-    for (const c of discovered) {
-      const existing = carouselPositions.get(c.carouselId);
-      if (!existing || (existing.title === 'Unknown' && c.title !== 'Unknown')) {
-        carouselPositions.set(c.carouselId, c);
-      }
-    }
-  }
-
-  // === PHASE 2: Horizontal click-through for each carousel ===
-  const allCarousels = [];
-
-  for (const [carouselId, info] of carouselPositions) {
-    const targetY = Math.max(0, info.absY - 200);
-    await page.evaluate((y) => window.scrollTo(0, y), targetY);
-    await page.waitForTimeout(600);
-
-    const storeMap = new Map();
-
-    const collectStores = async () => {
-      const stores = await page.evaluate((cId) => {
-        const allEls = document.querySelectorAll('div, span');
-        for (const el of allEls) {
-          const directText = Array.from(el.childNodes)
-            .filter(n => n.nodeType === 3).map(n => n.textContent.trim()).join(' ');
-          if (directText !== cId) continue;
-          let container = el.parentElement;
-          for (let i = 0; i < 3; i++) {
-            if (!container) break;
-            if (container.className?.includes('StyledStackChildren')) break;
-            container = container.parentElement;
-          }
-          if (!container) return [];
-          const containerText = container.innerText;
-          const storeIds = [...new Set(containerText.match(/card\.store:store:\d+/g) || [])];
-          const scores = containerText.match(/Store Ranking Score: [\d.]+/g) || [];
-          const storeLinks = [...container.querySelectorAll('a[href*="/store/"]')];
-          const storeNames = storeLinks.map(a => {
-            const spans = a.querySelectorAll('span');
-            for (const s of spans) {
-              const t = s.textContent.trim();
-              if (t.length > 2 && t.length < 50 && !t.includes('$') && !t.includes('min')
-                  && !t.match(/^\d/) && !t.includes('Store Debug') && !t.includes('Ranking')
-                  && !t.includes('Sponsored')) return t;
+    // Click through non-store horizontal components (banners, promos) at this position
+    let bannerClicks = 0;
+    while (bannerClicks < 50) {
+      const clicked = await page.evaluate(() => {
+        const nextBtns = [...document.querySelectorAll('[aria-label="Next button of carousel"]')];
+        for (const btn of nextBtns) {
+          const r = btn.getBoundingClientRect();
+          if (r.y > -100 && r.y < window.innerHeight + 100 && !btn.disabled) {
+            let parent = btn.parentElement;
+            let isStoreCarousel = false;
+            for (let i = 0; i < 8; i++) {
+              if (!parent) break;
+              if (parent.innerText && parent.innerText.includes('carousel.standard:store_carousel:')) {
+                isStoreCarousel = true; break;
+              }
+              parent = parent.parentElement;
             }
-            return null;
-          }).filter(Boolean);
-          return storeIds.map((id, i) => ({
-            id: id.replace('card.store:store:', ''),
-            name: storeNames[i] || null,
-            score: scores[i] ? scores[i].replace('Store Ranking Score: ', '') : null
-          }));
-        }
-        return [];
-      }, carouselId);
-      for (const s of stores) { if (!storeMap.has(s.id)) storeMap.set(s.id, s); }
-    };
-
-    await collectStores();
-
-    // Click Next until disabled (scroll right through entire carousel)
-    let clickCount = 0;
-    const maxClicks = 20;
-    while (clickCount < maxClicks) {
-      const nextState = await page.evaluate((cId) => {
-        const allEls = document.querySelectorAll('div, span');
-        for (const el of allEls) {
-          const directText = Array.from(el.childNodes)
-            .filter(n => n.nodeType === 3).map(n => n.textContent.trim()).join(' ');
-          if (directText !== cId) continue;
-          let container = el.parentElement;
-          for (let i = 0; i < 3; i++) {
-            if (!container) break;
-            if (container.className?.includes('StyledStackChildren')) break;
-            container = container.parentElement;
+            if (!isStoreCarousel) { btn.click(); return true; }
           }
-          if (!container) return 'no-container';
-          const nextBtn = container.querySelector('[aria-label="Next button of carousel"]');
-          if (!nextBtn) return 'no-button';
-          if (nextBtn.disabled) return 'disabled';
-          nextBtn.click();
-          return 'clicked';
         }
-        return 'no-carousel';
-      }, carouselId);
-      if (nextState !== 'clicked') break;
-      clickCount++;
-      await page.waitForTimeout(500);
-      await collectStores();
+        return false;
+      });
+      if (!clicked) break;
+      bannerClicks++;
+      await page.waitForTimeout(300);
     }
 
-    // Click Previous back to start (video shows return journey)
-    let prevCount = 0;
-    while (prevCount < maxClicks) {
-      const prevState = await page.evaluate((cId) => {
-        const allEls = document.querySelectorAll('div, span');
-        for (const el of allEls) {
-          const directText = Array.from(el.childNodes)
-            .filter(n => n.nodeType === 3).map(n => n.textContent.trim()).join(' ');
-          if (directText !== cId) continue;
-          let container = el.parentElement;
-          for (let i = 0; i < 3; i++) {
-            if (!container) break;
-            if (container.className?.includes('StyledStackChildren')) break;
-            container = container.parentElement;
+    // For each newly discovered store carousel, extract data in-place
+    for (const c of discovered) {
+      if (discoveredIds.has(c.carouselId)) continue;
+      discoveredIds.add(c.carouselId);
+
+      const targetY = Math.max(0, c.absY - 200);
+      await page.evaluate((y) => window.scrollTo(0, y), targetY);
+      await page.waitForTimeout(300);
+
+      const storeMap = new Map();
+
+      // Combined click-and-collect: extract visible stores + click Next
+      const clickAndCollect = async () => {
+        return await page.evaluate((cId) => {
+          const allEls = document.querySelectorAll('div, span');
+          for (const el of allEls) {
+            const directText = Array.from(el.childNodes)
+              .filter(n => n.nodeType === 3).map(n => n.textContent.trim()).join(' ');
+            if (directText !== cId) continue;
+            let container = el.parentElement;
+            for (let i = 0; i < 3; i++) {
+              if (!container) break;
+              if (container.className?.includes('StyledStackChildren')) break;
+              container = container.parentElement;
+            }
+            if (!container) return { clicked: false, stores: [] };
+
+            const containerText = container.innerText;
+            const storeIds = [...new Set(containerText.match(/card\.store:store:\d+/g) || [])];
+            const scores = containerText.match(/Store Ranking Score: [\d.]+/g) || [];
+            const storeLinks = [...container.querySelectorAll('a[href*="/store/"]')];
+            const storeNames = storeLinks.map(a => {
+              const spans = a.querySelectorAll('span');
+              for (const s of spans) {
+                const t = s.textContent.trim();
+                if (t.length > 2 && t.length < 50 && !t.includes('$') && !t.includes('min')
+                    && !t.match(/^\d/) && !t.includes('Store Debug') && !t.includes('Ranking')
+                    && !t.includes('Sponsored')) return t;
+              }
+              return null;
+            }).filter(Boolean);
+            const stores = storeIds.map((id, i) => ({
+              id: id.replace('card.store:store:', ''),
+              name: storeNames[i] || null,
+              score: scores[i] ? scores[i].replace('Store Ranking Score: ', '') : null
+            }));
+
+            const nextBtn = container.querySelector('[aria-label="Next button of carousel"]');
+            let clicked = false;
+            if (nextBtn && !nextBtn.disabled) {
+              nextBtn.click();
+              clicked = true;
+            }
+
+            return { clicked, stores };
           }
-          if (!container) return 'no-container';
-          const prevBtn = container.querySelector('[aria-label="Previous button of carousel"]');
-          if (!prevBtn) return 'no-button';
-          if (prevBtn.disabled) return 'disabled';
-          prevBtn.click();
-          return 'clicked';
+          return { clicked: false, stores: [] };
+        }, cId);
+      };
+
+      // Initial collection
+      const initial = await clickAndCollect();
+      for (const s of initial.stores) { if (!storeMap.has(s.id)) storeMap.set(s.id, s); }
+
+      // Click through entire carousel
+      let clickCount = initial.clicked ? 1 : 0;
+      const maxClicks = 25;
+      if (initial.clicked) {
+        await page.waitForTimeout(300);
+        while (clickCount < maxClicks) {
+          const result = await clickAndCollect();
+          for (const s of result.stores) { if (!storeMap.has(s.id)) storeMap.set(s.id, s); }
+          if (!result.clicked) break;
+          clickCount++;
+          await page.waitForTimeout(300);
         }
-        return 'no-carousel';
-      }, carouselId);
-      if (prevState !== 'clicked') break;
-      prevCount++;
-      await page.waitForTimeout(500);
-      await collectStores();
+      }
+
+      const stores = [...storeMap.values()];
+      allCarousels.push({
+        carouselId: c.carouselId, title: c.title, secondPassScore: c.secondPassScore,
+        storeCount: stores.length, nextClicks: clickCount, stores
+      });
     }
 
-    const stores = [...storeMap.values()];
-    allCarousels.push({
-      carouselId, title: info.title, secondPassScore: info.secondPassScore,
-      storeCount: stores.length, nextClicks: clickCount, stores
-    });
+    // Safety: bail if no carousels found after scrolling 2000px
+    if (currentY >= 2000 && allCarousels.length === 0) {
+      return JSON.stringify({
+        maxScroll, allCarousels: [],
+        error: 'No carousels found after scrolling 2000px — check debug mode'
+      }, null, 2);
+    }
+
+    if (currentY >= newHeight) break;
+    currentY += 400;
+    if (currentY > 20000) break;
   }
 
   await page.evaluate(() => window.scrollTo(0, 0));
-  return JSON.stringify(allCarousels, null, 2);
+  return JSON.stringify({ maxScroll, allCarousels }, null, 2);
 }
 ```
 
@@ -456,17 +489,17 @@ async (page) => {
 - Each carousel wrapper has class `StyledStackChildren-sc-*` — walk up max 3 parents to find it
 - Carousel title is the **line immediately after** the carousel ID in `container.innerText`
 - Store card IDs: regex `card\.store:store:\d+` in container text
-- Store names: `<a href="/store/...">` links → first `<span>` child with length 3-50 and no `$`, `min`, `Store Debug`, or `Ranking` text
-- **Scroll to true page bottom** — use `document.body.scrollHeight` dynamically, not a fixed limit
-- Carousels and banners lazy-load — scroll in 400-500px increments with 600-800ms waits
+- Store names: `<a href="/store/...">` links → first `<span>` child with length 3-50 and no `$`, `min`, `Store Debug`, `Ranking`, or `Sponsored` text
+- **Scroll dynamically** — use `document.body.scrollHeight`, not a fixed limit
+- Carousels and banners lazy-load — scroll in 400px increments, wait for MutationObserver settle
 - Carousels without `card.store:store:` matches use item/grocery cards (not store cards) — report as 0 stores
 - `setTimeout` is NOT available in `browser_run_code` — use `page.waitForTimeout()` instead
 
-**Horizontal scrolling — be exhaustive:**
-- `aria-label="Next button of carousel"` — universal horizontal scroll for ALL carousel types (banners, promos, stores)
+**Horizontal scrolling:**
+- `aria-label="Next button of carousel"` — universal horizontal scroll for ALL carousel types
 - `aria-label="Previous button of carousel"` — scroll left, disabled at start
-- Click Next at EVERY vertical scroll position — covers all horizontal components on the page
-- Each click scrolls ~4 items into view; wait 400ms for animation
+- Combined click-and-collect: extract stores + click Next in one evaluate call (efficient)
+- Each click scrolls ~4 items into view; wait 300ms for CSS transition
 - Carousels can have up to 20+ items — only ~4 visible at a time
 - Deduplicate stores by ID across all horizontal positions
 - Bottom bar Second Pass Score: regex `Ranking Second Pass Score:\s*([\d.]+|N\/A)` in container text
@@ -486,7 +519,21 @@ browser_console_messages → level: error
 
 Record count and content of any JS errors. Known benign errors: React hydration #418/#425/#423 (SSR artifacts).
 
-### 7. Close Browser and Capture Video
+### 7. Homepage Evidence Screenshot
+
+**Before closing the browser**, scroll to top and take a hero screenshot for PR evidence:
+
+```javascript
+browser_evaluate → (() => window.scrollTo(0, 0))()
+```
+
+```
+browser_take_screenshot → type: png, filename: "${RUN_DIR}/homepage-evidence.png"
+```
+
+This screenshot is used by `/feed-service-pr` as visual proof that the homepage loads correctly.
+
+### 8. Close Browser and Capture Video
 
 ```
 browser_close
@@ -552,5 +599,6 @@ browser_close
 | 2026-03-19 | Added pod liveness check as Step 0 | Without live pod, test runs against default feed, not sandbox code |
 | 2026-03-19 | Fixed video recording — use `contextOptions.recordVideo` | `--save-video` is not a valid `@playwright/mcp` flag; config file approach works |
 | 2026-03-19 | Added click indicator injection (Step 3b) | Neon green pulsing circles at click locations for video review |
-| 2026-03-19 | Rewrote carousel extraction as two-phase (Step 5) | Phase 1: vertical scroll discovers carousels. Phase 2: horizontal Next/Previous click-through captures all stores (up to 20 per carousel) |
-| 2026-03-19 | Removed 2x video, fixed click indicator, exhaustive scrolling | Dropped ffmpeg dependency. Click indicator now uses `addInitScript`+`mousedown` (was `evaluate`+`click`). Three-phase extraction: full vertical scroll to true page bottom, exhaust ALL horizontal Next buttons at every position, then extract store data |
+| 2026-03-19 | Rewrote carousel extraction as single-pass (Step 5) | Single downward scroll with in-place extraction at each position. MutationObserver for content settling. Combined click-and-collect for efficiency. |
+| 2026-03-19 | Added homepage evidence screenshot (Step 7) | Hero screenshot for PR evidence, used by `/feed-service-pr` |
+| 2026-03-27 | Synced playbook with actual sandbox-test.md skill | Replaced stale three-phase extraction with proven single-pass approach. Added multi-load strategy reference. Updated all code to match skill implementation. |

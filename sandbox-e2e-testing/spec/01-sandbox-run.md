@@ -3,126 +3,47 @@
 ## File
 `~/.claude/commands/sandbox-run.md`
 
-## Description
-Top-level orchestrator. Entry point for "test this change on homepage." Figures out sandbox state, syncs changes, runs test, captures audit trail.
+## Purpose
+Top-level orchestrator. Entry point for "test this change on homepage." Composes `sandbox-setup` + `sandbox-test` + optionally `validate-iguazu` into a single command with **auto-recovery** — instead of stopping when sandbox is dead, it fixes the problem and continues.
 
----
+## What It Adds Over `/sandbox-test` Directly
 
-## Steps
+| Responsibility | Description |
+|---|---|
+| Auto-invoke sandbox-setup | State missing or pod dead → setup instead of stopping |
+| Sync decision | `git status --porcelain` + commitHash comparison → conditional `devbox run` |
+| Compose validate-iguazu | Chain Snowflake validation after browser test |
+| Single entry point | "test this change" → figures out what's needed |
 
-### 1. Init Audit Run
+## Open Decision
 
-Generate a run ID using branch+hash+timestamp format:
-```bash
-BRANCH=$(cd /Users/daniel.fonyo/Projects/feed-service && git branch --show-current | tr '/' '-' | tr ' ' '-' | cut -c1-60)
-HASH=$(cd /Users/daniel.fonyo/Projects/feed-service && git rev-parse --short=7 HEAD)
-TIMESTAMP=$(date -u +%Y-%m-%dT%H-%M-%S)
-RUN_ID="${TIMESTAMP}_${BRANCH}_${HASH}"
-RUN_DIR="/Users/daniel.fonyo/Projects/feed-service/.claude/sandbox/runs/${RUN_ID}"
-mkdir -p "${RUN_DIR}/screenshots"
+**Option A: Separate skill** — cleaner separation, easier to extend. Con: another file to maintain.
+
+**Option B: Fold into sandbox-test** — fewer moving parts. Con: sandbox-test is already 650+ lines.
+
+**Recommendation:** Option A.
+
+## Flow
+
 ```
+1. Read ~/.claude/sandbox-state.json
+   └── missing → invoke /sandbox-setup, re-read
 
-Write initial `meta.json` (partial — completedAt/status/checks filled at end).
-Append first step to `steps.jsonl`:
-```jsonl
-{"ts":"<now>","step":"run-start","result":"run <runId> initialized"}
-```
+2. Verify branch
+   └── user supplied branch? → checkout
+   └── else → use current
 
-Report: `"Starting sandbox run <runId>"`
+3. Pod liveness check
+   └── Running → proceed
+   └── Dead → invoke /sandbox-setup restart, re-read
 
----
+4. Sync decision
+   └── git status has output OR commitHash differs → devbox run web-group1-remote
+   └── else → skip
 
-### 2. Read State
+5. Invoke /sandbox-test
 
-Read `~/.claude/sandbox-state.json`. Extract `sandboxName`, `pod`, `homepageUrl`.
+6. (Optional) Invoke /validate-iguazu
 
-Append to steps.jsonl.
-
-If missing → append `{"step":"state-read","result":"no state found","ok":false}` → invoke `/sandbox-setup`, re-read state after.
-
----
-
-### 3. Verify Branch
-
-```bash
-cd /Users/daniel.fonyo/Projects/feed-service && git branch --show-current
-```
-
-If user supplied a branch → check it out first.
-If no branch supplied → confirm current branch with user if not `master`.
-
-Append to steps.jsonl: `{"step":"branch-verify","result":"<branch>"}`
-
-Report: `"feed-service branch: <branch>"`
-
----
-
-### 4. Pod Liveness Check
-
-```bash
-kubectl get pod <pod> -n feed-service-sandbox --no-headers 2>&1
-```
-
-- **Running** → proceed to Step 5
-- **Not found / Error / Not Running** → append `{"step":"pod-check","result":"pod not alive","ok":false}` → invoke `/sandbox-setup` → re-read state → proceed to Step 5
-
-Append to steps.jsonl: `{"step":"pod-check","result":"Running | <error>"}`
-
----
-
-### 5. Sync Decision
-
-**Skip this step entirely if running in CI** — CI always syncs on commit via its own pipeline.
-
-Check whether a sync is needed:
-
-```bash
-cd /Users/daniel.fonyo/Projects/feed-service && git status --porcelain
-```
-
-Sync if **either**:
-- User request contains "resync", "retest", "sync", or "latest changes"
-- `git status --porcelain` has any output (local changes present)
-
-If no sync needed → append `{"step":"devbox-run","result":"skipped — no local changes"}` → proceed to Step 6.
-
-If syncing → from `/Users/daniel.fonyo/Projects/feed-service`, run:
-```bash
-devbox run web-group1-remote
-```
-Wait for `======== Service is ready now ========`. Update `~/.claude/sandbox-state.json` and `meta.json` if pod/url changed.
-
-Append: `{"step":"devbox-run-ready","result":"service ready | skipped"}`
-
-Report: `"Sandbox synced and ready"` or `"Sandbox already up-to-date — skipping sync"`
-
----
-
-### 6. Run Homepage Test
-
-Pass `RUN_DIR` to sandbox-test. Sandbox-test will:
-- Write pod logs to `${RUN_DIR}/feed-service.log`
-- Write screenshots to `${RUN_DIR}/screenshots/`
-- Append steps to `${RUN_DIR}/steps.jsonl`
-- Return structured result JSON
-
-Store the result for Step 7.
-
----
-
-### 7. Finalize Audit
-
-Write completed `meta.json` with `completedAt`, `status`, `checks` from test result.
-
-Write `report.md` using template from `spec/03-audit-trail.md`.
-
-Append: `{"step":"run-complete","result":"<status>","ok":<bool>}`
-
----
-
-### 8. Report to User
-
-Print inline report (table format from report.md). Include path to full run:
-```
-Full run: feed-service/.claude/sandbox/runs/<runId>/
+7. Report combined results
 ```
