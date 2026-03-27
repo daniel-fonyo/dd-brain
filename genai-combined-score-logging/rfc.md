@@ -6,9 +6,23 @@
 **Design doc**: [design.md](design.md)
 **Gap analysis**: [analysis.md](analysis.md)
 
-## Background
+## Problem
 
-We all know the logging pain. Most ranking signals never make it to Snowflake because the cost of wiring each one through `StoreEntity`, adapters, and `LoggedValue` enums is too high. The signals that matter most for understanding ranking quality are the ones we lose.
+Adding a new logging field to `cx_cross_vertical_homepage_feed` is painful. To log a single new value, an engineer has to:
+
+1. Add a typed field to a data class (e.g. `GeneratedRecommendationStoreInfo` or `StoreEntity`)
+2. Manually copy that field through 2 to 3 carrier objects during the decoration phase (`LiteStoreCollection` to `StoreEntity` via `HomepageProgrammaticProductServiceUtil.updateStoreEntity()`)
+3. Add a hardcoded mapping in `StoreCarouselDataAdapter.generateStoreLogging()` to write the field into the logging map
+4. Add a `LoggedValue` enum entry in `ContainerEventsGenerator` to map the logging key to a proto field on `CrossVerticalHomePageFeedEvent`
+5. Write unit tests for each of these layers
+
+That is a minimum of 4 production files changed across `libraries/discovery`, `libraries/platform`, `libraries/domain-util`, and `services-protobuf`. The PR touches shared infrastructure owned by different teams. The engineer has to trace the full path from where the value is computed to where it lands in Snowflake, stringing it through a chain of classes where it is easy to miss a step or wire it incorrectly. For someone not deeply familiar with the system, this can take two weeks.
+
+This is the pattern that grew `StoreEntity` to 226 constructor parameters. It does not scale.
+
+### Concrete Example
+
+GenAI carousels rerank stores using a combined score: `finalScore^alpha * similarity^beta`. This score determines the final store order. After sorting, the score is discarded. The only value that reaches Snowflake is the original `finalScore` via `HORIZONTAL_ELEMENT_SCORE`. The actual reranking signal, the one that decided the order, is invisible. Logging it through the current pattern would require all 4 steps above.
 
 This RFC introduces a framework where logging a new signal costs **one line**.
 
