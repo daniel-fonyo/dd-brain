@@ -2,13 +2,23 @@
 
 ## The Problem
 
-We all know the pain. Testing homepage changes is manual, slow, and doesn't scale. The homepage is a black box, and validating that a change actually works requires correlating signals across systems that were never designed to be observed together. This has always been painful, but we've managed. The issue is that the volume of asks is growing and the current workflow cannot keep up.
+Homepage development in feed-service is bottlenecked by manual testing. Every change, whether it's ranking adjustments, experiment rollouts, new carousel types, or blending logic, requires an engineer to spin up a sandbox, load the homepage, eyeball the feed, cross-reference pod logs, check Snowflake events, verify experiment enrollment, and repeat for different scenarios. A single change can take 30-60 minutes of manual validation, and it's inconsistent. How thorough the validation is depends on who's doing it and how much time they have.
+
+The homepage is a black box. Ranking inputs go in, a feed comes out, and verifying that the feed is *correct* requires correlating signals across multiple systems (service logs, browser rendering, Snowflake analytics events, experiment platforms) that were never designed to be observed together. This makes testing naturally slow, and the slowness compounds as the volume of homepage asks increases.
+
+**The result:** Testing is the bottleneck. Requests pile up, regressions risk slipping through, and engineers spend a disproportionate amount of time on repetitive validation work instead of building.
+
+<!-- TODO: Add 2-3 specific recent examples. Include turnaround times, regressions caught late, backlog pressure. -->
+
+## Why This Matters Now
+
+The volume of homepage-related asks is increasing: new verticals, ranking experiments, blending changes, cross-vertical expansion. If we try to absorb this with the current manual workflow, either we slow down (testing bottlenecks delivery) or we cut corners (regressions slip through). Neither is acceptable.
 
 **We need to zoom out.** Instead of grinding through each ask with the current workflow, we should improve the workflow itself. Invest in testing infrastructure that unlocks higher throughput and velocity for *all* homepage work going forward.
 
 ## The Solution: Autonomous Agent-Driven Sandbox Testing
 
-An AI agent with the tools to autonomously validate homepage changes end-to-end. The engineer describes *what* to test. The agent handles *how*.
+An AI agent that has the tools to autonomously validate homepage changes end-to-end. The engineer describes *what* to test. The agent handles *how*.
 
 ### How It Works
 
@@ -36,15 +46,15 @@ The engineer sits down with the agent for 5-10 minutes and collaboratively build
 
 The end-state workflow:
 
-1. Anyone comes to homepage and says: *"I want to make change X to have result Y"*
-2. They sit down with the agent for 5-10 minutes and collaborate on a testing plan
+1. Engineer (or anyone) comes to homepage and says: *"I want to make change X to have result Y"*
+2. Engineer and agent spend 5-10 minutes collaborating on a testing plan
 3. Agent takes over: codes the change, deploys to sandbox, runs the full test loop autonomously
 4. Agent returns a PR with the code change AND complete end-to-end testing evidence
 5. Reviewer gets strong signal: the change works, here's the proof
 
 Unit tests are already covered by agentic coding workflows. This fills the gap for **integration and end-to-end validation**, the part that has historically required an engineer sitting in front of a browser.
 
-**Future extension:** This same pattern naturally extends to **production shadow testing**. The agent can manage shadow traffic routing, compare sandbox vs. production responses, and report differences using the same autonomous loop.
+**Future extension:** This same pattern naturally extends to **production shadow testing**, another painfully long and tedious validation workflow we use today. The agent can manage shadow traffic routing, compare sandbox vs. production responses, and report differences, using the same autonomous loop.
 
 ### This Exists Today
 
@@ -96,7 +106,17 @@ This aligns with the broader company investment in agentic engineering workflows
 
 ## Appendix: Example Agent Test Output
 
-The following is a real test output from the agent validating the AFM Unpin Exemption change ([PR #62270](https://github.com/doordash/feed-service/pull/62270)). The agent collaborated on a testing plan, instrumented the code with temporary debug logs at 4 key decision points in `Boosting.kt`, deployed to sandbox, ran 3 structured tests (baseline, treatment, regression), captured pod logs and screenshots for each, and produced a verdict against the plan's pass criteria.
+The following is a real test output from the agent validating the AFM Unpin Exemption change ([PR #62270](https://github.com/doordash/feed-service/pull/62270)). The agent:
+
+1. Collaborated on a testing plan targeting specific decision points in the ranking code
+2. Instrumented the code with temporary debug logs at 4 key locations in `Boosting.kt`
+3. Deployed to sandbox and ran 3 structured tests (DV off baseline, DV on treatment, regression check)
+4. Captured pod logs, screenshots, and carousel position maps for each test
+5. Analyzed results against the plan's pass criteria and produced a verdict
+
+### Test Plan (agent-generated, engineer-reviewed)
+
+The agent identified 4 debug log insertion points targeting the DV toggle, eligibility check, AFM detection logic, and final carousel ordering. Each test had explicit pass criteria defined upfront.
 
 ### Sample Result: Test 1, Baseline (DV OFF)
 
