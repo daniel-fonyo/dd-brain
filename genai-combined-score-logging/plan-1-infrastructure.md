@@ -1,138 +1,230 @@
-# Plan 1: Store Ranking Metrics Infrastructure
+# Plan 1: RankingSignalCollector Infrastructure
 
-**Date**: 2026-03-25
+**Date**: 2026-03-27 (revised)
 **Depends on**: Nothing
 **Blocks**: Plan 2 (genai_combined_score)
+**Design doc**: [design.md](design.md)
 
 ## Goal
 
-Add a generic per-store ranking metrics pipeline: `StoreEntity` → `StoreCarouselDataAdapter` → `ContainerEventsGenerator` → new `store_ranking_metrics` Snowflake column. Adding a new per-store ranking signal becomes a single-line change at the source. No sandbox testing — unit tests only.
+Build the universal ranking signal logging pipeline: `RankingSignalCollector` (on ExploreContext) + `RankingSignalWriter` (utility) + proto `map<string, string> ranking_signals` field + `ContainerEventsGenerator` generic forwarding. After this, any pipeline step can log a ranking signal to Snowflake with a single `collector.record()` call.
 
-## Design Decisions
+## Files to Create (2 new)
 
-### New `store_ranking_metrics` column (not reusing `score_modifiers`)
-The existing `score_modifiers` column is a JSON **array** (`repeated ScoreModifier` proto) consumed by production ML jobs. It requires expensive `LATERAL FLATTEN` to query individual values.
-
-The new `store_ranking_metrics` column uses a proto `map<string, double>` which serializes as a JSON **object**. Snowflake can access keys directly (`column:key_name::DOUBLE`) — no flatten, no row explosion. Same cost as reading a scalar column.
-
-The two columns are completely independent. Existing `score_modifiers` is untouched. New per-store signals go only into `store_ranking_metrics`.
-
-### Per-store signals vs carousel-level constants
-- **`store_ranking_metrics`** (new): per-store values that vary across stores within a carousel (e.g. `genai_combined_score`, `genai_embedding_similarity_score`)
-- **`carousel_details`** (existing trackingPayload): per-carousel constants, same for every store (e.g. `alpha`, `beta`, `carousel_id`)
-
-### Fix forward, no migration
-Existing typed fields (`genaiEmbeddingSimilarityScore`, `srMultiplier`, etc.) and existing `score_modifiers` stay as-is. The new pipeline runs alongside them. New signals use the map going forward.
+| # | File | Repo | Description |
+|---|------|------|-------------|
+| 1 | `RankingSignalCollector.kt` | feed-service | Mutable request-scoped collector |
+| 2 | `RankingSignalWriter.kt` | feed-service | Static utility — flushes signals into adapter logging maps |
 
 ## Files to Modify (4 production + tests)
 
 | # | File | Repo | Change |
 |---|------|------|--------|
-| 1 | `events.proto` | services-protobuf | Add `map<string, double> store_ranking_metrics = 86` to `CrossVerticalHomePageFeedEvent` |
-| 2 | `StoreEntity.kt` | feed-service | Add `scoreModifiers: Map<String, Double> = emptyMap()` + Builder + docs |
-| 3 | `StoreCarouselDataAdapter.kt` | feed-service | Add generic loop to write all `scoreModifiers` entries to logging map + docs |
-| 4 | `ContainerEventsGenerator.kt` | feed-service | After `LoggedValue.assign()`, iterate unhandled numeric entries and populate `store_ranking_metrics` map on proto + docs |
+| 3 | `events.proto` | services-protobuf | Add `map<string, string> ranking_signals = 86` to `CrossVerticalHomePageFeedEvent` |
+| 4 | `ExploreContext.kt` (or equivalent) | feed-service | Add `val rankingSignalCollector: RankingSignalCollector = RankingSignalCollector()` |
+| 5 | `StoreCarouselDataAdapter.kt` | feed-service | One-line call to `RankingSignalWriter.writeEntitySignals()` + `writeCarouselSignals()` |
+| 6 | `ContainerEventsGenerator.kt` | feed-service | Generic loop: unhandled logging map keys → `ranking_signals` proto map |
 
 ## Code Changes
 
-### 1. events.proto — add map field
+### 1. RankingSignalCollector — new file
 
-**File:** `services-protobuf/protos/feed_service/events.proto`
+**Location**: `libraries/platform/src/main/kotlin/com/doordash/consumer/feed/platform/ranking/RankingSignalCollector.kt`
 
-In `CrossVerticalHomePageFeedEvent`, after `video_id` (field 84):
-```protobuf
-// Per-store ranking metrics as a flat key-value map.
-// Queryable in Snowflake via STORE_RANKING_METRICS:key_name::DOUBLE (no FLATTEN needed).
-// New per-store signals should be added here via StoreEntity.scoreModifiers in feed-service.
-// Existing score_modifiers (field 59) is unchanged and consumed by production ML jobs.
-map<string, double> store_ranking_metrics = 86;
-//next id: 87
-```
-
-### 2. StoreEntity — add generic scoreModifiers map
-
-**File:** `libraries/platform/.../models/StoreEntity.kt`
-
-Add after `genaiEmbeddingSimilarityScore` (line 119):
 ```kotlin
+package com.doordash.consumer.feed.platform.ranking
+
+import java.util.concurrent.ConcurrentHashMap
+
 /**
- * Generic map of per-store ranking metrics for Iguazu logging.
- * Entries are automatically forwarded through the logging pipeline and emitted
- * into the `store_ranking_metrics` map field on cx_cross_vertical_homepage_feed events.
+ * Request-scoped collector for ranking signals produced during the homepage pipeline.
  *
- * Queryable in Snowflake as: STORE_RANKING_METRICS:key_name::DOUBLE (no FLATTEN).
+ * Any pipeline step (reranker, scorer, ranker) records signals via [record].
+ * Adapters consume them via [forEntity] and [forCarousel] through [RankingSignalWriter].
  *
- * USE THIS for new per-store numeric signals instead of adding typed fields to StoreEntity
- * and hardcoded LoggedValue enum entries. Just populate this map at the source.
+ * Signals flow to the `ranking_signals` proto map field on Iguazu events,
+ * queryable in Snowflake as RANKING_SIGNALS:key_name::DOUBLE or ::VARCHAR.
+ *
+ * Thread-safe via ConcurrentHashMap (carousels are processed in parallel).
  */
-val scoreModifiers: Map<String, Double> = emptyMap(),
-```
-Plus corresponding Builder field and `build()` passthrough.
+class RankingSignalCollector {
+    private val entitySignals = ConcurrentHashMap<String, ConcurrentHashMap<Long, ConcurrentHashMap<String, String>>>()
+    private val carouselSignals = ConcurrentHashMap<String, ConcurrentHashMap<String, String>>()
 
-### 3. StoreCarouselDataAdapter — generic loop
+    /** Record a per-entity signal (e.g., a store's combined score within a carousel). */
+    fun record(carouselId: String, entityId: Long, key: String, value: Any) {
+        entitySignals
+            .getOrPut(carouselId) { ConcurrentHashMap() }
+            .getOrPut(entityId) { ConcurrentHashMap() }[key] = value.toString()
+    }
 
-**File:** `libraries/domain-util/.../facets/adapters/StoreCarouselDataAdapter.kt`
+    /** Record a per-carousel signal (e.g., reranker alpha coefficient). */
+    fun record(carouselId: String, key: String, value: Any) {
+        carouselSignals
+            .getOrPut(carouselId) { ConcurrentHashMap() }[key] = value.toString()
+    }
 
-After existing explicit score blocks (line ~2521), add:
-```kotlin
-// Generic per-store ranking metrics — automatically logged without per-field wiring.
-// To add a new metric, populate StoreEntity.scoreModifiers at the source.
-// These flow to the store_ranking_metrics Snowflake column (not score_modifiers).
-store.scoreModifiers.forEach { (key, value) ->
-    map[key] = getSafeNumberValueWithDefault(value)
+    /** Get all signals for a specific entity in a carousel. */
+    fun forEntity(carouselId: String, entityId: Long): Map<String, String> =
+        entitySignals[carouselId]?.get(entityId) ?: emptyMap()
+
+    /** Get all carousel-level signals. */
+    fun forCarousel(carouselId: String): Map<String, String> =
+        carouselSignals[carouselId] ?: emptyMap()
 }
 ```
 
-### 4. ContainerEventsGenerator — populate store_ranking_metrics map
+### 2. RankingSignalWriter — new file
 
-**File:** `libraries/domain-util/.../iguazu/ContainerEventsGenerator.kt`
+**Location**: `libraries/domain-util/src/main/kotlin/com/doordash/consumer/feed/domainUtil/utils/logging/RankingSignalWriter.kt`
 
-After each `LoggedValue.assign(storeLogging, this, STORE_LOGGED_VALUES)` call, add:
 ```kotlin
-// Populate store_ranking_metrics map with dynamic per-store signals.
-// These come from StoreEntity.scoreModifiers via StoreCarouselDataAdapter.
-// To add a new metric, populate StoreEntity.scoreModifiers at the source — no changes needed here.
-val handledKeys = currentLoggedValues.map { it.key }.toSet()
-storeLogging.forEach { (key, value) ->
-    if (key !in handledKeys && value.hasNumberValue()) {
-        when (this) {
-            is Events.CrossVerticalHomePageFeedEvent.Builder ->
-                putStoreRankingMetrics(key, value.numberValue)
+package com.doordash.consumer.feed.domainUtil.utils.logging
+
+import com.doordash.consumer.feed.domainUtil.facets.adapters.AdapterUtil
+import com.doordash.consumer.feed.platform.ranking.RankingSignalCollector
+import com.google.protobuf.Value
+
+/**
+ * Flushes ranking signals from [RankingSignalCollector] into an adapter's logging map.
+ *
+ * Each adapter calls this with one line. No per-signal wiring needed.
+ * Numeric-parseable values become NumberValue; others become StringValue.
+ */
+object RankingSignalWriter {
+
+    fun writeEntitySignals(
+        collector: RankingSignalCollector,
+        carouselId: String,
+        entityId: Long,
+        map: MutableMap<String, Value>,
+    ) {
+        collector.forEntity(carouselId, entityId).forEach { (key, value) ->
+            map[key] = toValue(value)
+        }
+    }
+
+    fun writeCarouselSignals(
+        collector: RankingSignalCollector,
+        carouselId: String,
+        map: MutableMap<String, Value>,
+    ) {
+        collector.forCarousel(carouselId).forEach { (key, value) ->
+            map[key] = toValue(value)
+        }
+    }
+
+    private fun toValue(value: String): Value {
+        val doubleVal = value.toDoubleOrNull()
+        return if (doubleVal != null) {
+            AdapterUtil.getSafeNumberValueWithDefault(doubleVal)
+        } else {
+            AdapterUtil.getStringValue(value)
         }
     }
 }
 ```
 
-Where `currentLoggedValues` is the `STORE_LOGGED_VALUES` list used in that specific `assign()` call (base or subclass).
+### 3. events.proto — add map field
 
-Note: `putStoreRankingMetrics` is the generated method for proto `map<string, double>` fields.
+**File**: `services-protobuf/protos/feed_service/events.proto`
+
+In `CrossVerticalHomePageFeedEvent`, after `video_id` (field 84):
+```protobuf
+// Per-entity ranking signals as a flat key-value map.
+// Populated by RankingSignalCollector in feed-service.
+// Queryable in Snowflake as RANKING_SIGNALS:key_name::DOUBLE or ::VARCHAR (no FLATTEN).
+// Existing score_modifiers (field 59) is unchanged and consumed by production ML jobs.
+map<string, string> ranking_signals = 86;
+//next id: 87
+```
+
+### 4. ExploreContext — add collector field
+
+**File**: Exact location TBD — need to confirm which class is the request-scoped context threaded through the full pipeline. Likely `ExploreContext` in `libraries/platform/`.
+
+```kotlin
+val rankingSignalCollector: RankingSignalCollector = RankingSignalCollector(),
+```
+
+### 5. StoreCarouselDataAdapter — one-line writer call
+
+**File**: `libraries/domain-util/.../facets/adapters/StoreCarouselDataAdapter.kt`
+
+In `StoreCarouselDataAdapterUtil.generateStoreRowLogging()` (or equivalent method that builds the per-store logging map), after existing score mappings:
+
+```kotlin
+// Flush ranking signals from collector into logging map.
+// New signals are added via context.rankingSignalCollector.record() — no changes needed here.
+RankingSignalWriter.writeEntitySignals(
+    context.rankingSignalCollector, storeCarousel.id, store.id, map
+)
+RankingSignalWriter.writeCarouselSignals(
+    context.rankingSignalCollector, storeCarousel.id, map
+)
+```
+
+### 6. ContainerEventsGenerator — generic forwarding
+
+**File**: `libraries/domain-util/.../iguazu/ContainerEventsGenerator.kt`
+
+After `LoggedValue.assign(storeLogging, this, STORE_LOGGED_VALUES)`, add generic pass:
+
+```kotlin
+// Forward unhandled logging map entries to ranking_signals proto map.
+// These come from RankingSignalCollector via RankingSignalWriter.
+val handledKeys = currentLoggedValues.map { it.key }.toSet()
+storeLogging.forEach { (key, value) ->
+    if (key !in handledKeys) {
+        when (this) {
+            is Events.CrossVerticalHomePageFeedEvent.Builder ->
+                putRankingSignals(
+                    key,
+                    if (value.hasNumberValue()) value.numberValue.toString() else value.stringValue,
+                )
+        }
+    }
+}
+```
 
 ## Unit Tests
 
+### RankingSignalCollectorTest
+- `record()` entity signal → `forEntity()` returns it
+- `record()` carousel signal → `forCarousel()` returns it
+- Multiple carousels / entities → signals are isolated
+- Unrecorded carousel/entity → returns empty map
+
+### RankingSignalWriterTest
+- Numeric string `"0.75"` → written as `NumberValue(0.75)`
+- Non-numeric string `"block_reranking"` → written as `StringValue("block_reranking")`
+- Empty collector → no entries written
+- Multiple signals → all written
+
 ### StoreCarouselDataAdapterTest
-- `StoreEntity` with `scoreModifiers = mapOf("test_score" to 0.75)` → logging map contains `"test_score"` → `0.75`
-- `StoreEntity` with empty `scoreModifiers` → no extra entries in logging map
+- Store with signals in collector → logging map contains those signals
+- Store without signals → no extra entries in logging map
 
 ### ContainerEventsGeneratorTest
-- Store logging map with an entry not in `STORE_LOGGED_VALUES` and `hasNumberValue() = true` → present in `storeRankingMetricsMap` on CX event builder
-- Store logging map with only `STORE_LOGGED_VALUES` keys → `storeRankingMetricsMap` is empty
-- Store logging map with non-numeric value not in `STORE_LOGGED_VALUES` → not in `storeRankingMetricsMap`
+- Logging map entry not in `STORE_LOGGED_VALUES` → present in `rankingSignalsMap` on proto builder
+- Only `STORE_LOGGED_VALUES` keys → `rankingSignalsMap` is empty
+- Non-numeric value → stored as string in `rankingSignalsMap`
 
 ## Run Tests
 ```bash
+./gradlew :libraries:platform:test --tests "*RankingSignalCollectorTest*"
+./gradlew :libraries:domain-util:test --tests "*RankingSignalWriterTest*"
 ./gradlew :libraries:domain-util:test --tests "*StoreCarouselDataAdapterTest*"
 ./gradlew :libraries:domain-util:test --tests "*ContainerEventsGeneratorTest*"
 ```
 
-## TODO: Verify Snowflake Column Creation
-After merging the proto change, verify how the new `store_ranking_metrics` map field surfaces in Snowflake:
-- Does Iguazu auto-create a `STORE_RANKING_METRICS` VARIANT column on the `cx_cross_vertical_homepage_feed` table?
-- Or does it require a manual schema migration / Iguazu config change / topic registration?
-- Confirm the `map<string, double>` proto type lands as a JSON object (not array) in the VARIANT column.
-- Test `:` key access works: `STORE_RANKING_METRICS:some_key::DOUBLE`
+## TODO: Verify Before Plan 2
 
-This must be answered before Plan 2 can be validated end-to-end in Snowflake.
+1. Confirm `ExploreContext` is the right host for the collector (check it's accessible from all pipeline steps and all adapters).
+2. Confirm the proto field number 86 is available (check latest `events.proto`).
+3. Verify Iguazu auto-creates `RANKING_SIGNALS` VARIANT column from proto map field — or identify manual steps needed.
+4. Confirm `currentLoggedValues` variable name in ContainerEventsGenerator (it may be called `STORE_LOGGED_VALUES` directly or passed as a parameter).
 
 ## PR
-- Title: `Add store_ranking_metrics pipeline for per-store Iguazu logging`
-- Description: Adds `StoreEntity.scoreModifiers` map with automatic forwarding to a new `store_ranking_metrics` proto map field. Queryable in Snowflake as `STORE_RANKING_METRICS:key::DOUBLE` without FLATTEN. Existing `score_modifiers` is untouched.
+- **Title**: `Add RankingSignalCollector for universal ranking signal logging`
+- **Description**: Adds a request-scoped collector + writer utility for logging per-entity and per-carousel ranking signals to Snowflake via a new `ranking_signals` proto map field. Any pipeline step records signals with `collector.record()`. No typed fields, no per-signal adapter wiring. First consumer: genai_combined_score (Plan 2).

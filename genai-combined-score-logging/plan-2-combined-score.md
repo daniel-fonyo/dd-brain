@@ -1,104 +1,107 @@
-# Plan 2: Log GenAI Combined Score via Store Ranking Metrics
+# Plan 2: Log GenAI Combined Score via RankingSignalCollector
 
-**Date**: 2026-03-25
+**Date**: 2026-03-27 (revised)
 **Depends on**: Plan 1 (infrastructure)
+**Design doc**: [design.md](design.md)
 
 ## Goal
 
-Log `combinedScore` (`finalScore^alpha * similarity^beta`) to the new Snowflake `STORE_RANKING_METRICS` column as `genai_combined_score`. Uses the generic pipeline from Plan 1.
+Log `combinedScore` (`finalScore^alpha * similarity^beta`) to Snowflake as `genai_combined_score` using the RankingSignalCollector infrastructure from Plan 1. Also log the ranking model name as a string signal.
 
-## Files to Modify (3 production + tests)
+## Files to Modify (1 production + tests)
 
 | # | File | Change |
 |---|------|--------|
-| 1 | `GeneratedRecommendationStoreInfo.kt` | Add `combinedScore: Double? = null` |
-| 2 | `GeneratedRecommendationCarouselService.kt` | Compute combinedScore, update info map entries |
-| 3 | `HomepageProgrammaticProductServiceUtil.kt` | Populate `scoreModifiers` from `info.combinedScore` |
+| 1 | `GeneratedRecommendationCarouselService.kt` | Add `collector.record()` calls after computing combinedScore |
 
-## Code Changes
+**That's it.** No new data class fields, no adapter changes, no event generator changes. The infrastructure from Plan 1 handles everything downstream.
 
-### 1. GeneratedRecommendationStoreInfo — add field
+## Code Change
 
-**File:** `libraries/discovery-utils/.../models/GeneratedRecommendationData.kt`
+### GeneratedRecommendationCarouselService — record signals
+
+**File**: `libraries/discovery/.../programmatic/GeneratedRecommendationCarouselService.kt`
+
+In `rerankStoreByBlockReranking()`, after computing combined scores and before returning (around line 206):
 
 ```kotlin
-data class GeneratedRecommendationStoreInfo(
-    val storeId: Long,
-    val itemId: String?,
-    val embeddingScore: Double?,
-    val imageUrl: String? = null,
-    val combinedScore: Double? = null,
-)
-```
+// Record ranking signals for Snowflake logging
+val collector = context.rankingSignalCollector
 
-### 2. GeneratedRecommendationCarouselService — compute and persist
-
-**File:** `libraries/discovery/.../programmatic/GeneratedRecommendationCarouselService.kt`
-
-At line 206, update info map entries with computed combined scores:
-```kotlin
-val combinedScoreByStoreId = reRankedStoreScoreMap.associate { it.first.storeId() to it.second }
-val updatedStoreInfoMap = collection.generatedRecommendationStoreInfoMap.mapValues { (storeId, info) ->
-    info.copy(combinedScore = combinedScoreByStoreId[storeId])
+// Per-entity: combined score for each reranked store
+reRankedStoreScoreMap.forEach { (store, combinedScore) ->
+    collector.record(collection.id, store.storeId(), "genai_combined_score", combinedScore)
 }
+
+// Per-carousel: reranker parameters
+collector.record(collection.id, "genai_reranker_alpha", alpha)
+collector.record(collection.id, "genai_reranker_beta", beta)
+collector.record(collection.id, "genai_ranking_model", "block_reranking")
+
 return collection.copy(
     entities = combinedStores,
     storeIds = combinedStores.map { it.storeId() },
-    trackingPayload = collection.trackingPayload + mapOf(
-        "genai_reranker_alpha" to alpha,
-        "genai_reranker_beta" to beta,
-    ),
-    generatedRecommendationStoreInfoMap = updatedStoreInfoMap,
+    // trackingPayload no longer needs alpha/beta — they go through the collector now
 )
 ```
 
-### 3. HomepageProgrammaticProductServiceUtil — populate scoreModifiers
+**Note**: `context` here is the `ExploreContext` passed through the pipeline. If it's not directly available in this method, it may need to be threaded from the caller (`HomepageGeneratedRecommendationProduct.getPostFilterResult()`).
 
-**File:** `libraries/discovery/.../programmatic/util/HomepageProgrammaticProductServiceUtil.kt`
+### What about embeddingScore?
 
-In `updateStoreEntity()`, after line 225:
+The `embeddingScore` (similarity) is already available in `GeneratedRecommendationStoreInfo.embeddingScore`. We can optionally log it through the collector too for completeness:
+
 ```kotlin
-scoreModifiers = listOfNotNull(
-    collection.generatedRecommendationStoreInfoMap[productStore.id]?.combinedScore
-        ?.let { "genai_combined_score" to it },
-).toMap(),
+collection.generatedRecommendationStoreInfoMap.forEach { (storeId, info) ->
+    info.embeddingScore?.let {
+        collector.record(collection.id, storeId, "genai_embedding_score", it)
+    }
+}
 ```
 
-This is the only code needed — the adapter and event generator handle it automatically via Plan 1's generic loop.
+This is optional — PR #62113 may already log this via a typed field. Decide based on whether that PR is merged.
+
+## What Happens Downstream (automatic via Plan 1)
+
+1. `StoreCarouselDataAdapter` calls `RankingSignalWriter.writeEntitySignals()` → `genai_combined_score` and `genai_ranking_model` appear in the store's logging map.
+2. `RankingSignalWriter.writeCarouselSignals()` → `genai_reranker_alpha`, `genai_reranker_beta`, `genai_ranking_model` appear in the logging map.
+3. `ContainerEventsGenerator` forwards unhandled keys → they land in `ranking_signals` proto map.
+4. Iguazu writes to Snowflake → `RANKING_SIGNALS` column populated.
+
+No code changes needed for any of these steps.
 
 ## Snowflake Query
 
-After deploy, query the new column directly:
 ```sql
 SELECT
-    STORE_RANKING_METRICS:genai_combined_score::DOUBLE AS genai_combined_score,
+    RANKING_SIGNALS:genai_combined_score::DOUBLE AS genai_combined_score,
+    RANKING_SIGNALS:genai_reranker_alpha::DOUBLE AS alpha,
+    RANKING_SIGNALS:genai_reranker_beta::DOUBLE AS beta,
+    RANKING_SIGNALS:genai_ranking_model::VARCHAR AS ranking_model,
     STORE_ID,
     FACET_NAME
-FROM IGUAZU.SERVER_EVENTS_PRODUCTION.CX_CROSS_VERTICAL_HOMEPAGE_FEED
+FROM IGUAZU.SERVER_EVENTS_PRODUCTION.CX_CROSS_VERTICAL_HOME_PAGE_FEED_ICE
 WHERE IGUAZU_PARTITION_DATE = CURRENT_DATE()
-  AND IGUAZU_PARTITION_HOUR = HOUR(CURRENT_TIMESTAMP())
-  AND STORE_RANKING_METRICS:genai_combined_score IS NOT NULL
+  AND IGUAZU_PARTITION_HOUR = HOUR(CURRENT_TIMESTAMP()) - 1
+  AND RANKING_SIGNALS:genai_combined_score IS NOT NULL
 ```
 
 ## Unit Tests
 
 ### GeneratedRecommendationCarouselServiceTest
-- After `reRankStoresByScoreAndSimilarity()`, returned collection's `generatedRecommendationStoreInfoMap` entries have correct `combinedScore` values matching `finalScore^alpha * similarity^beta`.
-
-### HomepageProgrammaticProductServiceUtilTest
-- When `generatedRecommendationStoreInfoMap` has `combinedScore = 0.85` for a store, the decorated `StoreEntity.scoreModifiers` contains `"genai_combined_score" → 0.85`.
+- After `reRankStoresByScoreAndSimilarity()`, verify `context.rankingSignalCollector.forEntity(collectionId, storeId)` contains `"genai_combined_score"` with correct value matching `finalScore^alpha * similarity^beta`.
+- Verify `context.rankingSignalCollector.forCarousel(collectionId)` contains `"genai_reranker_alpha"`, `"genai_reranker_beta"`, `"genai_ranking_model"`.
 
 ## Run Tests
 ```bash
 ./gradlew :libraries:discovery:test --tests "*GeneratedRecommendationCarouselServiceTest*"
-./gradlew :libraries:discovery:test --tests "*HomepageProgrammaticProductServiceUtilTest*"
 ```
 
 ## Sandbox Verification
 - `/sandbox-setup` → deploy local code (Plan 1 + Plan 2)
 - `/sandbox-test` → load homepage, trigger GenAI carousels
-- `/validate-iguazu` → query Snowflake for `genai_combined_score` in `STORE_RANKING_METRICS`
+- `/validate-iguazu` → query Snowflake for `genai_combined_score` in `RANKING_SIGNALS`
 
 ## PR
-- Title: `Log genai_combined_score to store_ranking_metrics`
-- Description: Adds `combinedScore` to `GeneratedRecommendationStoreInfo`, computes it during reranking, and populates `StoreEntity.scoreModifiers`. Automatically emitted to Snowflake `STORE_RANKING_METRICS` column via the generic pipeline.
+- **Title**: `Log genai_combined_score via RankingSignalCollector`
+- **Description**: Records combined score, alpha, beta, and ranking model into the ranking signal collector during GenAI carousel reranking. Automatically flows to Snowflake `RANKING_SIGNALS` column via Plan 1 infrastructure. One file changed, zero downstream wiring.

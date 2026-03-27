@@ -1,159 +1,64 @@
-# Plan: Log GenAI Combined Score via Generic Score Modifiers
+# Plan: Log GenAI Combined Score via RankingSignalCollector
 
-**Date**: 2026-03-25
+**Date**: 2026-03-27 (revised)
+**Design doc**: [design.md](design.md) — full architecture, decisions, and rationale
 
 ## Context
 
-The `combinedScore` (`finalScore^alpha * similarity^beta`) computed in `GeneratedRecommendationCarouselService.rerankStoreByBlockReranking()` determines store ordering in GenAI carousels but is **discarded after sorting** (line 186). Only the original `finalScore` is logged as `HORIZONTAL_ELEMENT_SCORE`. This means the actual reranking signal can't be analyzed in Snowflake.
+The `combinedScore` (`finalScore^alpha * similarity^beta`) computed in `GeneratedRecommendationCarouselService.rerankStoreByBlockReranking()` determines store ordering in GenAI carousels but is **discarded after sorting**. Only the original `finalScore` is logged as `HORIZONTAL_ELEMENT_SCORE`. The actual reranking signal is invisible in Snowflake.
 
-## Design Decisions
+## Approach: RankingSignalCollector
 
-### Carry score via `GeneratedRecommendationStoreInfo` (not a new LiteStoreCollection field)
-`GeneratedRecommendationStoreInfo` already flows through the pipeline via `LiteStoreCollection.generatedRecommendationStoreInfoMap`. It carries `embeddingScore` today. Adding `combinedScore` to this data class avoids a new field on `LiteStoreCollection`.
+Instead of adding per-field wiring (typed field → manual copy → adapter mapping → LoggedValue enum), we build a **universal signal logging pipeline** that works for all homepage carousel types:
 
-### Generic `scoreModifiers` map on StoreEntity (not another typed field)
-Instead of adding `val genaiCombinedScore: Double? = null` to `StoreEntity` (which requires explicit handling in the adapter and event generator), add a generic `scoreModifiers: Map<String, Double>` map. The adapter and event generator iterate this map dynamically — no hardcoded keys needed.
+1. **`RankingSignalCollector`** — mutable, request-scoped, lives on `ExploreContext`. Any pipeline step calls `collector.record(carouselId, entityId, key, value)`.
+2. **`RankingSignalWriter`** — static utility. Each adapter calls it once to flush signals into its logging map.
+3. **Proto `map<string, string> ranking_signals`** — new field on `CrossVerticalHomePageFeedEvent`. Lands in Snowflake as a VARIANT column with direct key access (no FLATTEN).
+4. **`ContainerEventsGenerator` generic forwarding** — unhandled logging map keys automatically flow into the proto map.
 
-Existing typed fields (`genaiEmbeddingSimilarityScore`, `srMultiplier`, etc.) stay as-is. No migration. New scores go into the map going forward.
+Adding a new ranking signal after this is **one `record()` call** at the source. No downstream changes.
 
-### What belongs in `score_modifiers` vs `carousel_details`
-- **`score_modifiers`** (proto `repeated ScoreModifier`): per-store values that vary across stores within a carousel (e.g. `sr_multiplier`, `genai_combined_score`, `genai_embedding_similarity_score`)
-- **`carousel_details`** (trackingPayload): per-carousel constants, same for every store (e.g. `alpha`, `beta`, `carousel_id`)
+## Two-Phase Implementation
 
-## Files to Modify (6 production + tests)
+### [Plan 1: Infrastructure](plan-1-infrastructure.md)
+- Create `RankingSignalCollector` and `RankingSignalWriter`
+- Add collector to `ExploreContext`
+- Add proto `ranking_signals` map field
+- Wire `StoreCarouselDataAdapter` and `ContainerEventsGenerator`
+- **Files**: 2 new + 4 modified (feed-service) + 1 modified (services-protobuf)
 
-| # | File | Change |
-|---|------|--------|
-| 1 | `GeneratedRecommendationStoreInfo.kt` | Add `combinedScore: Double? = null` |
-| 2 | `GeneratedRecommendationCarouselService.kt:206` | Compute combinedScore, update info map entries with it |
-| 3 | `StoreEntity.kt` | Add `scoreModifiers: Map<String, Double> = emptyMap()` field + Builder |
-| 4 | `HomepageProgrammaticProductServiceUtil.kt:225` | Populate `scoreModifiers` from `info.combinedScore` |
-| 5 | `StoreCarouselDataAdapter.kt:2521` | Add generic loop: iterate `store.scoreModifiers`, write all entries to logging map |
-| 6 | `ContainerEventsGenerator.kt` | After `LoggedValue.assign()`, iterate remaining score modifier entries from logging map and emit `ScoreModifier` proto for each |
+### [Plan 2: GenAI Combined Score](plan-2-combined-score.md)
+- Add `collector.record()` calls in `GeneratedRecommendationCarouselService`
+- **Files**: 1 modified
+- Automatically flows through Plan 1 infrastructure to Snowflake
 
-## Step 1: Code Changes
+## Key Design Decisions (see [design.md](design.md) for full rationale)
 
-### 1a. GeneratedRecommendationStoreInfo — add field
+| Decision | Choice | Why |
+|---|---|---|
+| Where collector lives | `ExploreContext` (not collection types) | Only universal convergence point — works for store, item, deal, announcement carousels |
+| How adapters consume | `RankingSignalWriter` utility (not shared interface) | Adapters have no shared base class; writer is a one-line call |
+| Entity field needed? | No — signals bypass `StoreEntity` entirely | Writer reads collector → writes directly to logging map |
+| Proto type | `map<string, string>` (not `map<string, double>`) | Supports both numbers and strings (model names, strategies) |
+| Naming | `rankingSignals` | Avoids collisions with `scoreModifiers`, `rankingMetadata`, `RankingContext` |
+| Typed intermediary fields? | No | One `record()` call at source. No `StoreEntity` fields, no `GeneratedRecommendationStoreInfo` fields |
 
-**File:** `libraries/discovery-utils/.../models/GeneratedRecommendationData.kt`
+## Execution Order
 
-Add `combinedScore` to the data class:
+1. Plan 1 (infrastructure) — can be reviewed/merged independently
+2. Plan 2 (genai combined score) — depends on Plan 1
+3. Future: wire other adapters (deal, item, announcement) — one line each, as needed
+
+## Future Signals (zero infrastructure changes needed)
+
+After Plan 1, adding any new ranking signal for any carousel type:
 ```kotlin
-data class GeneratedRecommendationStoreInfo(
-    val storeId: Long,
-    val itemId: String?,
-    val embeddingScore: Double?,
-    val imageUrl: String? = null,
-    val combinedScore: Double? = null,
-)
+// At the source — one line, done
+context.rankingSignalCollector.record(carousel.id, entity.id, "new_signal_name", value)
 ```
 
-### 1b. GeneratedRecommendationCarouselService — compute and persist scores
-
-**File:** `libraries/discovery/.../programmatic/GeneratedRecommendationCarouselService.kt`
-
-At line 206, update `generatedRecommendationStoreInfoMap` entries with computed combined scores:
-```kotlin
-val combinedScoreByStoreId = reRankedStoreScoreMap.associate { it.first.storeId() to it.second }
-val updatedStoreInfoMap = collection.generatedRecommendationStoreInfoMap.mapValues { (storeId, info) ->
-    info.copy(combinedScore = combinedScoreByStoreId[storeId])
-}
-return collection.copy(
-    entities = combinedStores,
-    storeIds = combinedStores.map { it.storeId() },
-    trackingPayload = collection.trackingPayload + mapOf(
-        "genai_reranker_alpha" to alpha,
-        "genai_reranker_beta" to beta,
-    ),
-    generatedRecommendationStoreInfoMap = updatedStoreInfoMap,
-)
-```
-
-### 1c. StoreEntity — add generic scoreModifiers map
-
-**File:** `libraries/platform/.../models/StoreEntity.kt`
-
-Add after `genaiEmbeddingSimilarityScore` (line 119):
-```kotlin
-val scoreModifiers: Map<String, Double> = emptyMap(),
-```
-Plus corresponding Builder field and `build()` passthrough.
-
-### 1d. HomepageProgrammaticProductServiceUtil — populate scoreModifiers
-
-**File:** `libraries/discovery/.../programmatic/util/HomepageProgrammaticProductServiceUtil.kt`
-
-In `updateStoreEntity()`, after line 225, build `scoreModifiers` from the info map:
-```kotlin
-scoreModifiers = listOfNotNull(
-    collection.generatedRecommendationStoreInfoMap[productStore.id]?.combinedScore
-        ?.let { "genai_combined_score" to it },
-).toMap(),
-```
-
-### 1e. StoreCarouselDataAdapter — generic loop for scoreModifiers
-
-**File:** `libraries/domain-util/.../facets/adapters/StoreCarouselDataAdapter.kt`
-
-After existing explicit score blocks (line ~2521), add a single loop:
-```kotlin
-store.scoreModifiers.forEach { (key, value) ->
-    map[key] = getSafeNumberValueWithDefault(value)
-}
-```
-
-### 1f. ContainerEventsGenerator — generic ScoreModifier emission
-
-**File:** `libraries/domain-util/.../iguazu/ContainerEventsGenerator.kt`
-
-After `LoggedValue.assign(storeLogging, this, STORE_LOGGED_VALUES)`, add a generic pass that emits `ScoreModifier` for any numeric entries in the logging map that weren't already handled by a `LoggedValue`:
-```kotlin
-// Emit all dynamic score modifiers not handled by LoggedValue
-val handledKeys = STORE_LOGGED_VALUES.map { it.key }.toSet()
-storeLogging.forEach { (key, value) ->
-    if (key !in handledKeys && value.hasNumberValue()) {
-        when (this) {
-            is Events.CrossVerticalHomePageFeedEvent.Builder ->
-                addScoreModifiers(
-                    Events.CrossVerticalHomePageFeedEvent.ScoreModifier.newBuilder()
-                        .setName(key).setValue(value.numberValue).build(),
-                )
-        }
-    }
-}
-```
-
-No new `LoggedValue` enum entry needed. No new constants file entry needed.
-
-## Step 2: Unit Tests
-
-### 2a. GeneratedRecommendationCarouselServiceTest
-Verify that after `reRankStoresByScoreAndSimilarity()`, the returned collection's `generatedRecommendationStoreInfoMap` entries have correct `combinedScore` values.
-
-### 2b. StoreCarouselDataAdapterTest
-Verify that a `StoreEntity` with `scoreModifiers = mapOf("genai_combined_score" to 0.75)` produces a logging map containing `"genai_combined_score"` → `0.75`.
-
-### 2c. ContainerEventsGeneratorTest
-Verify that numeric entries in the store logging map that aren't in `STORE_LOGGED_VALUES` are emitted as `ScoreModifier` proto entries.
-
-## Step 3: Run Unit Tests
-```bash
-./gradlew :libraries:discovery:test --tests "*GeneratedRecommendationCarouselServiceTest*"
-./gradlew :libraries:domain-util:test --tests "*StoreCarouselDataAdapterTest*"
-./gradlew :libraries:domain-util:test --tests "*ContainerEventsGeneratorTest*"
-```
-
-## Step 4: Sandbox Verification (optional)
-- `/sandbox-setup` → deploy local code
-- `/sandbox-test` → load homepage, extract carousels
-- `/validate-iguazu` → query Snowflake for `genai_combined_score` in `SCORE_MODIFIERS`
-
-## Step 5: PR
-- Title: `Add genai_combined_score via generic score modifier pipeline`
-- Description: summary of generic approach, test plan, Snowflake validation
-
-## Future Scores
-After this PR, adding a new per-store score modifier requires only:
-1. Put the value into `scoreModifiers` at the source (1-2 files)
-
-No adapter, event generator, constants, or `LoggedValue` changes needed.
+Examples:
+- Taste affinity score for taste carousels
+- Deal relevance score for deal carousels
+- SR multiplier explanation string
+- Any new ML model output
