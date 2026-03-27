@@ -34,7 +34,7 @@ The engineer sits down with the agent for 5-10 minutes and collaboratively build
 
 **Results.** The agent produces a PR with full end-to-end testing evidence: session video, structured analysis, log snippets, Snowflake queries, and a pass/fail verdict with reasoning. This is not a unit test result. It is evidence that the homepage *actually works as expected* when a real browser hits it.
 
-**Remote debugging, without the debugger.** One of the most powerful capabilities is the agent's ability to inject temporary debug log statements into the feed-service code, sync them to the sandbox, trigger a homepage load through the browser, and then semantically parse the resulting Kubernetes pod logs to give itself feedback. The agent can form a hypothesis about how a ranking decision is being made, instrument the code to capture the relevant variables, observe the actual values at runtime, and determine whether the behavior matches expectations. This is functionally equivalent to attaching a remote debugger to the service, except the agent drives the entire loop autonomously. It decides what to instrument, what to look for, and what the output means.
+**Remote debugging, without the debugger.** The agent can inject temporary debug logs into feed-service code, sync to sandbox, trigger a homepage load, and semantically parse the resulting pod logs to validate its own hypotheses about ranking behavior. It decides what to instrument, observes the actual runtime values, and determines whether behavior matches expectations. This is functionally a remote debugger that the agent drives autonomously.
 
 ### The Vision: From Change to Tested PR
 
