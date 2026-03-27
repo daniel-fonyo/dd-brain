@@ -96,7 +96,7 @@
     <!-- getRankableContent -->
     <rect x="15" y="585" width="390" height="36" rx="5" fill="#E8FFF2" stroke="#2D8B5E" stroke-width="1" filter="url(#sh)"/>
     <text x="30" y="606" font-size="10" font-weight="600" fill="#1A5C38">getRankableContent()</text>
-    <text x="240" y="606" font-size="8.5" fill="#D03020" font-weight="600">reads mutable state from step 3</text>
+    <text x="240" y="606" font-size="8.5" fill="#D03020" font-weight="600">reads mutable state from getBoostBundle()</text>
     <line x1="210" y1="621" x2="210" y2="635" stroke="#888" stroke-width="1.2" marker-end="url(#arrow)"/>
 
     <!-- Output -->
@@ -117,7 +117,7 @@
     <rect x="0" y="0" width="430" height="48" rx="10" fill="#2E6E7A"/>
     <rect x="0" y="22" width="430" height="26" fill="#2E6E7A"/>
     <text x="215" y="20" text-anchor="middle" font-size="14" font-weight="700" fill="white" letter-spacing="0.8">MILESTONE 1</text>
-    <text x="215" y="39" text-anchor="middle" font-size="9" fill="#A0D8E0">Coarse Pipeline · Same code, explicit state</text>
+    <text x="215" y="39" text-anchor="middle" font-size="9" fill="#A0D8E0">Coarse Pipeline · Same code, explicit immutable state</text>
 
     <text x="215" y="68" text-anchor="middle" font-size="8.5" fill="#999">DVs still resolved inside existing methods (unchanged)</text>
 
@@ -166,9 +166,7 @@
     <rect x="130" y="494" width="170" height="22" rx="11" fill="#F0F0F0" stroke="#CCC" stroke-width="0.7"/>
     <text x="215" y="509" text-anchor="middle" font-size="9" fill="#666">RankableContent</text>
 
-    <!-- State label -->
-    <text x="215" y="540" text-anchor="middle" font-size="10" fill="#245761" font-weight="600">RankingPipelineState</text>
-    <text x="215" y="554" text-anchor="middle" font-size="8" fill="#999">Immutable data class flows through all steps</text>
+    <!-- State label (integrated into subtitle) -->
   </g>
 
   <!-- ══════════════ Transition arrow 2 ══════════════ -->
@@ -192,7 +190,7 @@
     <text x="295" y="88" text-anchor="middle" font-size="7.5" fill="#2D8B5E">31 DVs resolved once per request into RankingPipelineState</text>
 
     <!-- DV channel bar on right -->
-    <text x="548" y="56" text-anchor="middle" font-size="7" fill="#2D8B5E" font-weight="600">DV channel</text>
+    <text x="548" y="56" text-anchor="middle" font-size="7" fill="#2D8B5E" font-weight="600">DV Context</text>
     <rect x="542" y="60" width="10" height="600" rx="5" fill="#2D8B5E" fill-opacity="0.15" stroke="#2D8B5E" stroke-width="0.8"/>
     <line x1="460" y1="77" x2="542" y2="77" stroke="#2D8B5E" stroke-width="0.8" stroke-dasharray="4,2"/>
 
@@ -212,75 +210,77 @@
     <!-- SibylScoringSubStep (y=194, h=26, center=207) -->
     <rect x="25" y="194" width="500" height="26" rx="5" fill="#FFF9E5" stroke="#C4960A" stroke-width="0.8" filter="url(#sh)"/>
     <text x="43" y="211" font-size="9" font-weight="600" fill="#7A5800">SibylScoringSubStep</text>
-    <text x="370" y="211" font-size="7.5" fill="#777">Raw ML scores only</text>
+    <text x="370" y="211" font-size="7.5" fill="#777">Sibyl gRPC prediction scores</text>
     <line x1="542" y1="207" x2="530" y2="207" stroke="#2D8B5E" stroke-width="0.7"/>
     <line x1="295" y1="220" x2="295" y2="234" stroke="#245761" stroke-width="0.9" marker-end="url(#arrowTeal)"/>
 
     <!-- InterleavingSubStep (y=238, h=26, center=251) -->
     <rect x="25" y="238" width="500" height="26" rx="5" fill="#FFF0E0" stroke="#D07030" stroke-width="0.8" filter="url(#sh)"/>
     <text x="43" y="255" font-size="9" font-weight="600" fill="#8B4513">InterleavingSubStep</text>
-    <text x="370" y="255" font-size="7.5" fill="#777">Skippable via isApplicable()</text>
+    <text x="370" y="255" font-size="7.5" fill="#777">Dual-list A/B ranking merge</text>
     <line x1="542" y1="251" x2="530" y2="251" stroke="#2D8B5E" stroke-width="0.7"/>
     <line x1="295" y1="264" x2="295" y2="278" stroke="#245761" stroke-width="0.9" marker-end="url(#arrowTeal)"/>
 
     <!-- VerticalBlendingSubStep (y=282, h=26, center=295) -->
     <rect x="25" y="282" width="500" height="26" rx="5" fill="#FFE8F5" stroke="#C05090" stroke-width="0.8" filter="url(#sh)"/>
     <text x="43" y="299" font-size="9" font-weight="600" fill="#7A2060">VerticalBlendingSubStep</text>
-    <text x="370" y="299" font-size="7.5" fill="#2D8B5E">Returns new ScoreBundle</text>
+    <text x="370" y="299" font-size="7.5" fill="#2D8B5E">Cross-vertical diversity reranking</text>
     <line x1="542" y1="295" x2="530" y2="295" stroke="#2D8B5E" stroke-width="0.7"/>
     <line x1="295" y1="308" x2="295" y2="322" stroke="#245761" stroke-width="0.9" marker-end="url(#arrowTeal)"/>
 
     <!-- ScoreAssignmentSubStep (y=326, h=26, center=339) -->
     <rect x="25" y="326" width="500" height="26" rx="5" fill="#E8F4FF" stroke="#6098C0" stroke-width="0.8" filter="url(#sh)"/>
     <text x="43" y="343" font-size="9" font-weight="600" fill="#2A5580">ScoreAssignmentSubStep</text>
-    <text x="370" y="343" font-size="7.5" fill="#777">Pure data mapping</text>
+    <text x="370" y="343" font-size="7.5" fill="#777">Copies ML scores onto entity data classes</text>
     <line x1="542" y1="339" x2="530" y2="339" stroke="#2D8B5E" stroke-width="0.7"/>
     <line x1="295" y1="352" x2="295" y2="366" stroke="#245761" stroke-width="0.9" marker-end="url(#arrowTeal)"/>
 
     <!-- LcmIntraRankingSubStep (y=370, h=26, center=383) -->
     <rect x="25" y="370" width="500" height="26" rx="5" fill="#FFE8F8" stroke="#B870B0" stroke-width="0.8" filter="url(#sh)"/>
     <text x="43" y="387" font-size="9" font-weight="600" fill="#6A2068">LcmIntraRankingSubStep</text>
-    <text x="370" y="387" font-size="7.5" fill="#777">Homepage-gated</text>
+    <text x="370" y="387" font-size="7.5" fill="#777">Pins LCM carousels to fixed positions</text>
     <line x1="542" y1="383" x2="530" y2="383" stroke="#2D8B5E" stroke-width="0.7"/>
     <line x1="295" y1="396" x2="295" y2="410" stroke="#245761" stroke-width="0.9" marker-end="url(#arrowTeal)"/>
 
     <!-- StoreListRerankingSubStep (y=414, h=26, center=427) -->
     <rect x="25" y="414" width="500" height="26" rx="5" fill="#F0FFE8" stroke="#70A050" stroke-width="0.8" filter="url(#sh)"/>
     <text x="43" y="431" font-size="9" font-weight="600" fill="#3A6030">StoreListRerankingSubStep</text>
-    <text x="370" y="431" font-size="7.5" fill="#2D8B5E">Writes to state (no lateinit)</text>
+    <text x="370" y="431" font-size="7.5" fill="#2D8B5E">Sorts stores by open/closed status</text>
     <line x1="542" y1="427" x2="530" y2="427" stroke="#2D8B5E" stroke-width="0.7"/>
     <line x1="295" y1="440" x2="295" y2="454" stroke="#245761" stroke-width="0.9" marker-end="url(#arrowTeal)"/>
 
     <!-- IntermixingSplitSubStep (y=458, h=26, center=471) -->
     <rect x="25" y="458" width="500" height="26" rx="5" fill="#E0FFF0" stroke="#40A080" stroke-width="0.8" filter="url(#sh)"/>
     <text x="43" y="475" font-size="9" font-weight="600" fill="#1A5C38">IntermixingSplitSubStep</text>
-    <text x="370" y="475" font-size="7.5" fill="#777">Unified (was 3 locations)</text>
+    <text x="370" y="475" font-size="7.5" fill="#777">Splits stores at idx 30 for carousel intermix</text>
     <line x1="542" y1="471" x2="530" y2="471" stroke="#2D8B5E" stroke-width="0.7"/>
     <line x1="295" y1="484" x2="295" y2="498" stroke="#245761" stroke-width="0.9" marker-end="url(#arrowTeal)"/>
 
     <!-- ImpressionCappingSubStep (y=502, h=26, center=515) -->
     <rect x="25" y="502" width="500" height="26" rx="5" fill="#FFEEE0" stroke="#C08050" stroke-width="0.8" filter="url(#sh)"/>
     <text x="43" y="519" font-size="9" font-weight="600" fill="#6A4020">ImpressionCappingSubStep</text>
-    <text x="370" y="519" font-size="7.5" fill="#777">Toggleable</text>
+    <text x="370" y="519" font-size="7.5" fill="#777">Filters carousels by impression history</text>
     <line x1="542" y1="515" x2="530" y2="515" stroke="#2D8B5E" stroke-width="0.7"/>
     <line x1="295" y1="528" x2="295" y2="542" stroke="#245761" stroke-width="0.9" marker-end="url(#arrowTeal)"/>
 
     <!-- PositionBoostingSubStep (y=546, h=26, center=559) -->
     <rect x="25" y="546" width="500" height="26" rx="5" fill="#FFE0E0" stroke="#C05050" stroke-width="0.8" filter="url(#sh)"/>
     <text x="43" y="563" font-size="9" font-weight="600" fill="#7A2020">PositionBoostingSubStep</text>
-    <text x="370" y="563" font-size="7.5" fill="#777">Isolated state machine</text>
+    <text x="370" y="563" font-size="7.5" fill="#777">4-pass boost/unpin score assignment</text>
     <line x1="542" y1="559" x2="530" y2="559" stroke="#2D8B5E" stroke-width="0.7"/>
     <line x1="295" y1="572" x2="295" y2="586" stroke="#245761" stroke-width="0.9" marker-end="url(#arrowTeal)"/>
 
     <!-- SortOrderAssignmentStep (y=590, h=26, center=603) -->
     <rect x="25" y="590" width="500" height="26" rx="5" fill="#F3EEFA" stroke="#7B4DB5" stroke-width="0.9" filter="url(#sh)"/>
     <text x="43" y="607" font-size="9.5" font-weight="600" fill="#4c0c3a">SortOrderAssignmentStep</text>
+    <text x="370" y="607" font-size="7.5" fill="#777">Pinned/flowing position assignment</text>
     <line x1="542" y1="603" x2="530" y2="603" stroke="#2D8B5E" stroke-width="0.7"/>
     <line x1="295" y1="616" x2="295" y2="628" stroke="#245761" stroke-width="0.9" marker-end="url(#arrowTeal)"/>
 
     <!-- ReassemblyStep (y=632, h=26, center=645) -->
     <rect x="25" y="632" width="500" height="26" rx="5" fill="#E8FFF2" stroke="#2D8B5E" stroke-width="0.9" filter="url(#sh)"/>
     <text x="43" y="649" font-size="9.5" font-weight="600" fill="#1A5C38">ReassemblyStep</text>
+    <text x="370" y="649" font-size="7.5" fill="#777">Rebuilds RankableContent from ranked entities</text>
     <line x1="542" y1="645" x2="530" y2="645" stroke="#2D8B5E" stroke-width="0.7"/>
     <line x1="295" y1="658" x2="295" y2="672" stroke="#245761" stroke-width="0.9" marker-end="url(#arrowTeal)"/>
 
