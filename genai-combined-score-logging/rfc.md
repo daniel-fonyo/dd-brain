@@ -148,18 +148,7 @@ WHERE IGUAZU_PARTITION_DATE = CURRENT_DATE()
   AND RANKING_SIGNALS IS NOT NULL
 ```
 
-**Comparison with existing `SCORE_MODIFIERS`:**
-
-| | `SCORE_MODIFIERS` (existing) | `RANKING_SIGNALS` / `CAROUSEL_RANKING_SIGNALS` (new) |
-|---|---|---|
-| Proto type | `repeated ScoreModifier` (array) | `map<string, string>` (object) |
-| Snowflake type | VARIANT (JSON array) | VARIANT (JSON object) |
-| Access pattern | `LATERAL FLATTEN` then filter by name | Direct key access: `COLUMN:key::TYPE` |
-| Query cost | Row multiplication per array element | Same as reading a scalar column |
-| Value types | Double only | String (castable to DOUBLE, VARCHAR, etc.) |
-| Consumed by | Production ML jobs | Analysis, debugging, model evaluation |
-
-The existing `SCORE_MODIFIERS` column and its consumers are completely unaffected. The new columns exist independently. If in the future we want to migrate signals from `SCORE_MODIFIERS` into the new columns, that is a matter of adding `record()` calls at each signal's source. No schema changes needed.
+The existing `SCORE_MODIFIERS` column stores signals as a JSON array, which requires `LATERAL FLATTEN` to query. That operation explodes every array element into its own row before filtering, making queries expensive. The new columns store signals as JSON objects with direct key access (`COLUMN:key::DOUBLE`), which avoids the row multiplication entirely and performs comparably to reading a regular scalar column. `SCORE_MODIFIERS` and its consumers are completely unaffected. The new columns exist independently.
 
 ### Where the Collector Lives
 
