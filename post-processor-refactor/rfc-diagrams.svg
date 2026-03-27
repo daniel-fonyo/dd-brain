@@ -1,394 +1,376 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1480 940" font-family="-apple-system, system-ui, 'Segoe UI', Helvetica, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1480 960" font-family="-apple-system, system-ui, 'Segoe UI', Helvetica, sans-serif">
   <defs>
     <filter id="sh" x="-2%" y="-2%" width="104%" height="104%">
       <feDropShadow dx="0.5" dy="1.5" stdDeviation="2" flood-opacity="0.07"/>
     </filter>
-    <marker id="ad" viewBox="0 0 8 8" refX="4" refY="8" markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M0,0 L4,8 L8,0" fill="none" stroke="#245761" stroke-width="1.3"/>
+    <marker id="aDown" viewBox="0 0 10 10" refX="5" refY="10" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L5,10 L10,0 Z" fill="#888"/>
     </marker>
-    <marker id="ag" viewBox="0 0 8 8" refX="4" refY="8" markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M0,0 L4,8 L8,0" fill="none" stroke="#999" stroke-width="1.2"/>
+    <marker id="aDownG" viewBox="0 0 10 10" refX="5" refY="10" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L5,10 L10,0 Z" fill="#245761"/>
     </marker>
-    <marker id="ar" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M0,0 L8,4 L0,8" fill="none" stroke="#FF3008" stroke-width="1.3"/>
+    <marker id="aRight" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#FF3008"/>
     </marker>
   </defs>
 
-  <!-- Background -->
-  <rect width="1480" height="940" fill="#F8F8F8"/>
+  <rect width="1480" height="960" fill="#F8F8F8"/>
 
   <!-- Title -->
-  <text x="740" y="32" text-anchor="middle" font-size="19" font-weight="700" fill="#1A1A1A" letter-spacing="-0.3">
-    Homepage Vertical Ranking — Evolution
-  </text>
+  <text x="740" y="32" text-anchor="middle" font-size="19" font-weight="700" fill="#1A1A1A" letter-spacing="-0.3">Homepage Vertical Ranking — Architecture Evolution</text>
   <line x1="150" y1="44" x2="1330" y2="44" stroke="#E0E0E0" stroke-width="1"/>
 
-  <!-- ════════════════════════════════════════════════════════ -->
-  <!-- PANEL 1: CURRENT                                        -->
-  <!-- ════════════════════════════════════════════════════════ -->
+  <!-- ════════════════════════════════════════════════════════════ -->
+  <!-- PANEL 1: CURRENT                                            -->
+  <!-- ════════════════════════════════════════════════════════════ -->
   <g transform="translate(15, 58)">
-    <rect x="0" y="0" width="450" height="862" rx="10" fill="white" stroke="#FFD6CC" stroke-width="1"/>
+    <rect x="0" y="0" width="445" height="885" rx="10" fill="white" stroke="#FFD6CC" stroke-width="1"/>
+    <rect x="0" y="0" width="445" height="50" rx="10" fill="#681109"/>
+    <rect x="0" y="24" width="445" height="26" fill="#681109"/>
+    <text x="222" y="22" text-anchor="middle" font-size="15" font-weight="700" fill="white" letter-spacing="0.8">CURRENT</text>
+    <text x="222" y="41" text-anchor="middle" font-size="9.5" fill="#FFB8A8">Template Method Monolith · 1,900+ lines</text>
 
-    <!-- Header -->
-    <rect x="0" y="0" width="450" height="50" rx="10" fill="#681109"/>
-    <rect x="0" y="24" width="450" height="26" fill="#681109"/>
-    <text x="225" y="22" text-anchor="middle" font-size="15" font-weight="700" fill="white" letter-spacing="0.8">CURRENT</text>
-    <text x="225" y="41" text-anchor="middle" font-size="9.5" fill="#FFB8A8">Template Method Monolith · 1,900+ lines</text>
+    <!-- Container label -->
+    <text x="222" y="72" text-anchor="middle" font-size="10" fill="#681109" font-weight="600">BaseEntityRankerConfiguration.rank()</text>
 
-    <!-- DV Component — shows state proliferating -->
-    <rect x="270" y="60" width="160" height="32" rx="6" fill="#FFF0ED" stroke="#FF3008" stroke-width="1" filter="url(#sh)"/>
-    <text x="350" y="74" text-anchor="middle" font-size="9" font-weight="700" fill="#FF3008">Dynamic Values</text>
-    <text x="350" y="86" text-anchor="middle" font-size="7.5" fill="#999">31 flags, 15+ files</text>
+    <!-- Input -->
+    <rect x="140" y="82" width="165" height="22" rx="11" fill="#F0F0F0" stroke="#CCC" stroke-width="0.7"/>
+    <text x="222" y="97" text-anchor="middle" font-size="9" fill="#666">RankableContent</text>
+    <line x1="222" y1="104" x2="222" y2="120" stroke="#888" stroke-width="1" marker-end="url(#aDown)"/>
 
-    <!-- DV proliferation lines — spider web showing scattered state -->
-    <line x1="290" y1="92" x2="175" y2="230" stroke="#FF3008" stroke-width="0.7" stroke-dasharray="3,2" opacity="0.5"/>
-    <line x1="310" y1="92" x2="200" y2="260" stroke="#FF3008" stroke-width="0.7" stroke-dasharray="3,2" opacity="0.5"/>
-    <line x1="330" y1="92" x2="160" y2="290" stroke="#FF3008" stroke-width="0.7" stroke-dasharray="3,2" opacity="0.5"/>
-    <line x1="350" y1="92" x2="190" y2="375" stroke="#FF3008" stroke-width="0.7" stroke-dasharray="3,2" opacity="0.5"/>
-    <line x1="360" y1="92" x2="240" y2="420" stroke="#FF3008" stroke-width="0.7" stroke-dasharray="3,2" opacity="0.5"/>
-    <line x1="370" y1="92" x2="280" y2="455" stroke="#FF3008" stroke-width="0.7" stroke-dasharray="3,2" opacity="0.5"/>
-    <line x1="380" y1="92" x2="320" y2="490" stroke="#FF3008" stroke-width="0.7" stroke-dasharray="3,2" opacity="0.5"/>
-    <line x1="400" y1="92" x2="250" y2="555" stroke="#FF3008" stroke-width="0.7" stroke-dasharray="3,2" opacity="0.4"/>
-    <!-- Label -->
-    <text x="112" y="72" font-size="8" fill="#FF3008" font-style="italic" opacity="0.7">state proliferates</text>
-    <text x="112" y="82" font-size="8" fill="#FF3008" font-style="italic" opacity="0.7">across all methods</text>
+    <!-- ── getEntities ── -->
+    <rect x="25" y="126" width="395" height="38" rx="5" fill="#EBF5FF" stroke="#4A90C4" stroke-width="1" filter="url(#sh)"/>
+    <text x="40" y="148" font-size="10.5" font-weight="600" fill="#173162">getEntities()</text>
+    <text x="200" y="148" font-size="8.5" fill="#777">Flatten → ScorableEntity wrappers</text>
+    <line x1="222" y1="164" x2="222" y2="180" stroke="#888" stroke-width="1" marker-end="url(#aDown)"/>
 
-    <!-- rank() label -->
-    <text x="130" y="74" text-anchor="middle" font-size="9.5" fill="#681109" font-weight="600">
-      .rank()
-    </text>
+    <!-- ── getScoreBundle — 3 concerns ── -->
+    <rect x="25" y="186" width="395" height="108" rx="5" fill="#FFFBF0" stroke="#C4960A" stroke-width="1" filter="url(#sh)"/>
+    <text x="40" y="204" font-size="10.5" font-weight="600" fill="#7A5800">getScoreBundle()</text>
+    <text x="340" y="204" font-size="8" fill="#D03020" font-weight="600">3 concerns mixed</text>
+    <rect x="40" y="212" width="365" height="20" rx="3" fill="#F2D531" fill-opacity="0.25" stroke="#D4B800" stroke-width="0.5"/>
+    <text x="50" y="226" font-size="8" fill="#555">ML Scoring — Sibyl gRPC</text>
+    <rect x="40" y="236" width="365" height="20" rx="3" fill="#F3944D" fill-opacity="0.2" stroke="#D07030" stroke-width="0.5"/>
+    <text x="50" y="250" font-size="8" fill="#555">Interleaving — dual-list merge</text>
+    <rect x="372" y="239" width="20" height="13" rx="3" fill="#FF3008" fill-opacity="0.85"/>
+    <text x="382" y="248" text-anchor="middle" font-size="6.5" fill="white" font-weight="700">DV</text>
+    <rect x="40" y="260" width="365" height="20" rx="3" fill="#F79DCC" fill-opacity="0.2" stroke="#C05090" stroke-width="0.5"/>
+    <text x="50" y="274" font-size="8" fill="#555">Vertical Blending — mutates ScoreBundle in-place</text>
+    <rect x="372" y="263" width="20" height="13" rx="3" fill="#FF3008" fill-opacity="0.85"/>
+    <text x="382" y="272" text-anchor="middle" font-size="6.5" fill="white" font-weight="700">DV</text>
+    <line x1="222" y1="294" x2="222" y2="310" stroke="#888" stroke-width="1" marker-end="url(#aDown)"/>
 
-    <!-- Input pill -->
-    <rect x="130" y="100" width="150" height="22" rx="11" fill="#F0F0F0" stroke="#CCC" stroke-width="0.7"/>
-    <text x="205" y="115" text-anchor="middle" font-size="9" fill="#666">RankableContent</text>
-    <line x1="205" y1="122" x2="205" y2="138" stroke="#999" stroke-width="0.8" marker-end="url(#ag)"/>
+    <!-- ── getBoostBundle — 6 concerns ── -->
+    <rect x="25" y="316" width="395" height="218" rx="5" fill="#FFF3EF" stroke="#FF3008" stroke-width="1.3" filter="url(#sh)"/>
+    <text x="40" y="335" font-size="10.5" font-weight="700" fill="#681109">getBoostBundle()</text>
+    <text x="210" y="335" font-size="8.5" fill="#999">258 lines</text>
+    <text x="290" y="335" font-size="8" fill="#D03020" font-weight="700">6 concerns interleaved</text>
+    <rect x="40" y="344" width="365" height="19" rx="3" fill="#B8E6FF" fill-opacity="0.35" stroke="#80B8D8" stroke-width="0.4"/>
+    <text x="50" y="357" font-size="7.5" fill="#555">1. Score Assignment — 94 lines of .copy(predictionScore=...)</text>
+    <rect x="40" y="367" width="365" height="19" rx="3" fill="#FFC4FC" fill-opacity="0.3" stroke="#D090C8" stroke-width="0.4"/>
+    <text x="50" y="380" font-size="7.5" fill="#555">2. LCM Intra-Ranking — hardcoded positions [4, 7, 10, 13]</text>
+    <rect x="372" y="370" width="20" height="13" rx="3" fill="#FF3008" fill-opacity="0.85"/>
+    <text x="382" y="379" text-anchor="middle" font-size="6.5" fill="white" font-weight="700">DV</text>
+    <rect x="40" y="390" width="365" height="19" rx="3" fill="#EEFFBB" fill-opacity="0.35" stroke="#B8C860" stroke-width="0.4"/>
+    <text x="50" y="403" font-size="7.5" fill="#555">3. Store List Reranking — sets class-level mutable state</text>
+    <rect x="40" y="413" width="365" height="19" rx="3" fill="#B5F0D8" fill-opacity="0.3" stroke="#70C0A0" stroke-width="0.4"/>
+    <text x="50" y="426" font-size="7.5" fill="#555">4. Intermixing Split — splits store list at index 30</text>
+    <rect x="372" y="416" width="20" height="13" rx="3" fill="#FF3008" fill-opacity="0.85"/>
+    <text x="382" y="425" text-anchor="middle" font-size="6.5" fill="white" font-weight="700">DV</text>
+    <rect x="40" y="436" width="365" height="19" rx="3" fill="#FFD4B0" fill-opacity="0.3" stroke="#D0A070" stroke-width="0.4"/>
+    <text x="50" y="449" font-size="7.5" fill="#555">5. Impression Capping — title-match filtering</text>
+    <rect x="372" y="439" width="20" height="13" rx="3" fill="#FF3008" fill-opacity="0.85"/>
+    <text x="382" y="448" text-anchor="middle" font-size="6.5" fill="white" font-weight="700">DV</text>
+    <rect x="40" y="459" width="365" height="40" rx="3" fill="#FFB0B0" fill-opacity="0.25" stroke="#D07070" stroke-width="0.4"/>
+    <text x="50" y="474" font-size="7.5" fill="#555">6. Position Boosting — 251-line 4-pass state machine</text>
+    <text x="60" y="490" font-size="7" fill="#999" font-style="italic">Overwrites predictionScore with fabricated values</text>
+    <rect x="372" y="462" width="20" height="13" rx="3" fill="#FF3008" fill-opacity="0.85"/>
+    <text x="382" y="471" text-anchor="middle" font-size="6.5" fill="white" font-weight="700">DV</text>
 
-    <!-- getEntities -->
-    <rect x="25" y="143" width="400" height="38" rx="5" fill="#EBF5FF" stroke="#4A90C4" stroke-width="1" filter="url(#sh)"/>
-    <text x="40" y="164" font-size="10.5" font-weight="600" fill="#173162">getEntities()</text>
-    <text x="200" y="164" font-size="8.5" fill="#777">→ ScorableEntity wrappers</text>
-    <line x1="205" y1="181" x2="205" y2="197" stroke="#999" stroke-width="0.8" marker-end="url(#ag)"/>
+    <!-- lateinit var: getBoostBundle → getRankableContent -->
+    <path d="M 425 402 L 438 402 L 438 618 L 425 618" fill="none" stroke="#FF3008" stroke-width="1.8" stroke-dasharray="5,3" marker-end="url(#aRight)"/>
+    <!-- Horizontal label box at midpoint -->
+    <rect x="426" y="496" width="16" height="54" rx="3" fill="white" stroke="#FF3008" stroke-width="0.7"/>
+    <text x="434" y="510" text-anchor="middle" font-size="6" fill="#FF3008" font-weight="600">l</text>
+    <text x="434" y="518" text-anchor="middle" font-size="6" fill="#FF3008" font-weight="600">a</text>
+    <text x="434" y="526" text-anchor="middle" font-size="6" fill="#FF3008" font-weight="600">t</text>
+    <text x="434" y="534" text-anchor="middle" font-size="6" fill="#FF3008" font-weight="600">e</text>
+    <text x="434" y="542" text-anchor="middle" font-size="6" fill="#FF3008" font-weight="600">i</text>
+    <text x="434" y="550" text-anchor="middle" font-size="5" fill="#FF3008" font-weight="600">nit</text>
 
-    <!-- getScoreBundle — 3 concerns -->
-    <rect x="25" y="202" width="400" height="100" rx="5" fill="#FFFBF0" stroke="#C4960A" stroke-width="1" filter="url(#sh)"/>
-    <text x="40" y="220" font-size="10.5" font-weight="600" fill="#7A5800">getScoreBundle()</text>
-    <text x="325" y="220" font-size="8" fill="#D03020" font-weight="600">3 concerns mixed</text>
-    <!-- Concern bands -->
-    <rect x="40" y="228" width="370" height="20" rx="3" fill="#F2D531" fill-opacity="0.25" stroke="#D4B800" stroke-width="0.5"/>
-    <text x="50" y="242" font-size="8" fill="#555">ML Scoring — Sibyl gRPC</text>
-    <rect x="40" y="252" width="370" height="20" rx="3" fill="#F3944D" fill-opacity="0.2" stroke="#D07030" stroke-width="0.5"/>
-    <text x="50" y="266" font-size="8" fill="#555">Interleaving — dual-list merge</text>
-    <rect x="40" y="276" width="370" height="20" rx="3" fill="#F79DCC" fill-opacity="0.2" stroke="#C05090" stroke-width="0.5"/>
-    <text x="50" y="290" font-size="8" fill="#555">Vertical Blending — mutates ScoreBundle in-place</text>
-    <line x1="205" y1="302" x2="205" y2="318" stroke="#999" stroke-width="0.8" marker-end="url(#ag)"/>
+    <line x1="222" y1="534" x2="222" y2="550" stroke="#888" stroke-width="1" marker-end="url(#aDown)"/>
 
-    <!-- getBoostBundle — 6 concerns -->
-    <rect x="25" y="323" width="400" height="206" rx="5" fill="#FFF3EF" stroke="#FF3008" stroke-width="1.3" filter="url(#sh)"/>
-    <text x="40" y="342" font-size="10.5" font-weight="700" fill="#681109">getBoostBundle()</text>
-    <text x="220" y="342" font-size="8.5" fill="#999">258 lines</text>
-    <text x="310" y="342" font-size="8" fill="#D03020" font-weight="700">6 concerns interleaved</text>
-    <!-- 6 concern bands -->
-    <rect x="40" y="350" width="370" height="19" rx="3" fill="#B8E6FF" fill-opacity="0.35" stroke="#80B8D8" stroke-width="0.4"/>
-    <text x="50" y="363" font-size="7.5" fill="#555">1. Score Assignment — 94 lines of .copy(predictionScore=...)</text>
-    <rect x="40" y="373" width="370" height="19" rx="3" fill="#FFC4FC" fill-opacity="0.3" stroke="#D090C8" stroke-width="0.4"/>
-    <text x="50" y="386" font-size="7.5" fill="#555">2. LCM Intra-Ranking — homepage only, positions [4,7,10,13]</text>
-    <rect x="40" y="396" width="370" height="19" rx="3" fill="#EEFFBB" fill-opacity="0.35" stroke="#B8C860" stroke-width="0.4"/>
-    <text x="50" y="409" font-size="7.5" fill="#555">3. Store List Reranking — sets class-level mutable var</text>
-    <rect x="40" y="419" width="370" height="19" rx="3" fill="#B5F0D8" fill-opacity="0.3" stroke="#70C0A0" stroke-width="0.4"/>
-    <text x="50" y="432" font-size="7.5" fill="#555">4. Intermixing Split — splits store list at index 30</text>
-    <rect x="40" y="442" width="370" height="19" rx="3" fill="#FFD4B0" fill-opacity="0.3" stroke="#D0A070" stroke-width="0.4"/>
-    <text x="50" y="455" font-size="7.5" fill="#555">5. Impression Capping — title-match filtering</text>
-    <rect x="40" y="465" width="370" height="39" rx="3" fill="#FFB0B0" fill-opacity="0.25" stroke="#D07070" stroke-width="0.4"/>
-    <text x="50" y="478" font-size="7.5" fill="#555">6. Position Boosting — 251-line 4-pass state machine</text>
-    <text x="60" y="493" font-size="7" fill="#999" font-style="italic">Overwrites predictionScore with fabricated values</text>
+    <!-- ── getRankingBundle ── -->
+    <rect x="25" y="556" width="395" height="38" rx="5" fill="#F3EEFA" stroke="#7B4DB5" stroke-width="1" filter="url(#sh)"/>
+    <text x="40" y="578" font-size="10.5" font-weight="600" fill="#4c0c3a">getRankingBundle()</text>
+    <text x="230" y="578" font-size="8.5" fill="#777">Sort order + intermix group size</text>
+    <rect x="372" y="565" width="20" height="13" rx="3" fill="#FF3008" fill-opacity="0.85"/>
+    <text x="382" y="574" text-anchor="middle" font-size="6.5" fill="white" font-weight="700">DV</text>
+    <line x1="222" y1="594" x2="222" y2="610" stroke="#888" stroke-width="1" marker-end="url(#aDown)"/>
 
-    <!-- lateinit var: SINGLE clear arrow from getBoostBundle → getRankableContent -->
-    <path d="M 430 410 L 444 410 L 444 620 L 430 620" fill="none" stroke="#FF3008" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#ar)"/>
-    <rect x="436" y="500" width="12" height="50" rx="2" fill="white" fill-opacity="0.95"/>
-    <text x="448" y="535" text-anchor="middle" font-size="7" fill="#FF3008" font-weight="600" transform="rotate(-90 448 535)">lateinit var</text>
+    <!-- ── getRankableContent ── -->
+    <rect x="25" y="616" width="395" height="38" rx="5" fill="#E8FFF2" stroke="#2D8B5E" stroke-width="1" filter="url(#sh)"/>
+    <text x="40" y="638" font-size="10.5" font-weight="600" fill="#1A5C38">getRankableContent()</text>
+    <text x="258" y="638" font-size="8.5" fill="#D03020" font-weight="600">reads mutable state from step 3</text>
+    <line x1="222" y1="654" x2="222" y2="670" stroke="#888" stroke-width="1" marker-end="url(#aDown)"/>
 
-    <line x1="205" y1="529" x2="205" y2="545" stroke="#999" stroke-width="0.8" marker-end="url(#ag)"/>
+    <!-- Output -->
+    <rect x="140" y="676" width="165" height="22" rx="11" fill="#F0F0F0" stroke="#CCC" stroke-width="0.7"/>
+    <text x="222" y="691" text-anchor="middle" font-size="9" fill="#666">RankableContent</text>
 
-    <!-- getRankingBundle -->
-    <rect x="25" y="550" width="400" height="38" rx="5" fill="#F3EEFA" stroke="#7B4DB5" stroke-width="1" filter="url(#sh)"/>
-    <text x="40" y="572" font-size="10.5" font-weight="600" fill="#4c0c3a">getRankingBundle()</text>
-    <text x="230" y="572" font-size="8.5" fill="#777">→ sort order + intermix group</text>
-    <line x1="205" y1="588" x2="205" y2="604" stroke="#999" stroke-width="0.8" marker-end="url(#ag)"/>
-
-    <!-- getRankableContent -->
-    <rect x="25" y="609" width="400" height="38" rx="5" fill="#E8FFF2" stroke="#2D8B5E" stroke-width="1" filter="url(#sh)"/>
-    <text x="40" y="630" font-size="10.5" font-weight="600" fill="#1A5C38">getRankableContent()</text>
-    <text x="258" y="630" font-size="8.5" fill="#D03020">← reads mutable state from step 3</text>
-    <line x1="205" y1="647" x2="205" y2="663" stroke="#999" stroke-width="0.8" marker-end="url(#ag)"/>
-
-    <!-- Output pill -->
-    <rect x="130" y="668" width="150" height="22" rx="11" fill="#F0F0F0" stroke="#CCC" stroke-width="0.7"/>
-    <text x="205" y="683" text-anchor="middle" font-size="9" fill="#666">RankableContent</text>
+    <!-- DV summary -->
+    <text x="222" y="722" text-anchor="middle" font-size="9" fill="#FF3008" font-weight="600">31 DVs scattered across 15+ files</text>
+    <text x="222" y="736" text-anchor="middle" font-size="8" fill="#999">Each method resolves its own flags via static calls</text>
 
     <!-- Bottom annotation -->
-    <rect x="20" y="705" width="410" height="44" rx="6" fill="#681109" fill-opacity="0.04"/>
-    <text x="225" y="722" text-anchor="middle" font-size="9" fill="#681109" font-weight="600">
-      Modifying one concern requires understanding all others.
-    </text>
-    <text x="225" y="738" text-anchor="middle" font-size="8.5" fill="#999">
-      Adding an experiment: 2-3 weeks of careful threading through shared state.
-    </text>
+    <rect x="25" y="754" width="395" height="42" rx="6" fill="#681109" fill-opacity="0.04"/>
+    <text x="222" y="772" text-anchor="middle" font-size="9" fill="#681109" font-weight="600">Modifying one concern requires understanding all others.</text>
+    <text x="222" y="787" text-anchor="middle" font-size="8.5" fill="#999">Adding an experiment: 2-3 weeks of careful threading.</text>
   </g>
 
-  <!-- ══════════ TRANSITION 1→2 ══════════ -->
-  <g transform="translate(467, 440)">
-    <path d="M 0 0 L 14 -6 L 14 -2.5 L 35 -2.5 L 35 2.5 L 14 2.5 L 14 6 Z" fill="#245761" fill-opacity="0.5"/>
-    <text x="17" y="18" text-anchor="middle" font-size="7.5" fill="#245761" font-weight="600">Tier 1</text>
-    <text x="17" y="28" text-anchor="middle" font-size="7" fill="#999">Wrap</text>
+  <!-- ══════════════ TRANSITION 1→2 ══════════════ -->
+  <g transform="translate(462, 400)">
+    <rect x="0" y="-16" width="42" height="32" rx="5" fill="#245761" fill-opacity="0.08" stroke="#245761" stroke-width="0.7"/>
+    <path d="M 10 0 L 22 -7 L 22 -3 L 33 -3 L 33 3 L 22 3 L 22 7 Z" fill="#245761" fill-opacity="0.55"/>
+    <text x="21" y="30" text-anchor="middle" font-size="8" fill="#245761" font-weight="700">Tier 1</text>
+    <text x="21" y="42" text-anchor="middle" font-size="7.5" fill="#999">Wrap</text>
   </g>
 
-  <!-- ════════════════════════════════════════════════════════ -->
-  <!-- PANEL 2: PHASE 1 — COARSE PIPELINE                     -->
-  <!-- ════════════════════════════════════════════════════════ -->
-  <g transform="translate(505, 58)">
-    <rect x="0" y="0" width="450" height="862" rx="10" fill="white" stroke="#C8DFE8" stroke-width="1"/>
+  <!-- ════════════════════════════════════════════════════════════ -->
+  <!-- PANEL 2: PHASE 1                                            -->
+  <!-- ════════════════════════════════════════════════════════════ -->
+  <g transform="translate(507, 58)">
+    <rect x="0" y="0" width="445" height="885" rx="10" fill="white" stroke="#C8DFE8" stroke-width="1"/>
+    <rect x="0" y="0" width="445" height="50" rx="10" fill="#2E6E7A"/>
+    <rect x="0" y="24" width="445" height="26" fill="#2E6E7A"/>
+    <text x="222" y="22" text-anchor="middle" font-size="15" font-weight="700" fill="white" letter-spacing="0.8">PHASE 1</text>
+    <text x="222" y="41" text-anchor="middle" font-size="9.5" fill="#A0D8E0">Coarse Pipeline · Same code, explicit state</text>
 
-    <!-- Header -->
-    <rect x="0" y="0" width="450" height="50" rx="10" fill="#2E6E7A"/>
-    <rect x="0" y="24" width="450" height="26" fill="#2E6E7A"/>
-    <text x="225" y="22" text-anchor="middle" font-size="15" font-weight="700" fill="white" letter-spacing="0.8">PHASE 1</text>
-    <text x="225" y="41" text-anchor="middle" font-size="9.5" fill="#A0D8E0">Coarse Pipeline · Same code, explicit state</text>
+    <text x="222" y="72" text-anchor="middle" font-size="8.5" fill="#999">DVs still resolved inside existing methods (unchanged)</text>
 
-    <!-- DV note — still scattered -->
-    <rect x="25" y="60" width="400" height="30" rx="5" fill="#FFF0ED" stroke="#FF3008" stroke-width="0.7" stroke-dasharray="3,2"/>
-    <text x="225" y="80" text-anchor="middle" font-size="8.5" fill="#999">
-      DVs still resolved inside existing methods — unchanged from current
-    </text>
+    <!-- Input -->
+    <rect x="140" y="84" width="165" height="22" rx="11" fill="#F0F0F0" stroke="#CCC" stroke-width="0.7"/>
+    <text x="222" y="99" text-anchor="middle" font-size="9" fill="#666">RankableContent</text>
+    <line x1="222" y1="106" x2="222" y2="130" stroke="#245761" stroke-width="1.1" marker-end="url(#aDownG)"/>
+    <text x="285" y="122" font-size="7.5" fill="#245761" font-style="italic">state.content</text>
 
-    <!-- Input pill -->
-    <rect x="150" y="105" width="150" height="22" rx="11" fill="#F0F0F0" stroke="#CCC" stroke-width="0.7"/>
-    <text x="225" y="120" text-anchor="middle" font-size="9" fill="#666">RankableContent</text>
-    <line x1="225" y1="127" x2="225" y2="148" stroke="#245761" stroke-width="1" marker-end="url(#ad)"/>
-    <text x="290" y="142" font-size="7.5" fill="#245761" font-style="italic">state.content</text>
+    <!-- Step 1 -->
+    <rect x="40" y="137" width="365" height="54" rx="6" fill="#EBF5FF" stroke="#4A90C4" stroke-width="1.1" filter="url(#sh)"/>
+    <circle cx="385" cy="161" r="11" fill="#4A90C4" fill-opacity="0.12"/>
+    <text x="385" y="165" text-anchor="middle" font-size="9" fill="#4A90C4" font-weight="700">1</text>
+    <text x="58" y="160" font-size="11" font-weight="600" fill="#173162">EntityExtractionStep</text>
+    <text x="58" y="178" font-size="8" fill="#777">Delegates to delegate.getEntities()</text>
+    <line x1="222" y1="191" x2="222" y2="218" stroke="#245761" stroke-width="1.1" marker-end="url(#aDownG)"/>
+    <text x="285" y="209" font-size="7.5" fill="#245761" font-style="italic">state.entities</text>
 
-    <!-- ── Step 1: EntityExtractionStep ── -->
-    <rect x="40" y="155" width="370" height="52" rx="6" fill="#EBF5FF" stroke="#4A90C4" stroke-width="1.1" filter="url(#sh)"/>
-    <text x="60" y="178" font-size="11" font-weight="600" fill="#173162">EntityExtractionStep</text>
-    <text x="60" y="196" font-size="8" fill="#777">→ delegate.getEntities()</text>
-    <circle cx="388" cy="178" r="11" fill="#4A90C4" fill-opacity="0.12"/>
-    <text x="388" y="182" text-anchor="middle" font-size="9" fill="#4A90C4" font-weight="700">1</text>
-    <line x1="225" y1="207" x2="225" y2="232" stroke="#245761" stroke-width="1" marker-end="url(#ad)"/>
-    <text x="290" y="224" font-size="7.5" fill="#245761" font-style="italic">state.entities</text>
+    <!-- Step 2 -->
+    <rect x="40" y="225" width="365" height="54" rx="6" fill="#FFFBF0" stroke="#C4960A" stroke-width="1.1" filter="url(#sh)"/>
+    <circle cx="385" cy="249" r="11" fill="#C4960A" fill-opacity="0.12"/>
+    <text x="385" y="253" text-anchor="middle" font-size="9" fill="#C4960A" font-weight="700">2</text>
+    <text x="58" y="248" font-size="11" font-weight="600" fill="#7A5800">ScoringStep</text>
+    <text x="58" y="266" font-size="8" fill="#777">Delegates to delegate.getScoreBundle() (wraps 3 concerns)</text>
+    <line x1="222" y1="279" x2="222" y2="306" stroke="#245761" stroke-width="1.1" marker-end="url(#aDownG)"/>
+    <text x="285" y="297" font-size="7.5" fill="#245761" font-style="italic">state.scoreBundle</text>
 
-    <!-- ── Step 2: ScoringStep ── -->
-    <rect x="40" y="239" width="370" height="52" rx="6" fill="#FFFBF0" stroke="#C4960A" stroke-width="1.1" filter="url(#sh)"/>
-    <text x="60" y="262" font-size="11" font-weight="600" fill="#7A5800">ScoringStep</text>
-    <text x="60" y="280" font-size="8" fill="#777">→ delegate.getScoreBundle()</text>
-    <!-- Mini concern stripes showing 3 concerns wrapped -->
-    <rect x="310" y="253" width="18" height="5" rx="1" fill="#F2D531" fill-opacity="0.5"/>
-    <rect x="330" y="253" width="18" height="5" rx="1" fill="#F3944D" fill-opacity="0.4"/>
-    <rect x="350" y="253" width="18" height="5" rx="1" fill="#F79DCC" fill-opacity="0.4"/>
-    <text x="340" y="270" text-anchor="middle" font-size="6.5" fill="#999">3 wrapped</text>
-    <circle cx="388" cy="262" r="11" fill="#C4960A" fill-opacity="0.12"/>
-    <text x="388" y="266" text-anchor="middle" font-size="9" fill="#C4960A" font-weight="700">2</text>
-    <line x1="225" y1="291" x2="225" y2="316" stroke="#245761" stroke-width="1" marker-end="url(#ad)"/>
-    <text x="290" y="308" font-size="7.5" fill="#245761" font-style="italic">state.scoreBundle</text>
+    <!-- Step 3 -->
+    <rect x="40" y="313" width="365" height="54" rx="6" fill="#FFF3EF" stroke="#D05030" stroke-width="1.1" filter="url(#sh)"/>
+    <circle cx="385" cy="337" r="11" fill="#D05030" fill-opacity="0.12"/>
+    <text x="385" y="341" text-anchor="middle" font-size="9" fill="#D05030" font-weight="700">3</text>
+    <text x="58" y="336" font-size="11" font-weight="600" fill="#8B2010">BoostBundleStep</text>
+    <text x="58" y="354" font-size="8" fill="#777">Delegates to delegate.getBoostBundle() (wraps 6 concerns)</text>
+    <line x1="222" y1="367" x2="222" y2="394" stroke="#245761" stroke-width="1.1" marker-end="url(#aDownG)"/>
+    <text x="285" y="385" font-size="7.5" fill="#245761" font-style="italic">state.boostedBundle</text>
 
-    <!-- ── Step 3: BoostBundleStep ── -->
-    <rect x="40" y="323" width="370" height="52" rx="6" fill="#FFF3EF" stroke="#D05030" stroke-width="1.1" filter="url(#sh)"/>
-    <text x="60" y="346" font-size="11" font-weight="600" fill="#8B2010">BoostBundleStep</text>
-    <text x="60" y="364" font-size="8" fill="#777">→ delegate.getBoostBundle()</text>
-    <!-- Mini concern stripes showing 6 concerns wrapped -->
-    <rect x="286" y="337" width="12" height="5" rx="1" fill="#B8E6FF" fill-opacity="0.6"/>
-    <rect x="300" y="337" width="12" height="5" rx="1" fill="#FFC4FC" fill-opacity="0.5"/>
-    <rect x="314" y="337" width="12" height="5" rx="1" fill="#EEFFBB" fill-opacity="0.6"/>
-    <rect x="328" y="337" width="12" height="5" rx="1" fill="#B5F0D8" fill-opacity="0.5"/>
-    <rect x="342" y="337" width="12" height="5" rx="1" fill="#FFD4B0" fill-opacity="0.5"/>
-    <rect x="356" y="337" width="12" height="5" rx="1" fill="#FFB0B0" fill-opacity="0.4"/>
-    <text x="326" y="354" text-anchor="middle" font-size="6.5" fill="#999">6 wrapped</text>
-    <circle cx="388" cy="346" r="11" fill="#D05030" fill-opacity="0.12"/>
-    <text x="388" y="350" text-anchor="middle" font-size="9" fill="#D05030" font-weight="700">3</text>
-    <line x1="225" y1="375" x2="225" y2="400" stroke="#245761" stroke-width="1" marker-end="url(#ad)"/>
-    <text x="290" y="392" font-size="7.5" fill="#245761" font-style="italic">state.boostedBundle</text>
+    <!-- Step 4 -->
+    <rect x="40" y="401" width="365" height="54" rx="6" fill="#F3EEFA" stroke="#7B4DB5" stroke-width="1.1" filter="url(#sh)"/>
+    <circle cx="385" cy="425" r="11" fill="#7B4DB5" fill-opacity="0.12"/>
+    <text x="385" y="429" text-anchor="middle" font-size="9" fill="#7B4DB5" font-weight="700">4</text>
+    <text x="58" y="424" font-size="11" font-weight="600" fill="#4c0c3a">RankingBundleStep</text>
+    <text x="58" y="442" font-size="8" fill="#777">Delegates to delegate.getRankingBundle()</text>
+    <line x1="222" y1="455" x2="222" y2="482" stroke="#245761" stroke-width="1.1" marker-end="url(#aDownG)"/>
+    <text x="285" y="473" font-size="7.5" fill="#245761" font-style="italic">state.rankingBundle</text>
 
-    <!-- ── Step 4: RankingBundleStep ── -->
-    <rect x="40" y="407" width="370" height="52" rx="6" fill="#F3EEFA" stroke="#7B4DB5" stroke-width="1.1" filter="url(#sh)"/>
-    <text x="60" y="430" font-size="11" font-weight="600" fill="#4c0c3a">RankingBundleStep</text>
-    <text x="60" y="448" font-size="8" fill="#777">→ delegate.getRankingBundle()</text>
-    <circle cx="388" cy="430" r="11" fill="#7B4DB5" fill-opacity="0.12"/>
-    <text x="388" y="434" text-anchor="middle" font-size="9" fill="#7B4DB5" font-weight="700">4</text>
-    <line x1="225" y1="459" x2="225" y2="484" stroke="#245761" stroke-width="1" marker-end="url(#ad)"/>
-    <text x="290" y="476" font-size="7.5" fill="#245761" font-style="italic">state.rankingBundle</text>
+    <!-- Step 5 -->
+    <rect x="40" y="489" width="365" height="54" rx="6" fill="#E8FFF2" stroke="#2D8B5E" stroke-width="1.1" filter="url(#sh)"/>
+    <circle cx="385" cy="513" r="11" fill="#2D8B5E" fill-opacity="0.12"/>
+    <text x="385" y="517" text-anchor="middle" font-size="9" fill="#2D8B5E" font-weight="700">5</text>
+    <text x="58" y="512" font-size="11" font-weight="600" fill="#1A5C38">ReassemblyStep</text>
+    <text x="58" y="530" font-size="8" fill="#777">Delegates to delegate.getRankableContent()</text>
+    <line x1="222" y1="543" x2="222" y2="567" stroke="#245761" stroke-width="1.1" marker-end="url(#aDownG)"/>
+    <text x="285" y="559" font-size="7.5" fill="#245761" font-style="italic">state.rankedContent</text>
 
-    <!-- ── Step 5: ReassemblyStep ── -->
-    <rect x="40" y="491" width="370" height="52" rx="6" fill="#E8FFF2" stroke="#2D8B5E" stroke-width="1.1" filter="url(#sh)"/>
-    <text x="60" y="514" font-size="11" font-weight="600" fill="#1A5C38">ReassemblyStep</text>
-    <text x="60" y="532" font-size="8" fill="#777">→ delegate.getRankableContent()</text>
-    <circle cx="388" cy="514" r="11" fill="#2D8B5E" fill-opacity="0.12"/>
-    <text x="388" y="518" text-anchor="middle" font-size="9" fill="#2D8B5E" font-weight="700">5</text>
-    <line x1="225" y1="543" x2="225" y2="565" stroke="#245761" stroke-width="1" marker-end="url(#ad)"/>
-    <text x="290" y="558" font-size="7.5" fill="#245761" font-style="italic">state.rankedContent</text>
+    <!-- Output -->
+    <rect x="140" y="574" width="165" height="22" rx="11" fill="#F0F0F0" stroke="#CCC" stroke-width="0.7"/>
+    <text x="222" y="589" text-anchor="middle" font-size="9" fill="#666">RankableContent</text>
 
-    <!-- Output pill -->
-    <rect x="150" y="572" width="150" height="22" rx="11" fill="#F0F0F0" stroke="#CCC" stroke-width="0.7"/>
-    <text x="225" y="587" text-anchor="middle" font-size="9" fill="#666">RankableContent</text>
+    <!-- State label -->
+    <text x="222" y="618" text-anchor="middle" font-size="9.5" fill="#245761" font-weight="600">RankingPipelineState</text>
+    <text x="222" y="632" text-anchor="middle" font-size="8" fill="#999">Immutable data class flows through all steps</text>
 
-    <!-- Pipeline state sidebar -->
-    <rect x="5" y="155" width="26" height="439" rx="4" fill="#245761" fill-opacity="0.03" stroke="#245761" stroke-width="0.5" stroke-dasharray="3,2"/>
-    <text x="18" y="385" text-anchor="middle" font-size="6.5" fill="#245761" font-weight="600" writing-mode="tb" letter-spacing="0.8">RankingPipelineState</text>
+    <!-- What changes / stays -->
+    <rect x="25" y="652" width="395" height="96" rx="6" fill="#245761" fill-opacity="0.03"/>
+    <text x="222" y="672" text-anchor="middle" font-size="10" fill="#2E6E7A" font-weight="700">What changes</text>
+    <text x="45" y="690" font-size="8.5" fill="#555">Data between steps is explicit (state fields, not local vars)</text>
+    <text x="45" y="706" font-size="8.5" fill="#555">DV-gated: instant rollback by turning off the flag</text>
+    <text x="45" y="722" font-size="8.5" fill="#555">Zero behavior change — same code called in same order</text>
+    <text x="222" y="745" text-anchor="middle" font-size="10" fill="#2E6E7A" font-weight="700">What stays the same</text>
+    <text x="45" y="762" font-size="8.5" fill="#555">DVs still resolved inside existing methods (scattered)</text>
+    <text x="45" y="778" font-size="8.5" fill="#555">Concerns still bundled within coarse steps</text>
+  </g>
+
+  <!-- ══════════════ TRANSITION 2→3 ══════════════ -->
+  <g transform="translate(954, 400)">
+    <rect x="0" y="-16" width="42" height="32" rx="5" fill="#245761" fill-opacity="0.08" stroke="#245761" stroke-width="0.7"/>
+    <path d="M 10 0 L 22 -7 L 22 -3 L 33 -3 L 33 3 L 22 3 L 22 7 Z" fill="#245761" fill-opacity="0.55"/>
+    <text x="21" y="30" text-anchor="middle" font-size="8" fill="#245761" font-weight="700">Tier 2</text>
+    <text x="21" y="42" text-anchor="middle" font-size="7.5" fill="#999">Decompose</text>
+  </g>
+
+  <!-- ════════════════════════════════════════════════════════════ -->
+  <!-- PANEL 3: PHASE 2                                            -->
+  <!-- ════════════════════════════════════════════════════════════ -->
+  <g transform="translate(999, 58)">
+    <rect x="0" y="0" width="466" height="885" rx="10" fill="white" stroke="#B5E8D0" stroke-width="1"/>
+    <rect x="0" y="0" width="466" height="50" rx="10" fill="#245761"/>
+    <rect x="0" y="24" width="466" height="26" fill="#245761"/>
+    <text x="233" y="22" text-anchor="middle" font-size="15" font-weight="700" fill="white" letter-spacing="0.8">PHASE 2</text>
+    <text x="233" y="41" text-anchor="middle" font-size="9.5" fill="#7BE8B9">Full Decomposition · Single responsibility per step</text>
+
+    <!-- ── RankingFeatureFlags: centralized DV ── -->
+    <rect x="70" y="62" width="326" height="36" rx="6" fill="#E8FFF2" stroke="#2D8B5E" stroke-width="1.2" filter="url(#sh)"/>
+    <text x="233" y="78" text-anchor="middle" font-size="10" font-weight="700" fill="#245761">RankingFeatureFlags</text>
+    <text x="233" y="92" text-anchor="middle" font-size="7.5" fill="#2D8B5E">31 DVs resolved once per request</text>
+    <line x1="233" y1="98" x2="233" y2="112" stroke="#245761" stroke-width="1" marker-end="url(#aDownG)"/>
+
+    <!-- featureFlags channel alongside steps -->
+    <rect x="432" y="118" width="22" height="560" rx="4" fill="#E8FFF2" stroke="#2D8B5E" stroke-width="0.7"/>
+    <!-- Horizontal ticks from bar to each step -->
+    <line x1="432" y1="168" x2="422" y2="168" stroke="#2D8B5E" stroke-width="0.5"/>
+    <line x1="432" y1="232" x2="422" y2="232" stroke="#2D8B5E" stroke-width="0.5"/>
+    <line x1="432" y1="270" x2="422" y2="270" stroke="#2D8B5E" stroke-width="0.5"/>
+    <line x1="432" y1="308" x2="422" y2="308" stroke="#2D8B5E" stroke-width="0.5"/>
+    <line x1="432" y1="375" x2="422" y2="375" stroke="#2D8B5E" stroke-width="0.5"/>
+    <line x1="432" y1="413" x2="422" y2="413" stroke="#2D8B5E" stroke-width="0.5"/>
+    <line x1="432" y1="451" x2="422" y2="451" stroke="#2D8B5E" stroke-width="0.5"/>
+    <line x1="432" y1="489" x2="422" y2="489" stroke="#2D8B5E" stroke-width="0.5"/>
+    <line x1="432" y1="527" x2="422" y2="527" stroke="#2D8B5E" stroke-width="0.5"/>
+    <line x1="432" y1="565" x2="422" y2="565" stroke="#2D8B5E" stroke-width="0.5"/>
+    <line x1="432" y1="614" x2="422" y2="614" stroke="#2D8B5E" stroke-width="0.5"/>
+    <line x1="432" y1="662" x2="422" y2="662" stroke="#2D8B5E" stroke-width="0.5"/>
+    <!-- Label on bar -->
+    <text x="443" y="350" text-anchor="middle" font-size="6" fill="#2D8B5E" font-weight="600" writing-mode="tb" letter-spacing="0.8">state.featureFlags</text>
+    <!-- Connection from FeatureFlags to bar -->
+    <line x1="396" y1="80" x2="443" y2="80" stroke="#2D8B5E" stroke-width="0.7" stroke-dasharray="3,2"/>
+    <line x1="443" y1="80" x2="443" y2="118" stroke="#2D8B5E" stroke-width="0.7" stroke-dasharray="3,2"/>
+
+    <!-- Input -->
+    <rect x="152" y="116" width="150" height="20" rx="10" fill="#F0F0F0" stroke="#CCC" stroke-width="0.7"/>
+    <text x="227" y="130" text-anchor="middle" font-size="8.5" fill="#666">RankableContent</text>
+    <line x1="227" y1="136" x2="227" y2="150" stroke="#245761" stroke-width="0.9" marker-end="url(#aDownG)"/>
+
+    <!-- ── EXTRACTION ── -->
+    <rect x="30" y="155" width="390" height="28" rx="5" fill="#EBF5FF" stroke="#4A90C4" stroke-width="0.9" filter="url(#sh)"/>
+    <text x="48" y="173" font-size="9.5" font-weight="600" fill="#173162">EntityExtractionStep</text>
+    <line x1="227" y1="183" x2="227" y2="197" stroke="#245761" stroke-width="0.9" marker-end="url(#aDownG)"/>
+    <text x="290" y="194" font-size="6.5" fill="#245761" font-style="italic">state.entities</text>
+
+    <!-- ── SCORING GROUP ── -->
+    <rect x="18" y="201" width="408" height="120" rx="6" fill="#C4960A" fill-opacity="0.04" stroke="#C4960A" stroke-width="0.5"/>
+    <text x="30" y="214" font-size="8" fill="#C4960A" font-weight="700">SCORING</text>
+
+    <rect x="30" y="220" width="390" height="25" rx="4" fill="#FFF9E5" stroke="#C4960A" stroke-width="0.8" filter="url(#sh)"/>
+    <text x="48" y="237" font-size="9" font-weight="600" fill="#7A5800">SibylScoringSubStep</text>
+    <text x="310" y="237" font-size="7.5" fill="#777">Raw ML scores only</text>
+    <line x1="227" y1="245" x2="227" y2="256" stroke="#245761" stroke-width="0.6" marker-end="url(#aDownG)"/>
+
+    <rect x="30" y="258" width="390" height="25" rx="4" fill="#FFF0E0" stroke="#D07030" stroke-width="0.8" filter="url(#sh)"/>
+    <text x="48" y="275" font-size="9" font-weight="600" fill="#8B4513">InterleavingSubStep</text>
+    <text x="310" y="275" font-size="7.5" fill="#777">Skippable via isApplicable()</text>
+    <line x1="227" y1="283" x2="227" y2="294" stroke="#245761" stroke-width="0.6" marker-end="url(#aDownG)"/>
+
+    <rect x="30" y="296" width="390" height="25" rx="4" fill="#FFE8F5" stroke="#C05090" stroke-width="0.8" filter="url(#sh)"/>
+    <text x="48" y="313" font-size="9" font-weight="600" fill="#7A2060">VerticalBlendingSubStep</text>
+    <text x="310" y="313" font-size="7.5" fill="#2D8B5E">Returns new ScoreBundle</text>
+
+    <line x1="227" y1="325" x2="227" y2="344" stroke="#245761" stroke-width="0.9" marker-end="url(#aDownG)"/>
+    <text x="290" y="339" font-size="6.5" fill="#245761" font-style="italic">state.scoreBundle</text>
+
+    <!-- ── BOOSTING GROUP ── -->
+    <rect x="18" y="348" width="408" height="222" rx="6" fill="#D05030" fill-opacity="0.03" stroke="#D05030" stroke-width="0.5"/>
+    <text x="30" y="361" font-size="8" fill="#D05030" font-weight="700">BOOSTING</text>
+
+    <rect x="30" y="365" width="390" height="25" rx="4" fill="#E8F4FF" stroke="#6098C0" stroke-width="0.8" filter="url(#sh)"/>
+    <text x="48" y="382" font-size="9" font-weight="600" fill="#2A5580">ScoreAssignmentSubStep</text>
+    <text x="310" y="382" font-size="7.5" fill="#777">Pure data mapping</text>
+    <line x1="227" y1="390" x2="227" y2="401" stroke="#245761" stroke-width="0.6" marker-end="url(#aDownG)"/>
+
+    <rect x="30" y="403" width="390" height="25" rx="4" fill="#FFE8F8" stroke="#B870B0" stroke-width="0.8" filter="url(#sh)"/>
+    <text x="48" y="420" font-size="9" font-weight="600" fill="#6A2068">LcmIntraRankingSubStep</text>
+    <text x="310" y="420" font-size="7.5" fill="#777">Homepage-gated</text>
+    <line x1="227" y1="428" x2="227" y2="439" stroke="#245761" stroke-width="0.6" marker-end="url(#aDownG)"/>
+
+    <rect x="30" y="441" width="390" height="25" rx="4" fill="#F0FFE8" stroke="#70A050" stroke-width="0.8" filter="url(#sh)"/>
+    <text x="48" y="458" font-size="9" font-weight="600" fill="#3A6030">StoreListRerankingSubStep</text>
+    <text x="310" y="458" font-size="7.5" fill="#2D8B5E">Writes to state (no lateinit)</text>
+    <line x1="227" y1="466" x2="227" y2="477" stroke="#245761" stroke-width="0.6" marker-end="url(#aDownG)"/>
+
+    <rect x="30" y="479" width="390" height="25" rx="4" fill="#E0FFF0" stroke="#40A080" stroke-width="0.8" filter="url(#sh)"/>
+    <text x="48" y="496" font-size="9" font-weight="600" fill="#1A5C38">IntermixingSplitSubStep</text>
+    <text x="310" y="496" font-size="7.5" fill="#777">Unified (was 3 locations)</text>
+    <line x1="227" y1="504" x2="227" y2="515" stroke="#245761" stroke-width="0.6" marker-end="url(#aDownG)"/>
+
+    <rect x="30" y="517" width="390" height="25" rx="4" fill="#FFEEE0" stroke="#C08050" stroke-width="0.8" filter="url(#sh)"/>
+    <text x="48" y="534" font-size="9" font-weight="600" fill="#6A4020">ImpressionCappingSubStep</text>
+    <text x="310" y="534" font-size="7.5" fill="#777">Toggleable</text>
+    <line x1="227" y1="542" x2="227" y2="553" stroke="#245761" stroke-width="0.6" marker-end="url(#aDownG)"/>
+
+    <rect x="30" y="555" width="390" height="25" rx="4" fill="#FFE0E0" stroke="#C05050" stroke-width="0.8" filter="url(#sh)"/>
+    <text x="48" y="572" font-size="9" font-weight="600" fill="#7A2020">PositionBoostingSubStep</text>
+    <text x="310" y="572" font-size="7.5" fill="#777">Isolated state machine</text>
+
+    <line x1="227" y1="580" x2="227" y2="599" stroke="#245761" stroke-width="0.9" marker-end="url(#aDownG)"/>
+    <text x="290" y="594" font-size="6.5" fill="#245761" font-style="italic">state.boostedBundle</text>
+
+    <!-- ── RANKING ── -->
+    <rect x="30" y="603" width="390" height="28" rx="5" fill="#F3EEFA" stroke="#7B4DB5" stroke-width="0.9" filter="url(#sh)"/>
+    <text x="48" y="621" font-size="9.5" font-weight="600" fill="#4c0c3a">SortOrderAssignmentStep</text>
+    <line x1="227" y1="631" x2="227" y2="648" stroke="#245761" stroke-width="0.9" marker-end="url(#aDownG)"/>
+    <text x="290" y="644" font-size="6.5" fill="#245761" font-style="italic">state.rankingBundle</text>
+
+    <!-- ── REASSEMBLY ── -->
+    <rect x="30" y="652" width="390" height="28" rx="5" fill="#E8FFF2" stroke="#2D8B5E" stroke-width="0.9" filter="url(#sh)"/>
+    <text x="48" y="670" font-size="9.5" font-weight="600" fill="#1A5C38">ReassemblyStep</text>
+    <line x1="227" y1="680" x2="227" y2="698" stroke="#245761" stroke-width="0.9" marker-end="url(#aDownG)"/>
+    <text x="290" y="694" font-size="6.5" fill="#245761" font-style="italic">state.rankedContent</text>
+
+    <!-- Output -->
+    <rect x="152" y="702" width="150" height="20" rx="10" fill="#F0F0F0" stroke="#CCC" stroke-width="0.7"/>
+    <text x="227" y="716" text-anchor="middle" font-size="8.5" fill="#666">RankableContent</text>
 
     <!-- Benefits -->
-    <rect x="25" y="615" width="400" height="95" rx="6" fill="#245761" fill-opacity="0.03"/>
-    <text x="225" y="636" text-anchor="middle" font-size="10" fill="#2E6E7A" font-weight="700">What changes</text>
-    <text x="45" y="655" font-size="8.5" fill="#555">Data between steps is explicit (state fields, not local vars)</text>
-    <text x="45" y="672" font-size="8.5" fill="#555">DV-gated: instant rollback by turning off the flag</text>
-    <text x="45" y="689" font-size="8.5" fill="#555">Zero behavior change — same code called in same order</text>
-    <text x="225" y="720" text-anchor="middle" font-size="10" fill="#2E6E7A" font-weight="700">What stays the same</text>
-    <text x="45" y="739" font-size="8.5" fill="#555">DVs still resolved inside existing methods (scattered)</text>
-    <text x="45" y="756" font-size="8.5" fill="#555">Concerns still bundled within coarse steps</text>
-    <text x="45" y="773" font-size="8.5" fill="#555">lateinit var coupling preserved (Tier 2 fix)</text>
+    <rect x="25" y="738" width="416" height="82" rx="6" fill="#245761" fill-opacity="0.04"/>
+    <text x="233" y="756" text-anchor="middle" font-size="10" fill="#245761" font-weight="700">What this unlocks</text>
+    <text x="45" y="773" font-size="8.5" fill="#555">Add a step = add a class. No existing code modified.</text>
+    <text x="45" y="789" font-size="8.5" fill="#555">Skip a step = isApplicable() returns false. No code deleted.</text>
+    <text x="45" y="805" font-size="8.5" fill="#555">Test a step = unit test one class. No mocking unrelated concerns.</text>
+
+    <!-- DV centralization callout -->
+    <rect x="25" y="830" width="416" height="40" rx="6" fill="#E8FFF2" stroke="#2D8B5E" stroke-width="0.7"/>
+    <text x="233" y="849" text-anchor="middle" font-size="8.5" fill="#245761" font-weight="600">Each step reads DVs from state.featureFlags via isApplicable()</text>
+    <text x="233" y="863" text-anchor="middle" font-size="8" fill="#2D8B5E">No scattered static calls — DV interactions explicit and documentable</text>
   </g>
 
-  <!-- ══════════ TRANSITION 2→3 ══════════ -->
-  <g transform="translate(957, 440)">
-    <path d="M 0 0 L 14 -6 L 14 -2.5 L 35 -2.5 L 35 2.5 L 14 2.5 L 14 6 Z" fill="#245761" fill-opacity="0.5"/>
-    <text x="17" y="18" text-anchor="middle" font-size="7.5" fill="#245761" font-weight="600">Tier 2</text>
-    <text x="17" y="28" text-anchor="middle" font-size="7" fill="#999">Decompose</text>
-  </g>
-
-  <!-- ════════════════════════════════════════════════════════ -->
-  <!-- PANEL 3: PHASE 2 — FULL DECOMPOSITION                  -->
-  <!-- ════════════════════════════════════════════════════════ -->
-  <g transform="translate(995, 58)">
-    <rect x="0" y="0" width="470" height="862" rx="10" fill="white" stroke="#B5E8D0" stroke-width="1"/>
-
-    <!-- Header -->
-    <rect x="0" y="0" width="470" height="50" rx="10" fill="#245761"/>
-    <rect x="0" y="24" width="470" height="26" fill="#245761"/>
-    <text x="235" y="22" text-anchor="middle" font-size="15" font-weight="700" fill="white" letter-spacing="0.8">PHASE 2</text>
-    <text x="235" y="41" text-anchor="middle" font-size="9.5" fill="#7BE8B9">Full Decomposition · Single responsibility per step</text>
-
-    <!-- DV Component — centralized -->
-    <rect x="95" y="60" width="280" height="32" rx="6" fill="#E8FFF2" stroke="#2D8B5E" stroke-width="1" filter="url(#sh)"/>
-    <text x="235" y="74" text-anchor="middle" font-size="9" font-weight="700" fill="#245761">RankingFeatureFlags</text>
-    <text x="235" y="86" text-anchor="middle" font-size="7.5" fill="#2D8B5E">31 DVs resolved once per request → state.featureFlags</text>
-    <!-- Single clean arrow down to pipeline -->
-    <line x1="235" y1="92" x2="235" y2="112" stroke="#245761" stroke-width="1" marker-end="url(#ad)"/>
-
-    <!-- Input pill -->
-    <rect x="160" y="115" width="150" height="20" rx="10" fill="#F0F0F0" stroke="#CCC" stroke-width="0.7"/>
-    <text x="235" y="129" text-anchor="middle" font-size="8.5" fill="#666">RankableContent</text>
-    <line x1="235" y1="135" x2="235" y2="148" stroke="#245761" stroke-width="0.8" marker-end="url(#ad)"/>
-
-    <!-- ════ EXTRACTION GROUP ════ -->
-    <rect x="18" y="150" width="4" height="30" rx="2" fill="#4A90C4" fill-opacity="0.4"/>
-    <rect x="30" y="152" width="410" height="28" rx="5" fill="#EBF5FF" stroke="#4A90C4" stroke-width="0.9" filter="url(#sh)"/>
-    <text x="48" y="170" font-size="9.5" font-weight="600" fill="#173162">EntityExtractionStep</text>
-    <line x1="235" y1="180" x2="235" y2="192" stroke="#245761" stroke-width="0.7" marker-end="url(#ad)"/>
-    <text x="300" y="190" font-size="6.5" fill="#245761" font-style="italic">state.entities</text>
-
-    <!-- ════ SCORING GROUP ════ -->
-    <!-- Group bracket -->
-    <rect x="18" y="195" width="4" height="98" rx="2" fill="#C4960A" fill-opacity="0.3"/>
-    <text x="12" y="250" text-anchor="middle" font-size="6.5" fill="#C4960A" font-weight="600" transform="rotate(-90 12 250)">SCORING</text>
-
-    <rect x="30" y="197" width="410" height="26" rx="5" fill="#FFF9E5" stroke="#C4960A" stroke-width="0.9" filter="url(#sh)"/>
-    <text x="48" y="214" font-size="9.5" font-weight="600" fill="#7A5800">SibylScoringSubStep</text>
-    <text x="310" y="214" font-size="7.5" fill="#777">Raw ML scores only</text>
-    <line x1="235" y1="223" x2="235" y2="232" stroke="#245761" stroke-width="0.5"/>
-
-    <rect x="30" y="234" width="410" height="26" rx="5" fill="#FFF0E0" stroke="#D07030" stroke-width="0.9" filter="url(#sh)"/>
-    <text x="48" y="251" font-size="9.5" font-weight="600" fill="#8B4513">InterleavingSubStep</text>
-    <text x="310" y="251" font-size="7.5" fill="#777">Skippable via isApplicable()</text>
-    <line x1="235" y1="260" x2="235" y2="269" stroke="#245761" stroke-width="0.5"/>
-
-    <rect x="30" y="271" width="410" height="26" rx="5" fill="#FFE8F5" stroke="#C05090" stroke-width="0.9" filter="url(#sh)"/>
-    <text x="48" y="288" font-size="9.5" font-weight="600" fill="#7A2060">VerticalBlendingSubStep</text>
-    <text x="310" y="288" font-size="7.5" fill="#2D8B5E">Returns new ScoreBundle</text>
-    <line x1="235" y1="297" x2="235" y2="312" stroke="#245761" stroke-width="0.7" marker-end="url(#ad)"/>
-    <text x="300" y="308" font-size="6.5" fill="#245761" font-style="italic">state.scoreBundle</text>
-
-    <!-- ════ BOOSTING GROUP ════ -->
-    <!-- Group bracket -->
-    <rect x="18" y="316" width="4" height="195" rx="2" fill="#D05030" fill-opacity="0.3"/>
-    <text x="12" y="420" text-anchor="middle" font-size="6.5" fill="#D05030" font-weight="600" transform="rotate(-90 12 420)">BOOSTING</text>
-
-    <rect x="30" y="318" width="410" height="26" rx="5" fill="#E8F4FF" stroke="#6098C0" stroke-width="0.9" filter="url(#sh)"/>
-    <text x="48" y="335" font-size="9.5" font-weight="600" fill="#2A5580">ScoreAssignmentSubStep</text>
-    <text x="310" y="335" font-size="7.5" fill="#777">Pure data mapping</text>
-    <line x1="235" y1="344" x2="235" y2="353" stroke="#245761" stroke-width="0.5"/>
-
-    <rect x="30" y="355" width="410" height="26" rx="5" fill="#FFE8F8" stroke="#B870B0" stroke-width="0.9" filter="url(#sh)"/>
-    <text x="48" y="372" font-size="9.5" font-weight="600" fill="#6A2068">LcmIntraRankingSubStep</text>
-    <text x="310" y="372" font-size="7.5" fill="#777">Homepage-gated</text>
-    <line x1="235" y1="381" x2="235" y2="390" stroke="#245761" stroke-width="0.5"/>
-
-    <rect x="30" y="392" width="410" height="26" rx="5" fill="#F0FFE8" stroke="#70A050" stroke-width="0.9" filter="url(#sh)"/>
-    <text x="48" y="409" font-size="9.5" font-weight="600" fill="#3A6030">StoreListRerankingSubStep</text>
-    <text x="310" y="409" font-size="7.5" fill="#2D8B5E">Writes to state (no lateinit)</text>
-    <line x1="235" y1="418" x2="235" y2="427" stroke="#245761" stroke-width="0.5"/>
-
-    <rect x="30" y="429" width="410" height="26" rx="5" fill="#E0FFF0" stroke="#40A080" stroke-width="0.9" filter="url(#sh)"/>
-    <text x="48" y="446" font-size="9.5" font-weight="600" fill="#1A5C38">IntermixingSplitSubStep</text>
-    <text x="310" y="446" font-size="7.5" fill="#777">Unified (was 3 locations)</text>
-    <line x1="235" y1="455" x2="235" y2="464" stroke="#245761" stroke-width="0.5"/>
-
-    <rect x="30" y="466" width="410" height="26" rx="5" fill="#FFEEE0" stroke="#C08050" stroke-width="0.9" filter="url(#sh)"/>
-    <text x="48" y="483" font-size="9.5" font-weight="600" fill="#6A4020">ImpressionCappingSubStep</text>
-    <text x="310" y="483" font-size="7.5" fill="#777">Toggleable</text>
-    <line x1="235" y1="492" x2="235" y2="501" stroke="#245761" stroke-width="0.5"/>
-
-    <rect x="30" y="503" width="410" height="26" rx="5" fill="#FFE0E0" stroke="#C05050" stroke-width="0.9" filter="url(#sh)"/>
-    <text x="48" y="520" font-size="9.5" font-weight="600" fill="#7A2020">PositionBoostingSubStep</text>
-    <text x="310" y="520" font-size="7.5" fill="#777">Isolated state machine</text>
-    <line x1="235" y1="529" x2="235" y2="544" stroke="#245761" stroke-width="0.7" marker-end="url(#ad)"/>
-    <text x="300" y="540" font-size="6.5" fill="#245761" font-style="italic">state.boostedBundle</text>
-
-    <!-- ════ RANKING GROUP ════ -->
-    <rect x="18" y="548" width="4" height="30" rx="2" fill="#7B4DB5" fill-opacity="0.3"/>
-    <rect x="30" y="550" width="410" height="28" rx="5" fill="#F3EEFA" stroke="#7B4DB5" stroke-width="0.9" filter="url(#sh)"/>
-    <text x="48" y="568" font-size="9.5" font-weight="600" fill="#4c0c3a">SortOrderAssignmentStep</text>
-    <line x1="235" y1="578" x2="235" y2="593" stroke="#245761" stroke-width="0.7" marker-end="url(#ad)"/>
-    <text x="300" y="589" font-size="6.5" fill="#245761" font-style="italic">state.rankingBundle</text>
-
-    <!-- ════ REASSEMBLY GROUP ════ -->
-    <rect x="18" y="597" width="4" height="30" rx="2" fill="#2D8B5E" fill-opacity="0.3"/>
-    <rect x="30" y="599" width="410" height="28" rx="5" fill="#E8FFF2" stroke="#2D8B5E" stroke-width="0.9" filter="url(#sh)"/>
-    <text x="48" y="617" font-size="9.5" font-weight="600" fill="#1A5C38">ReassemblyStep</text>
-    <line x1="235" y1="627" x2="235" y2="644" stroke="#245761" stroke-width="0.7" marker-end="url(#ad)"/>
-    <text x="300" y="640" font-size="6.5" fill="#245761" font-style="italic">state.rankedContent</text>
-
-    <!-- Output pill -->
-    <rect x="160" y="648" width="150" height="20" rx="10" fill="#F0F0F0" stroke="#CCC" stroke-width="0.7"/>
-    <text x="235" y="662" text-anchor="middle" font-size="8.5" fill="#666">RankableContent</text>
-
-    <!-- Pipeline state sidebar -->
-    <rect x="448" y="152" width="16" height="523" rx="3" fill="#245761" fill-opacity="0.03" stroke="#245761" stroke-width="0.4" stroke-dasharray="3,2"/>
-    <text x="456" y="420" text-anchor="middle" font-size="5.5" fill="#245761" font-weight="600" writing-mode="tb" letter-spacing="0.8">RankingPipelineState</text>
-
-    <!-- Benefits -->
-    <rect x="25" y="690" width="420" height="88" rx="6" fill="#245761" fill-opacity="0.04"/>
-    <text x="235" y="710" text-anchor="middle" font-size="10" fill="#245761" font-weight="700">What this unlocks</text>
-    <text x="45" y="728" font-size="8.5" fill="#555">Add a step = add a class. No existing code modified.</text>
-    <text x="45" y="744" font-size="8.5" fill="#555">Skip a step = isApplicable() returns false. No code deleted.</text>
-    <text x="45" y="760" font-size="8.5" fill="#555">Test a step = unit test one class. No mocking of unrelated concerns.</text>
-
-    <!-- isApplicable hint -->
-    <rect x="25" y="793" width="420" height="48" rx="6" fill="#E8FFF2" stroke="#2D8B5E" stroke-width="0.7"/>
-    <text x="235" y="812" text-anchor="middle" font-size="8.5" fill="#245761" font-weight="600">
-      Each step reads DVs from state.featureFlags via isApplicable()
-    </text>
-    <text x="235" y="828" text-anchor="middle" font-size="8" fill="#2D8B5E">
-      No scattered static calls · DV interactions become explicit and documentable
-    </text>
-  </g>
-
-  <!-- ════════════════════════════════════════════════════════ -->
-  <!-- BOTTOM LEGEND                                           -->
-  <!-- ════════════════════════════════════════════════════════ -->
-  <g transform="translate(15, 928)">
-    <line x1="10" y1="-4" x2="35" y2="-4" stroke="#FF3008" stroke-width="0.7" stroke-dasharray="3,2" opacity="0.5"/>
-    <text x="40" y="0" font-size="7.5" fill="#999">DV state proliferation (current)</text>
-    <line x1="200" y1="-4" x2="225" y2="-4" stroke="#FF3008" stroke-width="1.5" stroke-dasharray="5,3"/>
-    <text x="230" y="0" font-size="7.5" fill="#999">Mutable state coupling</text>
-    <line x1="390" y1="-4" x2="415" y2="-4" stroke="#245761" stroke-width="1"/>
-    <text x="420" y="0" font-size="7.5" fill="#999">Explicit state flow</text>
-    <rect x="540" y="-9" width="4" height="12" rx="1" fill="#4A90C4" fill-opacity="0.4"/>
-    <text x="550" y="0" font-size="7.5" fill="#999">Step group bracket</text>
+  <!-- Legend -->
+  <g transform="translate(15, 950)">
+    <rect x="10" y="-7" width="13" height="9" rx="2" fill="#FF3008" fill-opacity="0.85"/>
+    <text x="14" y="0" font-size="5.5" fill="white" font-weight="700">DV</text>
+    <text x="28" y="0" font-size="7.5" fill="#999">= Dynamic Value (experiment flag)</text>
+    <line x1="200" y1="-3" x2="225" y2="-3" stroke="#FF3008" stroke-width="1.5" stroke-dasharray="5,3"/>
+    <text x="230" y="0" font-size="7.5" fill="#999">= Mutable state coupling</text>
+    <line x1="400" y1="-3" x2="425" y2="-3" stroke="#245761" stroke-width="1.1"/>
+    <path d="M 420,-6 L 428,-3 L 420,0 Z" fill="#245761"/>
+    <text x="434" y="0" font-size="7.5" fill="#999">= Explicit state flow</text>
+    <rect x="550" y="-7" width="22" height="12" rx="3" fill="#E8FFF2" stroke="#2D8B5E" stroke-width="0.6"/>
+    <text x="578" y="0" font-size="7.5" fill="#999">= Centralized DV channel (Phase 2)</text>
   </g>
 </svg>
