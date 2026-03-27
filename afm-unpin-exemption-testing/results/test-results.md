@@ -42,44 +42,70 @@
 
 ## Carousel ID Mapping
 
-> Established during T1, reused across all tests.
+> Established during T1. Note: `cxgen:cxgen:*` IDs are CxGen-generated item carousels. The AFM carousels contain vertical `100322` (AFFORDABLE_MEALS_VERTICAL_ID).
 
-| Carousel ID | Display Name | Type |
-|-------------|-------------|------|
-| *TBD* | Shop the Meal Box | Item |
-| *TBD* | Best $12 meals in Miami | Store |
+| Carousel ID | Display Name | Type | Has Vertical 100322? |
+|-------------|-------------|------|---------------------|
+| `e25be2d7-3912-43b4-9680-e4ad2928a152` | Best $12 meals in Miami | Store | YES |
+| `cxgen:cxgen:9` | Shop the Meal Box collection | Item (CxGen) | YES |
+| `288e689e-614c-4035-a90b-781be6aa6ac5` | *(NV carousel — non-AFM)* | Store | NO |
+| `cd25f777-0e1a-41aa-ba7b-97919f0606bd` | *(NV carousel — non-AFM)* | Store | NO |
 
 ---
 
 ## Test 1: Baseline — DV OFF
 
-**Executed**: *pending*
-**DV `enable_afm_unpin_exemption`**: `control` or `absent` (not in experiment map)
+**Executed**: 2026-03-27 ~17:02 UTC
+**DV `enable_afm_unpin_exemption`**: `control` (default — not in treatment)
+**Consumer**: `1125900615344792` (doortest tenant; feed logic uses hardcoded `757606047L` for personalization)
 
 ### Debug Log Output
 ```
-<!-- Raw [AFM_DEBUG] output -->
+[AFM_DEBUG] enable_afm_unpin_exemption DV=control
+[AFM_DEBUG] isEligibleForUnpin: carouselId=288e689e nvEligible=true (NV, non-AFM)
+[AFM_DEBUG] unpin_check: carouselId=288e689e nvEligible=true afmExempt=false willUnpin=true
+[AFM_DEBUG] isEligibleForUnpin: carouselId=cd25f777 nvEligible=true (NV, non-AFM)
+[AFM_DEBUG] unpin_check: carouselId=cd25f777 nvEligible=true afmExempt=false willUnpin=true
+[AFM_DEBUG] isEligibleForUnpin: carouselId=e25be2d7 verticals=[100322,...] nvEligible=true (AFM!)
+[AFM_DEBUG] unpin_check: carouselId=e25be2d7 nvEligible=true afmExempt=false willUnpin=true
+[AFM_DEBUG] isEligibleForUnpin: carouselId=cxgen:cxgen:9 verticals=[100322,...] nvEligible=true (AFM!)
+[AFM_DEBUG] unpin_check: carouselId=cxgen:cxgen:9 nvEligible=true afmExempt=false willUnpin=true
+[AFM_DEBUG] boosted_order=[4e12d866, cxgen:0-8, sponsored_carousel_boosted, cc900279]
+[AFM_DEBUG] unboosted_order=[other, recommended, trending, ..., 288e689e, cd25f777, e25be2d7, cxgen:cxgen:9]
 ```
 
-### Carousel Position Map
-| Position | Carousel ID | Display Name | Boost Status |
-|----------|-------------|-------------|--------------|
-| | | | |
+### Carousel Position Map (visible on homepage)
+| Position | Display Name | Boost Status |
+|----------|-------------|--------------|
+| 1 | Your past orders | N/A (non-boosting) |
+| 2 | Shop the Meal Box collection (`cxgen:cxgen:9`) | **UNBOOSTED** (unpinned) |
+| 3 | Best $12 meals in Miami (`e25be2d7`) | **UNBOOSTED** (unpinned) |
+| 4 | Savory poke bowls | CxGen |
+| 5 | Top finds for you | CxGen |
+| 6 | Fresh salads | CxGen |
+| 7 | Mediterranean protein bowls | CxGen |
+| 8 | Thai protein bowls | CxGen |
+| 9 | Gourmet sandwiches | CxGen |
+| 10 | Japanese sushi rolls | CxGen |
+| 11 | Top pickup options nearby | Store |
+| 12 | Quick essentials nearby | Store |
+| 13 | Convenience & drugstores | Store |
 
 ### Screenshots
-<!-- Link to results/t1-homepage-full.png -->
-
-### Scroll Recording
-<!-- Link to results/t1-homepage-scroll.mp4 -->
+- Full page: `results/t1-homepage-sandbox.png`
 
 ### Pass Criteria
-- [ ] Debug logs show `DV=control` or `DV=absent`
-- [ ] AFM carousels show `nvEligible=true` and `afmExempt=false` (DV off → early return, no exemption)
-- [ ] AFM carousel IDs appear in `unboosted_order`
-- [ ] Screenshot captured
+- [x] Debug logs show `DV=control` ✅
+- [x] AFM carousels show `nvEligible=true` and `afmExempt=false` (DV off → early return, no exemption) ✅
+- [x] AFM carousel IDs appear in `unboosted_order` ✅ (`e25be2d7` and `cxgen:cxgen:9`)
+- [x] Screenshot captured ✅
 
 ### Analysis
-<!-- Observations, unexpected behavior, notes -->
+- **DV=control confirmed**: `isExemptAfmCarousel` returns `false` immediately (early return), so no detail log fires. Correct behavior.
+- **4 NV carousels unpinned**: `288e689e`, `cd25f777`, `e25be2d7` (AFM), `cxgen:cxgen:9` (AFM). All moved to `unboosted_order`.
+- **AFM carousels visible but not pinned**: "Shop the Meal Box collection" at position 2, "Best $12 meals in Miami" at position 3 — these are in the NV unpin zone, not boosted.
+- **No `isExemptAfmCarousel` detail log** — expected, because DV=control triggers early return before the vertical/campaign check.
+- **Consumer ID note**: Pod metadata shows `1125900615344792` (doortest account), but feed logic uses hardcoded `757606047L` for personalization. Debug logs correctly fire for this consumer's requests.
 
 ---
 
