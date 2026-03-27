@@ -181,47 +181,78 @@ No entity class changes. No decoration step changes. The collector and writer ar
                                   └──────────────────────────┘
 ```
 
-### RankingSignalCollector
+### RankingSignalCollector (interface + default impl + no-op)
 
 ```kotlin
 /**
- * Request-scoped collector for ranking signals.
- * Lives on ExploreContext. Any pipeline step can record signals;
- * adapters consume them via RankingSignalWriter.
- *
- * Thread-safe: homepage pipeline uses coroutines with parallel carousel processing.
+ * Interface for collecting ranking signals during the homepage pipeline.
+ * Adapters consume signals via RankingSignalWriter.
  */
-class RankingSignalCollector {
-    // Entity-level signals: carousel → entity → key/value
-    private val entitySignals = ConcurrentHashMap<String, ConcurrentHashMap<Long, ConcurrentHashMap<String, String>>>()
+interface RankingSignalCollector {
+    fun record(carouselId: String, entityId: Long, key: String, value: Any)
+    fun record(carouselId: String, key: String, value: Any)
+    fun forEntity(carouselId: String, entityId: Long): Map<String, String>
+    fun forCarousel(carouselId: String): Map<String, String>
 
-    // Carousel-level signals: carousel → key/value
+    companion object {
+        /** No-op instance. Used as default for non-homepage contexts. Zero allocation, zero overhead. */
+        val NOOP: RankingSignalCollector = object : RankingSignalCollector {
+            override fun record(carouselId: String, entityId: Long, key: String, value: Any) {}
+            override fun record(carouselId: String, key: String, value: Any) {}
+            override fun forEntity(carouselId: String, entityId: Long) = emptyMap<String, String>()
+            override fun forCarousel(carouselId: String) = emptyMap<String, String>()
+        }
+    }
+}
+
+/**
+ * Real implementation. Thread-safe via ConcurrentHashMap.
+ * Created once per ExploreContext (one per request).
+ */
+class DefaultRankingSignalCollector : RankingSignalCollector {
+    private val entitySignals = ConcurrentHashMap<String, ConcurrentHashMap<Long, ConcurrentHashMap<String, String>>>()
     private val carouselSignals = ConcurrentHashMap<String, ConcurrentHashMap<String, String>>()
 
-    /** Record a per-entity signal (e.g., a store's combined score). */
-    fun record(carouselId: String, entityId: Long, key: String, value: Any) {
+    override fun record(carouselId: String, entityId: Long, key: String, value: Any) {
         entitySignals
             .getOrPut(carouselId) { ConcurrentHashMap() }
             .getOrPut(entityId) { ConcurrentHashMap() }[key] = value.toString()
     }
 
-    /** Record a per-carousel signal (e.g., reranker alpha/beta). */
-    fun record(carouselId: String, key: String, value: Any) {
+    override fun record(carouselId: String, key: String, value: Any) {
         carouselSignals
             .getOrPut(carouselId) { ConcurrentHashMap() }[key] = value.toString()
     }
 
-    /** Get all signals for a specific entity in a carousel. */
-    fun forEntity(carouselId: String, entityId: Long): Map<String, String> =
+    override fun forEntity(carouselId: String, entityId: Long): Map<String, String> =
         entitySignals[carouselId]?.get(entityId) ?: emptyMap()
 
-    /** Get all carousel-level signals. */
-    fun forCarousel(carouselId: String): Map<String, String> =
+    override fun forCarousel(carouselId: String): Map<String, String> =
         carouselSignals[carouselId] ?: emptyMap()
 }
 ```
 
-**Thread safety note**: The homepage pipeline processes carousels in parallel via `async/awaitAll`. Different carousels write to different `carouselId` keys so contention is low, but `ConcurrentHashMap` prevents race conditions on the outer maps.
+**Interface default on BaseDiscoveryProductContext:**
+```kotlin
+interface BaseDiscoveryProductContext : RankerContext {
+    val rankingSignalCollector: RankingSignalCollector
+        get() = RankingSignalCollector.NOOP  // safe no-op default
+}
+```
+
+**ExploreContext override:**
+```kotlin
+data class ExploreContext(
+    override val rankingSignalCollector: RankingSignalCollector = DefaultRankingSignalCollector(),
+    // ... existing fields ...
+) : BaseDiscoveryProductContext
+```
+
+**Why no-op instead of a fresh real instance?**
+- Default getter is called on every property access. A fresh `DefaultRankingSignalCollector()` would create new `ConcurrentHashMap` instances each time — wasteful and buggy (record() and forEntity() would hit different instances).
+- `NOOP` is a singleton object — zero allocation, zero side effects. If a non-homepage context calls `record()`, nothing happens. If it calls `forEntity()`, it gets an empty map.
+
+**Thread safety**: `DefaultRankingSignalCollector` uses `ConcurrentHashMap`. Carousels processed in parallel write to different `carouselId` keys — low contention, but concurrent maps prevent race conditions.
 
 ### RankingSignalWriter
 
@@ -287,21 +318,61 @@ map<string, string> ranking_signals = 86;
 
 ### ContainerEventsGenerator Change
 
-After `LoggedValue.assign(storeLogging, this, STORE_LOGGED_VALUES)`, populate the proto map from unhandled logging map entries:
+**Problem found during verification**: The logging map contains ~40+ keys from the adapter. `LoggedValue.assign()` handles ~66 known keys. Unhandled keys (like `PAGE_KEY`, `BADGES_LOGGING_KEY`) are silently dropped today. If we forward ALL unhandled keys to `ranking_signals`, non-ranking data would pollute the column.
 
+**Solution: Key prefix convention.** `RankingSignalWriter` prefixes all ranking signal keys with `rs:` when writing to the logging map. ContainerEventsGenerator only forwards `rs:`-prefixed keys.
+
+**RankingSignalWriter (updated)**:
 ```kotlin
-val handledKeys = currentLoggedValues.map { it.key }.toSet()
+object RankingSignalWriter {
+    const val RANKING_SIGNAL_PREFIX = "rs:"
+
+    fun writeEntitySignals(
+        collector: RankingSignalCollector,
+        carouselId: String,
+        entityId: Long,
+        map: MutableMap<String, Value>,
+    ) {
+        collector.forEntity(carouselId, entityId).forEach { (key, value) ->
+            map[RANKING_SIGNAL_PREFIX + key] = toValue(value)
+        }
+    }
+
+    fun writeCarouselSignals(
+        collector: RankingSignalCollector,
+        carouselId: String,
+        map: MutableMap<String, Value>,
+    ) {
+        collector.forCarousel(carouselId).forEach { (key, value) ->
+            map[RANKING_SIGNAL_PREFIX + key] = toValue(value)
+        }
+    }
+
+    private fun toValue(value: String): Value { /* same as before */ }
+}
+```
+
+**ContainerEventsGenerator (after `LoggedValue.assign()`)**:
+```kotlin
+// Forward ranking signals (prefixed with "rs:") to ranking_signals proto map.
+// Only rs:-prefixed keys are forwarded — existing unhandled keys are not affected.
 storeLogging.forEach { (key, value) ->
-    if (key !in handledKeys) {
+    if (key.startsWith(RankingSignalWriter.RANKING_SIGNAL_PREFIX)) {
+        val signalKey = key.removePrefix(RankingSignalWriter.RANKING_SIGNAL_PREFIX)
         when (this) {
             is Events.CrossVerticalHomePageFeedEvent.Builder ->
-                putRankingSignals(key, if (value.hasNumberValue()) value.numberValue.toString() else value.stringValue)
+                putRankingSignals(signalKey, if (value.hasNumberValue()) value.numberValue.toString() else value.stringValue)
         }
     }
 }
 ```
 
-This is the generic bridge: any key in the logging map that isn't already handled by a typed `LoggedValue` gets forwarded to the `ranking_signals` proto map. No per-signal wiring.
+**Why prefix instead of an explicit key set?**
+- No coordination needed between producers and ContainerEventsGenerator
+- Adding a new signal is still zero downstream changes — the prefix convention handles it
+- No risk of key collision with existing logging keys (`rs:` namespace)
+
+**Snowflake column values are clean**: The `rs:` prefix is stripped before writing to the proto map, so Snowflake shows `RANKING_SIGNALS:genai_combined_score::DOUBLE`, not `RANKING_SIGNALS:rs:genai_combined_score`.
 
 ## Snowflake Access
 

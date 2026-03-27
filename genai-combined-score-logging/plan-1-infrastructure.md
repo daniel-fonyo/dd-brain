@@ -28,7 +28,7 @@ Build the universal ranking signal logging pipeline: `RankingSignalCollector` (o
 
 ## Code Changes
 
-### 1. RankingSignalCollector — new file
+### 1. RankingSignalCollector — new file (interface + impl + no-op)
 
 **Location**: `libraries/platform/src/main/kotlin/com/doordash/consumer/feed/platform/ranking/RankingSignalCollector.kt`
 
@@ -37,40 +37,44 @@ package com.doordash.consumer.feed.platform.ranking
 
 import java.util.concurrent.ConcurrentHashMap
 
-/**
- * Request-scoped collector for ranking signals produced during the homepage pipeline.
- *
- * Any pipeline step (reranker, scorer, ranker) records signals via [record].
- * Adapters consume them via [forEntity] and [forCarousel] through [RankingSignalWriter].
- *
- * Signals flow to the `ranking_signals` proto map field on Iguazu events,
- * queryable in Snowflake as RANKING_SIGNALS:key_name::DOUBLE or ::VARCHAR.
- *
- * Thread-safe via ConcurrentHashMap (carousels are processed in parallel).
- */
-class RankingSignalCollector {
+/** Interface for collecting ranking signals during the homepage pipeline. */
+interface RankingSignalCollector {
+    fun record(carouselId: String, entityId: Long, key: String, value: Any)
+    fun record(carouselId: String, key: String, value: Any)
+    fun forEntity(carouselId: String, entityId: Long): Map<String, String>
+    fun forCarousel(carouselId: String): Map<String, String>
+
+    companion object {
+        /** No-op singleton. Zero allocation, zero side effects. Default for non-homepage contexts. */
+        val NOOP: RankingSignalCollector = object : RankingSignalCollector {
+            override fun record(carouselId: String, entityId: Long, key: String, value: Any) {}
+            override fun record(carouselId: String, key: String, value: Any) {}
+            override fun forEntity(carouselId: String, entityId: Long) = emptyMap<String, String>()
+            override fun forCarousel(carouselId: String) = emptyMap<String, String>()
+        }
+    }
+}
+
+/** Real implementation. Thread-safe via ConcurrentHashMap. One per ExploreContext (one per request). */
+class DefaultRankingSignalCollector : RankingSignalCollector {
     private val entitySignals = ConcurrentHashMap<String, ConcurrentHashMap<Long, ConcurrentHashMap<String, String>>>()
     private val carouselSignals = ConcurrentHashMap<String, ConcurrentHashMap<String, String>>()
 
-    /** Record a per-entity signal (e.g., a store's combined score within a carousel). */
-    fun record(carouselId: String, entityId: Long, key: String, value: Any) {
+    override fun record(carouselId: String, entityId: Long, key: String, value: Any) {
         entitySignals
             .getOrPut(carouselId) { ConcurrentHashMap() }
             .getOrPut(entityId) { ConcurrentHashMap() }[key] = value.toString()
     }
 
-    /** Record a per-carousel signal (e.g., reranker alpha coefficient). */
-    fun record(carouselId: String, key: String, value: Any) {
+    override fun record(carouselId: String, key: String, value: Any) {
         carouselSignals
             .getOrPut(carouselId) { ConcurrentHashMap() }[key] = value.toString()
     }
 
-    /** Get all signals for a specific entity in a carousel. */
-    fun forEntity(carouselId: String, entityId: Long): Map<String, String> =
+    override fun forEntity(carouselId: String, entityId: Long): Map<String, String> =
         entitySignals[carouselId]?.get(entityId) ?: emptyMap()
 
-    /** Get all carousel-level signals. */
-    fun forCarousel(carouselId: String): Map<String, String> =
+    override fun forCarousel(carouselId: String): Map<String, String> =
         carouselSignals[carouselId] ?: emptyMap()
 }
 ```
@@ -89,10 +93,15 @@ import com.google.protobuf.Value
 /**
  * Flushes ranking signals from [RankingSignalCollector] into an adapter's logging map.
  *
- * Each adapter calls this with one line. No per-signal wiring needed.
- * Numeric-parseable values become NumberValue; others become StringValue.
+ * Keys are prefixed with [RANKING_SIGNAL_PREFIX] ("rs:") so ContainerEventsGenerator
+ * can distinguish ranking signals from existing logging keys and forward only
+ * rs:-prefixed entries to the ranking_signals proto map.
+ *
+ * The prefix is stripped before writing to the proto — Snowflake sees clean key names.
  */
 object RankingSignalWriter {
+
+    const val RANKING_SIGNAL_PREFIX = "rs:"
 
     fun writeEntitySignals(
         collector: RankingSignalCollector,
@@ -101,7 +110,7 @@ object RankingSignalWriter {
         map: MutableMap<String, Value>,
     ) {
         collector.forEntity(carouselId, entityId).forEach { (key, value) ->
-            map[key] = toValue(value)
+            map[RANKING_SIGNAL_PREFIX + key] = toValue(value)
         }
     }
 
@@ -111,7 +120,7 @@ object RankingSignalWriter {
         map: MutableMap<String, Value>,
     ) {
         collector.forCarousel(carouselId).forEach { (key, value) ->
-            map[key] = toValue(value)
+            map[RANKING_SIGNAL_PREFIX + key] = toValue(value)
         }
     }
 
@@ -140,23 +149,23 @@ map<string, string> ranking_signals = 86;
 //next id: 87
 ```
 
-### 4. BaseDiscoveryProductContext — add interface default
+### 4. BaseDiscoveryProductContext — add interface default (no-op)
 
 **File**: `libraries/sdk-dex/src/main/kotlin/com/doordash/consumer/discovery/sdk/dex/models/context/BaseDiscoveryContext.kt`
 
 In the `BaseDiscoveryProductContext` interface, add:
 ```kotlin
 val rankingSignalCollector: RankingSignalCollector
-    get() = RankingSignalCollector()  // default: fresh throwaway instance for non-homepage contexts
+    get() = RankingSignalCollector.NOOP  // safe no-op singleton, zero allocation
 ```
 
-### 5. ExploreContext — override with stored instance
+### 5. ExploreContext — override with real instance
 
 **File**: `libraries/sdk-dex/src/main/kotlin/com/doordash/consumer/discovery/sdk/dex/models/context/ExploreContext.kt`
 
 Add to the data class constructor:
 ```kotlin
-override val rankingSignalCollector: RankingSignalCollector = RankingSignalCollector(),
+override val rankingSignalCollector: RankingSignalCollector = DefaultRankingSignalCollector(),
 ```
 
 This ensures the same mutable collector instance is used for the entire request. Survives `.copy()` (shallow copy preserves the reference). Accessible everywhere via `context.rankingSignalCollector` — whether `context` is typed as `ExploreContext` or `BaseDiscoveryProductContext`.
@@ -178,28 +187,31 @@ RankingSignalWriter.writeCarouselSignals(
 )
 ```
 
-### 6. ContainerEventsGenerator — generic forwarding
+### 7. ContainerEventsGenerator — prefix-based forwarding
 
 **File**: `libraries/domain-util/.../iguazu/ContainerEventsGenerator.kt`
 
-After `LoggedValue.assign(storeLogging, this, STORE_LOGGED_VALUES)`, add generic pass:
+After `LoggedValue.assign(storeLogging, this, STORE_LOGGED_VALUES)`, add prefix-based forwarding:
 
 ```kotlin
-// Forward unhandled logging map entries to ranking_signals proto map.
-// These come from RankingSignalCollector via RankingSignalWriter.
-val handledKeys = currentLoggedValues.map { it.key }.toSet()
+// Forward ranking signals (rs:-prefixed) to ranking_signals proto map.
+// Only rs:-prefixed keys are forwarded — existing unhandled keys are not affected.
+// Prefix is stripped so Snowflake sees clean key names.
 storeLogging.forEach { (key, value) ->
-    if (key !in handledKeys) {
+    if (key.startsWith(RankingSignalWriter.RANKING_SIGNAL_PREFIX)) {
+        val signalKey = key.removePrefix(RankingSignalWriter.RANKING_SIGNAL_PREFIX)
         when (this) {
             is Events.CrossVerticalHomePageFeedEvent.Builder ->
                 putRankingSignals(
-                    key,
+                    signalKey,
                     if (value.hasNumberValue()) value.numberValue.toString() else value.stringValue,
                 )
         }
     }
 }
 ```
+
+**Why prefix instead of forwarding all unhandled keys?** The adapter's logging map contains ~40+ keys. `LoggedValue.assign()` handles ~66 known keys. Many existing keys are intentionally unhandled (like `PAGE_KEY`, `BADGES_LOGGING_KEY`). Forwarding ALL unhandled keys would pollute `ranking_signals` with non-ranking data. The `rs:` prefix cleanly separates ranking signals from everything else.
 
 ## Unit Tests
 
