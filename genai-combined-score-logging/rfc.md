@@ -34,6 +34,10 @@ This RFC introduces a framework where logging a new signal costs **one line**.
 4. **Supports numbers and strings.** Scores, weights, multipliers (numeric) and model names, strategy labels, experiment variants (string).
 5. **Queryable in Snowflake without LATERAL FLATTEN.** Direct key access on a VARIANT column.
 
+## Scope
+
+The initial proto wiring targets `CrossVerticalHomePageFeedEvent`, which populates the `cx_cross_vertical_homepage_feed` table. However, the `RankingSignalCollector` and `RankingSignalWriter` are generic abstractions not tied to any specific table or event type. Extending to other event types is a matter of adding the same two map fields to their proto definitions and the same prefix forwarding loop in their event generators.
+
 ## Non Goals
 
 - **No migration of existing logged fields.** `SCORE_MODIFIERS`, `HORIZONTAL_ELEMENT_SCORE`, and all other existing Iguazu columns are untouched. The new framework runs alongside them. Migration of existing signals into the new columns can be future work and would be straightforward since it only requires adding `record()` calls at each signal's source.
