@@ -232,6 +232,10 @@ context.rankingSignalCollector.record(carousel.id, store.storeId(), "my_new_sign
 - `StoreCarouselDataAdapter.kt`: one line `RankingSignalWriter` call in `generateStoreLogging()`
 - `ContainerEventsGenerator.kt`: prefix based forwarding loop after `LoggedValue.assign()`
 
+## Timeline
+
+3 to 4 days. 2 new files, 5 modified files, 1 proto change. Unit tests for the collector, writer, adapter, and event generator. Sandbox validation to confirm signals land in Snowflake.
+
 ## Open
 
 - **Iguazu column auto creation**: Verify that the new proto map fields automatically create `RANKING_SIGNALS` and `CAROUSEL_RANKING_SIGNALS` VARIANT columns in Snowflake, or identify the manual steps needed.
