@@ -249,19 +249,21 @@ Spotlight carousels don't have hardcoded pinning in feed-service, but their `sor
 
 ## Recommended Approach
 
+**Critical ordering constraint:** Option 2 (allowlist protects against unpin) must NOT ship before the allowlist is cleaned up. Today the allowlist contains stale NV carousel IDs that we don't want boosted. The current NV unpin logic accidentally neutralizes those stale entries — if we protect them from unpin before removing them, we'd be *re-pinning* carousels that should be ML-ranked. Cleanup first, then code change.
+
 | Step | What | When | Blocks |
 |---|---|---|---|
-| **A** | Option 2 fix — allowlist protects against unpin | **Now** (hours) | Nothing |
-| **B** | Parul's SOT audit — which carousels need what treatment | **This week** | Step D |
-| **C** | Confirm spotlight positioning with Grant Roberts | **This week** | Step D |
-| **D** | Clean up existing configs (remove legacy NV, reconcile) | **After B+C** (1-2 weeks) | Nothing |
-| **E** | Ranking Pipeline RFC M1-4 — step scaffold | **5-7 weeks** | Nothing (parallel to D) |
+| **A** | Parul's SOT audit — which carousels actually need boosting/pinning today | **This week** | Step C |
+| **B** | Confirm spotlight positioning with Grant Roberts | **This week** | Step C |
+| **C** | Clean up existing configs — remove legacy NV entries from `boost_by_position_allow_list`, reconcile with Parul's SOT | **After A+B** (1-2 weeks) | Step D |
+| **D** | Option 2 fix — allowlist protects against unpin (safe now that allowlist is clean) | **After C** (hours of code, but blocked on C) | Nothing |
+| **E** | Ranking Pipeline RFC M1-4 — step scaffold | **5-7 weeks** | Nothing (parallel to A-D) |
 | **F** | Milestone 5 — `PositionBoostingSubStep` with unified config input | **After E** | E |
 | **G** | Post-processor RFC — `FinalOverwriteStep` absorbs all 5 configs | **After F** | F |
 
-Steps A-D are independent of the RFC timeline. They clean up the current system and establish a trusted allowlist. Steps E-G build the structural scaffold that makes a true single source of truth possible.
+Steps A-D clean up the current system and establish a trusted allowlist. Steps E-G build the structural scaffold that makes a true single source of truth possible. The two tracks run in parallel.
 
-**The honest answer to the stakeholder's ask:** Yes, we can maintain a single source of truth. Steps A-D give us a *clean* allowlist that works correctly today (weeks). The RFC gives us the *architecture* where that allowlist becomes the only config needed (months). The two tracks are complementary and can run in parallel.
+**The honest answer to the stakeholder's ask:** Yes, we can maintain a single source of truth. Steps A-D give us a *clean* allowlist that works correctly (weeks). The RFC gives us the *architecture* where that allowlist becomes the only config needed (months). The two tracks are complementary.
 
 ---
 

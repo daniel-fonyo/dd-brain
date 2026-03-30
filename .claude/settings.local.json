@@ -30,7 +30,8 @@
       "WebFetch(domain:www.npmjs.com)",
       "mcp__snowflake__run_snowflake_query",
       "mcp__snowflake__describe_object",
-      "WebFetch(domain:buildkite.com)"
+      "WebFetch(domain:buildkite.com)",
+      "WebFetch(domain:doordash.atlassian.net)"
     ]
   },
   "sandbox": {
