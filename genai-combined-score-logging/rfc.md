@@ -36,10 +36,11 @@ This RFC introduces a framework where logging a new signal costs **one line**.
 
 ## Scope
 
-The initial proto wiring targets `CrossVerticalHomePageFeedEvent`, which populates the `cx_cross_vertical_homepage_feed` table. However, the `RankingSignalCollector` and `RankingSignalWriter` are generic abstractions not tied to any specific table or event type. Extending to other event types is a matter of adding the same two map fields to their proto definitions and the same prefix forwarding loop in their event generators.
+This is a quick, focused effort to provide an immediate solution to the multi file, multi week cost of adding new logging fields. The initial proto wiring targets `CrossVerticalHomePageFeedEvent`, which adds two new columns to the existing `cx_cross_vertical_homepage_feed` table. No new Snowflake tables are created. The `RankingSignalCollector` and `RankingSignalWriter` are generic abstractions not tied to any specific table or event type. Extending to other event types is a matter of adding the same two map fields to their proto definitions and the same prefix forwarding loop in their event generators.
 
 ## Non Goals
 
+- **No new Snowflake tables.** The framework adds two new columns (`RANKING_SIGNALS`, `CAROUSEL_RANKING_SIGNALS`) to the existing `cx_cross_vertical_homepage_feed` table via proto map fields. No new tables, no new Iguazu topics.
 - **No migration of existing logged fields.** `SCORE_MODIFIERS`, `HORIZONTAL_ELEMENT_SCORE`, and all other existing Iguazu columns are untouched. The new framework runs alongside them. Migration of existing signals into the new columns can be future work and would be straightforward since it only requires adding `record()` calls at each signal's source.
 - **No changes to StoreEntity or any entity data class.** Signals flow directly from the collector to the adapter's logging map, bypassing entity objects entirely.
 - **No changes to the existing `LoggedValue` enum or `STORE_LOGGED_VALUES` list.** The new framework operates independently.
