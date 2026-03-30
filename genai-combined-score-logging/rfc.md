@@ -8,7 +8,7 @@
 
 ## Problem
 
-Adding a new logging field to `cx_cross_vertical_homepage_feed` is painful. To log a single new value, an engineer has to:
+Logging a new ranking signal value to `cx_cross_vertical_homepage_feed` is painful. Every time an engineer needs to capture a new score, multiplier, weight, or model identifier, they have to:
 
 1. Add a typed field to a data class (e.g. `GeneratedRecommendationStoreInfo` or `StoreEntity`)
 2. Manually copy that field through 2 to 3 carrier objects during the decoration phase (`LiteStoreCollection` to `StoreEntity` via `HomepageProgrammaticProductServiceUtil.updateStoreEntity()`)
