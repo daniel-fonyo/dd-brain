@@ -3,6 +3,14 @@
 ## Summary
 Add `verticalIntentPredictionScore` (raw model probability) as a new `score_modifier` in Iguazu cross-vertical events. Currently only the derived `vertical_intent_multiplier` is logged.
 
+## Prerequisite: Original Model Integration (PR #58350, merged)
+The intent prediction model was integrated end-to-end by Michael Chen + Zhenzhen Liu in PR #58350 (`hp_intent_pred`). That PR:
+- Added `VERTICAL_INTENT_PREDICTION` predictor enum + `intentPredictionModel` config field
+- Wired Sibyl predictor registration (gated by `enableVerticalIntentPrediction` — config starts with `"intent_model__"`)
+- Extracted per-entity predictions in `BaseEntityScorer`, propagated through `ScoreBundle` (9 branches) into `ScoreWithFactors.verticalIntentPredictionScore`
+- Applied in `VerticalBlending`: `entityScore *= verticalIntentPredictionScore * intentMultiplier`
+- Score is already computed and used in ranking — just not logged to Iguazu events
+
 ## Changes Required (9 steps, 8 files + 4 test files)
 
 ### Step 1: Add logging constant
@@ -96,4 +104,6 @@ LoggedValue.VERTICAL_INTENT_PREDICTION_SCORE,
 - **NaN safety** — follows existing pattern with `isNaN()` guard
 
 ## Branch
-`feat/intent-prediction-score-logging` in feed-service worktree at `.claude/worktrees/intent-prediction-score-logging`
+`feat/intent-prediction-score-logging` on feed-service (pushed to origin)
+- Commit: `d8fe42189ae` — 12 files, detekt passed, PR review clean
+- Remote: https://github.com/doordash/feed-service/tree/feat/intent-prediction-score-logging

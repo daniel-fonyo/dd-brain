@@ -31,49 +31,66 @@ ML model to predict user category-level intent on the DoorDash homepage: "what t
 
 ## Feed-Service Integration
 
+### Original Integration PR (merged)
+**PR #58350**: `hp_intent_pred` by Michael Chen + Zhenzhen Liu — merged 2026-02-18
+- Branch: `hp_intent_pred`
+- 15 files changed: +121/-4
+
+#### What PR #58350 did (end-to-end model integration):
+1. **PredictionEnums.kt** — Added `VERTICAL_INTENT_PREDICTION("vertical_intent_prediction")` predictor name
+2. **VerticalBlendingConfig.kt** — Added `intentPredictionModel` field (JSON: `intent_prediction_model`) for model ID from runtime config
+3. **P13nExperimentManager.kt** — Added `enableVerticalIntentPrediction()` gating: returns true when `HP_VERTICAL_BLENDING_CONFIG` experiment starts with `"intent_model__"`
+4. **SibylRegressor.kt** — Registered the vertical intent predictor (gated by experiment + config model ID), extracted predictions from Sibyl response into `verticalIntentPredictions` map, added to `ScoresMetadata`
+5. **BaseEntityScorer.kt** — Wired `VERTICAL_INTENT_PREDICTION` predictor name into `AdditionalPredictors`, extracted per-entity vertical intent scores async, added to `AdditionalPrediction.verticalIntentPrediction`
+6. **ScoreBundle.kt** — Propagated `verticalIntentPredictionScore` from `AdditionalPrediction` into `ScoreWithFactors` in all 9 score bundle branches
+7. **ScoreWithFactors.kt** — Added `var verticalIntentPredictionScore: Double? = null` field
+8. **VerticalBlending.kt** — Core scoring logic: if `config.intentPredictionModel.isNotEmpty()` AND `verticalIntentPredictionScore != null`, multiply entity score by `verticalIntentPredictionScore * intentMultiplier`; else just `intentMultiplier`. Also propagated score through `BlendableEntity`.
+
+#### Key design decisions from PR #58350:
+- Score is **per-entity** (each carousel gets its own prediction score based on `business_vertical_id`)
+- Model is called via **Sibyl multi-predictor** — piggybacks on the existing prediction request with other predictors
+- Gated by **experiment prefix** (`intent_model__`) — config ID must start with this prefix for model to be active
+- Score **multiplies** the intent multiplier from config (not replaces it): `entityScore *= verticalIntentPredictionScore * intentMultiplier`
+
 ### Two Distinct Score Fields
 There are TWO separate intent-related scores in ScoreWithFactors:
 
 | Field | Key | What it is |
 |-------|-----|------------|
 | `userIntentPredictionScore` | `user_intent_prediction_score` | Older TLDR user intent score (CollectionScorer, uses `FEED_RANKING_FW_SIBYL_PREDICTOR_NAME` predictor with `TLDR_USER_INTENT_PREDICTOR_NAME` model) |
-| `verticalIntentPredictionScore` | `vertical_intent_multiplier` (via `verticalIntentMultiplier`) | **This is Michael's new model** (BaseEntityScorer, uses `VERTICAL_INTENT_PREDICTION` predictor, model ID from `VerticalBlendingConfig.intentPredictionModel`) |
+| `verticalIntentPredictionScore` | `vertical_intent_prediction_score` | **Michael's new model** (BaseEntityScorer, uses `VERTICAL_INTENT_PREDICTION` predictor, model ID from `VerticalBlendingConfig.intentPredictionModel`) |
 
-### Logging Status
-- `user_intent_prediction_score` → **Already logged** in `score_modifiers` (ContainerEventsGenerator line 200, 2305-2315)
-- `vertical_intent_multiplier` → **Already logged** in `score_modifiers` (ContainerEventsGenerator line 202, 2335-2345)
-- **Raw `verticalIntentPredictionScore`** → Logged via `StoreCarouselDataAdapterUtil` and `ItemCarouselDataAdapter` to facet logging, BUT **not as a separate score_modifier in Iguazu cross-vertical events**
+### Logging Status (after our PR)
+- `user_intent_prediction_score` → **Logged** in `score_modifiers`
+- `vertical_intent_multiplier` → **Logged** in `score_modifiers`
+- `vertical_intent_prediction_score` → **Now logged** in `score_modifiers` (our PR `feat/intent-prediction-score-logging`)
 
 ### Key Code Paths
-- Predictor registration: `SibylRegressor.kt:276-289` (gated by `enableVerticalIntentPrediction` experiment)
-- Score extraction: `SibylRegressor.kt:498,523` (verticalIntentPredictions)
-- Blending application: `VerticalBlending.kt:304-314` (multiplies entity score)
-- Score propagation: `ScoreBundle.kt:256-257` → `ScoreWithFactors.verticalIntentPredictionScore`
-- Iguazu event logging: `ContainerEventsGenerator.kt` (score_modifiers list)
+- Predictor name: `PredictionEnums.kt` — `VERTICAL_INTENT_PREDICTION("vertical_intent_prediction")`
+- Experiment gating: `P13nExperimentManager.enableVerticalIntentPrediction()` — config must start with `"intent_model__"`
+- Model ID source: `VerticalBlendingConfig.intentPredictionModel` (runtime JSON config)
+- Predictor registration: `SibylRegressor.kt:227-242` (gated by experiment + config)
+- Score extraction: `SibylRegressor.kt:332-335,347,372` (verticalIntentPredictions from Sibyl response)
+- Per-entity mapping: `BaseEntityScorer.kt:227-231` → `AdditionalPrediction.verticalIntentPrediction`
+- Score bundle propagation: `ScoreBundle.kt` (9 branches all map `verticalIntentPredictionScore`)
+- Blending application: `VerticalBlending.kt:280-291` — `entityScore *= verticalIntentPredictionScore * intentMultiplier`
+- Logging: `ContainerEventsGenerator.kt` — `VERTICAL_INTENT_PREDICTION_SCORE` in score_modifiers
 
-## What Daniel Needs To Do
+## Our Work: Score Logging PR
 
 ### The Ask
-Michael confirmed with Frank that the intent predict model score is **not yet logged**. He needs the raw prediction score added to the `score_modifier` column in cross-vertical logging.
+Michael confirmed with Frank that the intent predict model score is **not yet logged** in Iguazu events. He needs the raw prediction score added to the `score_modifier` column in cross-vertical logging.
 
-### Analysis: What's Missing
-The **raw prediction score** from the intent model (`verticalIntentPredictionScore`) is partially plumbed:
-- It exists in `ScoreWithFactors` (line 21)
-- It flows through `VerticalBlending` where it's used in scoring
-- It's logged in carousel-level facet logging
+### What We Built
+**PR**: `feat/intent-prediction-score-logging` — 12 files (8 prod + 4 test)
+- Added `VERTICAL_INTENT_PREDICTION_SCORE_KEY = "vertical_intent_prediction_score"` constant
+- Added `verticalIntentPredictionScore` field to `StoreCarousel` and `ItemCarousel` domain models
+- Mapped field through `EntityRankerConfiguration` (4 copy blocks)
+- Added to logging adapters: `StoreCarouselDataAdapterUtil`, `ItemCarouselDataAdapter`, `CategoryPreviewUniversalItemCarouselMapper`
+- Added `LoggedValue.VERTICAL_INTENT_PREDICTION_SCORE` enum entry in `ContainerEventsGenerator`
+- Full test coverage in 4 test files
 
-**But**: In the Iguazu `score_modifiers` list (ContainerEventsGenerator), only the **multiplier** (`vertical_intent_multiplier`) is logged — not the raw prediction probability from the model.
-
-### Implementation Plan
-Add a new `score_modifier` entry for the raw intent prediction score:
-
-1. **DomainUtilLoggingConstants.kt** — Add constant (if not reusing `USER_INTENT_PREDICTION_SCORE_KEY`, may need new key like `VERTICAL_INTENT_PREDICTION_SCORE_KEY`)
-2. **ContainerEventsGenerator.kt** — Add new `LoggedValue` enum entry + add to `containerScoreModifierValues` list
-3. **Verify** the score is already populated in the logging map from `ScoreWithFactors.verticalIntentPredictionScore`
-
-**Effort estimate**: Low — follows exact same pattern as every other score_modifier. Copy-paste from existing entries.
-
-**No dependency on Michael's side** — this is purely feed-service logging plumbing.
+**No scoring logic changes** — pure logging plumbing. Zero dependency on Michael's side.
 
 ## Future Work
 - V2: Business-aware modeling (store-type features, embeddings)
@@ -83,6 +100,7 @@ Add a new `score_modifier` entry for the raw intent prediction score:
 - Expand back to multi-class when data supports it
 
 ## References
+- Model integration PR: https://github.com/doordash/feed-service/pull/58350
 - Model PR: https://github.com/doordash/dd-models/pull/4491
 - Fabricator training data: https://github.com/doordash/fabricator/tree/master/fabricator/repository/features/cx_discovery/intent_prediction
 - Meeting notes: https://notes.granola.ai/t/62c5fdf5-34fe-4ce6-bc23-c239f3d4dc61
