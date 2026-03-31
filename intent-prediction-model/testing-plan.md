@@ -50,7 +50,30 @@ cd /Users/daniel.fonyo/Projects/feed-service
 ./gradlew :libraries:domain-serialization-mapping:test --tests "*CategoryPreviewUniversalItemCarouselMapperTest*"
 ```
 
-## Part 2: E2E Sandbox Tests
+## Part 2: PR Review Self-Reinforcement Loop
+
+Run the PR review skill against the diff (no GitHub PR needed) to catch issues before commit.
+
+### Process
+1. **Review agent** runs PR review dimensions against `git diff main...HEAD` in the worktree
+2. Review agent outputs comments tagged `[critical]`, `[bug]`, `[suggestion]`, `[nit]` with file:line references
+3. **Fix agent** receives the review comments and applies fixes in the worktree
+4. Re-run review agent to verify all `[critical]` and `[bug]` items are resolved
+5. Repeat until clean (max 2 iterations)
+
+### Review Dimensions
+- **Correctness**: Does the logging key match? Are all 4 EntityRankerConfiguration copy blocks covered?
+- **Design**: Does the new field follow existing patterns exactly?
+- **Performance**: No new allocations, no hot-path changes
+- **Readability**: Naming consistent with adjacent fields
+- **Testing**: Are all test cases covered (present/absent/NaN)?
+- **Kotlin style**: Follows Google Android Kotlin Style Guide
+
+### Acceptance
+- Zero `[critical]` or `[bug]` comments remaining
+- All `[suggestion]` items either addressed or explicitly deferred with rationale
+
+## Part 3: E2E Sandbox Tests
 
 ### Prerequisites
 1. Code deployed to sandbox via `devbox run web-group1-remote`
