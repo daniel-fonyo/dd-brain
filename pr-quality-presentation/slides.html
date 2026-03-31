@@ -495,7 +495,7 @@
 </div>
 
 <!-- ==================== SLIDE 2: THE QUESTION ==================== -->
-<div class="slide slide--content" id="s2">
+<div class="slide slide--content" id="s1">
   <div class="subtitle-red">The Question</div>
   <h2>What is a high quality PR?</h2>
   <p style="margin-top: 16px; font-size: 1.2rem;">It's not one thing. It's like 10 different things you'd need to check on every PR.</p>
@@ -516,7 +516,7 @@
 </div>
 
 <!-- ==================== SLIDE 3: BLOCKERS ==================== -->
-<div class="slide slide--dark" id="s3">
+<div class="slide slide--dark" id="s2">
   <div class="subtitle-red" style="color: var(--yolk);">The Blockers</div>
   <h2>Why high quality PRs are hard</h2>
   <div style="margin-top: 20px;">
@@ -533,14 +533,14 @@
 </div>
 
 <!-- ==================== SLIDE 4: THESIS ==================== -->
-<div class="slide slide--divider" id="s4">
+<div class="slide slide--divider" id="s3">
   <h1 style="max-width: 800px;">What if your best practices docs could run themselves?</h1>
   <p class="subtitle" style="max-width: 600px; margin-top: 20px;">I built two tools that do this. They're working on real PRs today.</p>
   <span class="slide-num">4</span>
 </div>
 
 <!-- ==================== SLIDE 5: TWO SKILLS ==================== -->
-<div class="slide slide--content" id="s5">
+<div class="slide slide--content" id="s4">
   <div class="subtitle-red">The Tools</div>
   <h2>Two agentic skills, built on Claude Code</h2>
   <div class="grid-2" style="margin-top: 32px;">
@@ -569,7 +569,7 @@
 </div>
 
 <!-- ==================== SLIDE 6: REVIEW PIPELINE ==================== -->
-<div class="slide slide--dark" id="s6">
+<div class="slide slide--dark" id="s5">
   <div class="subtitle-red" style="color: var(--yolk);">/review-pr</div>
   <h2>The pipeline</h2>
   <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 20px;">
@@ -603,7 +603,7 @@
 </div>
 
 <!-- ==================== SLIDE 7: 10 DIMENSIONS ==================== -->
-<div class="slide slide--content" id="s7">
+<div class="slide slide--content" id="s6">
   <div class="subtitle-red">Parallel, Not Serial</div>
   <h2>10 focused agents run simultaneously</h2>
   <p style="margin-top: 8px; opacity: 0.6;">You're one person. You check what you know. These run all at once.</p>
@@ -624,7 +624,7 @@
 </div>
 
 <!-- ==================== SLIDE 8: REAL BUG ==================== -->
-<div class="slide slide--dark" id="s8">
+<div class="slide slide--dark" id="s7">
   <div class="subtitle-red" style="color: var(--yolk);">Real Impact</div>
   <h2>Found a real bug in PR #62639</h2>
   <div class="grid-2" style="margin-top: 24px;">
@@ -652,34 +652,15 @@
   <span class="slide-num">8</span>
 </div>
 
-<!-- ==================== SLIDE 9: VOICE ==================== -->
-<div class="slide slide--content" id="s9">
-  <div class="subtitle-red">Not Robot. Teammate.</div>
-  <h2>Comments sound like a person, not a linter</h2>
-  <div class="compare" style="margin-top: 24px;">
-    <div class="compare-bad">
-      <div class="compare-label">AI slop</div>
-      <p style="font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; line-height: 1.6;">supervisorScope suspends until all children complete, so this launch blocks the return. If you want true fire-and-forget, launch from a detached scope.</p>
-      <p style="margin-top: 12px; font-size: 0.8rem; opacity: 0.5;">Declares as fact. Commands a fix. No room for "actually I intended this."</p>
-    </div>
-    <div class="compare-good">
-      <div class="compare-label">Teammate voice</div>
-      <p style="font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; line-height: 1.6;">I think <code>supervisorScope</code> suspends until all children complete? If so this <code>launch</code> blocks the return of <code>splitResult</code>, so it may not be async despite the comment?</p>
-      <p style="margin-top: 12px; font-size: 0.8rem; opacity: 0.5;">Shows reasoning. Question mark invites correction. Explains the mechanics.</p>
-    </div>
-  </div>
+<!-- ==================== SLIDE 8: SANDBOX DIVIDER ==================== -->
+<div class="slide slide--divider" id="s8">
+  <h1>Autonomous<br>Sandbox Testing</h1>
+  <p class="subtitle" style="max-width: 600px; margin-top: 16px;">You describe what to test in plain words.<br>It figures out the rest.</p>
   <span class="slide-num">9</span>
 </div>
 
-<!-- ==================== SLIDE 10: SANDBOX DIVIDER ==================== -->
-<div class="slide slide--divider" id="s10">
-  <h1>Autonomous<br>Sandbox Testing</h1>
-  <p class="subtitle" style="max-width: 600px; margin-top: 16px;">You describe what to test in plain words.<br>It figures out the rest.</p>
-  <span class="slide-num">10</span>
-</div>
-
-<!-- ==================== SLIDE 11: SANDBOX PROBLEM ==================== -->
-<div class="slide slide--content" id="s11">
+<!-- ==================== SLIDE 8: SANDBOX PROBLEM ==================== -->
+<div class="slide slide--content" id="s9">
   <div class="subtitle-red">The Problem</div>
   <div class="quote" style="border-left-color: var(--hero-red);">
     "The homepage is a black box. Ranking inputs go in, a feed comes out, and verifying that the feed is correct requires correlating signals across multiple systems. A single change can take 30-60 minutes of manual validation."
@@ -698,11 +679,11 @@
       <div class="big-number-label">structured evidence</div>
     </div>
   </div>
-  <span class="slide-num">11</span>
+  <span class="slide-num">10</span>
 </div>
 
-<!-- ==================== SLIDE 12: AUTONOMOUS LOOP ==================== -->
-<div class="slide slide--dark" id="s12">
+<!-- ==================== SLIDE 8: AUTONOMOUS LOOP ==================== -->
+<div class="slide slide--dark" id="s10">
   <div class="subtitle-red" style="color: var(--yolk);">The Autonomous Loop</div>
   <h2>5 signal sources, captured in parallel</h2>
   <div class="grid-5" style="margin-top: 24px;">
@@ -715,11 +696,11 @@
   <div class="highlight-box" style="margin-top: 24px;">
     <strong>This isn't a script.</strong> If scores look wrong, it re-checks. If a carousel is missing, it investigates why. It does what I'd do, just without me sitting there.
   </div>
-  <span class="slide-num">12</span>
+  <span class="slide-num">11</span>
 </div>
 
-<!-- ==================== SLIDE 13: BEFORE/AFTER ==================== -->
-<div class="slide slide--content" id="s13">
+<!-- ==================== SLIDE 8: BEFORE/AFTER ==================== -->
+<div class="slide slide--content" id="s11">
   <div class="subtitle-red">Before / After</div>
   <h2>Testing evidence quality</h2>
   <div class="compare" style="margin-top: 20px;">
@@ -739,11 +720,11 @@
       <p style="font-size: 0.8rem; margin-top: 8px; opacity: 0.7;">11/12 stable. Pod errors: 0. Video + full report attached.</p>
     </div>
   </div>
-  <span class="slide-num">13</span>
+  <span class="slide-num">12</span>
 </div>
 
-<!-- ==================== SLIDE 14: NUMBERS ==================== -->
-<div class="slide slide--dark" id="s14">
+<!-- ==================== SLIDE 8: NUMBERS ==================== -->
+<div class="slide slide--dark" id="s12">
   <div class="subtitle-red" style="color: var(--yolk);">Real Numbers</div>
   <h2>Impact so far</h2>
   <div class="grid-2" style="margin-top: 24px;">
@@ -768,11 +749,11 @@
       </table>
     </div>
   </div>
-  <span class="slide-num">14</span>
+  <span class="slide-num">13</span>
 </div>
 
-<!-- ==================== SLIDE 15: META-POINT ==================== -->
-<div class="slide slide--content" id="s15">
+<!-- ==================== SLIDE 8: META-POINT ==================== -->
+<div class="slide slide--content" id="s13">
   <div class="subtitle-red">So What</div>
   <h2>Why this actually works</h2>
   <div style="margin-top: 20px;">
@@ -784,11 +765,11 @@
       <li><strong>I still make the call.</strong> The agent does the tedious scanning. I decide what's worth blocking on.</li>
     </ul>
   </div>
-  <span class="slide-num">15</span>
+  <span class="slide-num">14</span>
 </div>
 
-<!-- ==================== SLIDE 16: RUN ON YOUR OWN CODE ==================== -->
-<div class="slide slide--dark" id="s16">
+<!-- ==================== SLIDE 8: RUN ON YOUR OWN CODE ==================== -->
+<div class="slide slide--dark" id="s14">
   <div class="subtitle-red" style="color: var(--yolk);">The Full Loop</div>
   <h2>Run it on your own code before opening the PR</h2>
   <div class="grid-2" style="margin-top: 24px;">
@@ -809,25 +790,25 @@
       <p style="margin-top: 20px; font-size: 0.95rem; opacity: 0.7;">The skills work the same whether you're the author or the reviewer. Same rigor, same evidence, same 10 dimensions.</p>
     </div>
   </div>
+  <span class="slide-num">15</span>
+</div>
+
+<!-- ==================== SLIDE 8: COMPOUND ==================== -->
+<div class="slide slide--divider" id="s15">
+  <h1 style="max-width: 700px; font-size: 2.4rem;">I've been correcting it for a few weeks. It already knows more feed-service best practices than I do.</h1>
+  <p class="subtitle" style="margin-top: 20px;">Imagine what it knows after 6 months of the whole team using it.</p>
   <span class="slide-num">16</span>
 </div>
 
-<!-- ==================== SLIDE 17: COMPOUND ==================== -->
-<div class="slide slide--divider" id="s17">
-  <h1 style="max-width: 700px; font-size: 2.4rem;">I've been correcting it for a few weeks. It already knows more feed-service best practices than I do.</h1>
-  <p class="subtitle" style="margin-top: 20px;">Imagine what it knows after 6 months of the whole team using it.</p>
+<!-- ==================== SLIDE 8: DEMO ==================== -->
+<div class="slide slide--title" id="s16">
+  <div class="subtitle-red" style="color: var(--yolk);">Live</div>
+  <h1>Demo</h1>
   <span class="slide-num">17</span>
 </div>
 
-<!-- ==================== SLIDE 18: DEMO ==================== -->
-<div class="slide slide--title" id="s18">
-  <div class="subtitle-red" style="color: var(--yolk);">Live</div>
-  <h1>Demo</h1>
-  <span class="slide-num">18</span>
-</div>
-
-<!-- ==================== SLIDE 19: TAKEAWAYS ==================== -->
-<div class="slide slide--content" id="s19">
+<!-- ==================== SLIDE 8: TAKEAWAYS ==================== -->
+<div class="slide slide--content" id="s17">
   <div class="subtitle-red">Takeaways</div>
   <h2>Three things to remember</h2>
   <div style="margin-top: 32px;">
@@ -841,7 +822,7 @@
       <strong style="color: var(--hero-red);">3.</strong> This already found a real bug that would have shipped. On a PR that had human approvals.
     </div>
   </div>
-  <span class="slide-num">19</span>
+  <span class="slide-num">18</span>
 </div>
 
 
