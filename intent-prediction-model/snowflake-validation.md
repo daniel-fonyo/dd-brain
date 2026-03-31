@@ -1,69 +1,59 @@
 # Snowflake Validation: vertical_intent_prediction_score
 
 **Date**: 2026-03-31
-**Status**: BLOCKED -- no events to validate
+**Status**: BLOCKED -- no Snowflake query capability
 **Consumer ID**: 757606047
 **Table**: `IGUAZU.SERVER_EVENTS_PRODUCTION.CX_CROSS_VERTICAL_HOME_PAGE_FEED_ICE`
 
-## Result: No Snowflake Validation Possible
+## Result: Cannot Execute Queries
 
-Snowflake validation could not be performed for two independent reasons:
+Attempted validation at ~09:00 UTC on 2026-03-31 (after 8-minute wait for browser test + Snowflake propagation). However, no Snowflake query tool is available in this session:
 
-### Reason 1: No events reached Snowflake (Iguazu bypass compile failure)
+- **Snowflake MCP server**: NOT configured in `~/.claude/mcp.json` (only `playwright` is present)
+- **snowsql CLI**: not installed
+- **snowflake Python connector**: not installed
 
-The `:platform:compileKotlin` task failed during sandbox build. The `IguazuModule.kt` change (`val isSandboxEnv = false`) lives in the `:platform` module. Because compilation failed, the bypass was never applied to the running JAR. The E2E test report confirms: `ENABLE_SANDBOX_IGUAZU` environment variable lookup is happening (the default code path), meaning the hardcoded bypass is NOT active.
+The previous validation doc referenced a `snowflake` MCP server, but it is not currently in the MCP config.
 
-Without the bypass, sandbox Iguazu gating blocks all events from reaching Snowflake. Even if homepage requests had been processed, no events would have been published.
+## Action Required
 
-### Reason 2: No traffic reached the sandbox pod
+To run these queries, either:
 
-The E2E test (02:47-02:49 UTC on 2026-03-31) confirmed zero homepage gRPC requests reached the sandbox pod during the browser session. Root cause: `devbox run web-group1-remote` synced from the main checkout (on `master`), not the worktree containing the feature branch code. The pod was running `master` code, not `feat/intent-prediction-score-logging`.
+1. **Add the Snowflake MCP server** back to `~/.claude/mcp.json` (e.g. `snowflake-labs-mcp` via `uvx` with auth env vars)
+2. **Install snowsql** (`brew install --cask snowflake-snowsql`)
+3. **Run manually** in a Snowflake web UI / worksheet
 
-### Reason 3 (resolved): Snowflake MCP now available
+## Queries to Execute
 
-Snowflake access is configured via the `snowflake` MCP server in `~/.claude/mcp.json` (uses `snowflake-labs-mcp` via `uvx`). Queries can be run directly from Claude Code — no Python connector or CLI needed.
-
-## Validation Queries
-
-Run these queries via the Snowflake MCP server after a successful sandbox test:
-
-### Query 1: Check if any events exist for our consumer
+### Query 1: Check events exist
 ```sql
-SELECT COUNT(*) AS CNT, MAX(IGUAZU_PARTITION_HOUR) AS LATEST_HOUR
+SELECT COUNT(*) AS cnt, MIN(IGUAZU_PARTITION_HOUR) AS min_hour, MAX(IGUAZU_PARTITION_HOUR) AS max_hour
 FROM IGUAZU.SERVER_EVENTS_PRODUCTION.CX_CROSS_VERTICAL_HOME_PAGE_FEED_ICE
-WHERE IGUAZU_PARTITION_DATE = '<test-date>'
-  AND IGUAZU_PARTITION_HOUR BETWEEN <hour-1> AND <hour+2>
+WHERE IGUAZU_PARTITION_DATE = '2026-03-31'
+  AND IGUAZU_PARTITION_HOUR BETWEEN 7 AND 10
   AND CONSUMER_ID = 757606047;
 ```
 
-### Query 2: Check for the new score modifier
+### Query 2: Check for new score modifier
 ```sql
-SELECT
-    e.REQUEST_ID,
-    e.FACET_ID,
-    e.FACET_TYPE,
-    sm.value:name::STRING AS modifier_name,
-    sm.value:value::DOUBLE AS modifier_value
+SELECT sm.value:name::STRING AS modifier_name, sm.value:value::DOUBLE AS modifier_value, e.FACET_ID, e.FACET_TYPE
 FROM IGUAZU.SERVER_EVENTS_PRODUCTION.CX_CROSS_VERTICAL_HOME_PAGE_FEED_ICE e,
     LATERAL FLATTEN(input => PARSE_JSON(e.SCORE_MODIFIERS)) sm
-WHERE e.IGUAZU_PARTITION_DATE = '<test-date>'
-  AND e.IGUAZU_PARTITION_HOUR BETWEEN <hour-1> AND <hour+2>
+WHERE e.IGUAZU_PARTITION_DATE = '2026-03-31'
+  AND e.IGUAZU_PARTITION_HOUR BETWEEN 7 AND 10
   AND e.CONSUMER_ID = 757606047
   AND sm.value:name::STRING = 'vertical_intent_prediction_score'
 ORDER BY e.FACET_VERTICAL_POSITION
 LIMIT 20;
 ```
 
-### Query 3: All score modifiers overview
+### Query 3: All score modifiers summary
 ```sql
-SELECT
-    sm.value:name::STRING AS modifier_name,
-    COUNT(*) AS cnt,
-    AVG(sm.value:value::DOUBLE) AS avg_val
+SELECT sm.value:name::STRING AS modifier_name, COUNT(*) AS cnt, AVG(sm.value:value::DOUBLE) AS avg_val
 FROM IGUAZU.SERVER_EVENTS_PRODUCTION.CX_CROSS_VERTICAL_HOME_PAGE_FEED_ICE e,
     LATERAL FLATTEN(input => PARSE_JSON(e.SCORE_MODIFIERS)) sm
-WHERE e.IGUAZU_PARTITION_DATE = '<test-date>'
-  AND e.IGUAZU_PARTITION_HOUR BETWEEN <hour-1> AND <hour+2>
+WHERE e.IGUAZU_PARTITION_DATE = '2026-03-31'
+  AND e.IGUAZU_PARTITION_HOUR BETWEEN 7 AND 10
   AND e.CONSUMER_ID = 757606047
 GROUP BY modifier_name
 ORDER BY cnt DESC;
@@ -76,32 +66,16 @@ SELECT e.FACET_ID,
     MAX(CASE WHEN sm.value:name::STRING = 'vertical_intent_multiplier' THEN sm.value:value::DOUBLE END) AS multiplier
 FROM IGUAZU.SERVER_EVENTS_PRODUCTION.CX_CROSS_VERTICAL_HOME_PAGE_FEED_ICE e,
     LATERAL FLATTEN(input => PARSE_JSON(e.SCORE_MODIFIERS)) sm
-WHERE e.IGUAZU_PARTITION_DATE = '<test-date>'
-  AND e.IGUAZU_PARTITION_HOUR BETWEEN <hour-1> AND <hour+2>
+WHERE e.IGUAZU_PARTITION_DATE = '2026-03-31'
+  AND e.IGUAZU_PARTITION_HOUR BETWEEN 7 AND 10
   AND e.CONSUMER_ID = 757606047
   AND sm.value:name::STRING IN ('vertical_intent_prediction_score', 'vertical_intent_multiplier')
-GROUP BY e.FACET_ID;
+GROUP BY e.FACET_ID
+LIMIT 20;
 ```
 
-## Prerequisites for a Successful Retry
-
-All of the following must be true before re-attempting Snowflake validation:
-
-1. **Fix `:platform:compileKotlin`** -- the IguazuModule.kt change must compile cleanly
-2. **Sync from worktree** -- run `devbox run web-group1-remote` from inside the worktree directory, OR checkout the feature branch on the main feed-service directory
-3. **Verify pod is running feature code** -- check startup logs for evidence of the feature branch
-4. **Apply Iguazu bypass** -- `val isSandboxEnv = false` in `IguazuModule.kt` must be active
-5. **Hardcode consumer ID** -- `return 757606047L` in `HomepageRequestToContext.kt`
-6. **Browse homepage** -- visit `https://www.doordashtest.com/` with test credentials
-7. **Wait 3-5 minutes** -- events need propagation time to land in Snowflake
-8. **Have Snowflake access** -- use the `snowflake` MCP server (configured in `~/.claude/mcp.json`)
-
-## Expected Outcome When Working
-
-- Query 1 returns CNT > 0 (events exist)
-- Query 2 returns rows with `modifier_name = 'vertical_intent_prediction_score'` and values in [0.0, 1.0]
-- Query 3 shows the new modifier alongside existing modifiers like `vertical_intent_multiplier`
-- Query 4 shows both raw score and multiplier coexisting on the same facets
+### Broader fallback queries (if no results above)
+Try `IGUAZU_PARTITION_DATE = '2026-03-30'` and hours 7-10 in case of timezone offset.
 
 ## Acceptance Criteria
 
