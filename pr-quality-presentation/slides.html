@@ -489,7 +489,7 @@
 <div class="slide slide--title active" id="s1">
   <div class="subtitle-red" style="color: var(--yolk);">Discovery Platform</div>
   <h1>Agentic Workflows<br>for PR Quality</h1>
-  <p class="subtitle">Encoding team standards into skills that run every time,<br>miss nothing, and get smarter with use.</p>
+  <p class="subtitle">What if your team's review standards ran automatically<br>on every PR, and got better each time you corrected them?</p>
   <p style="margin-top: 40px; font-size: 1rem; opacity: 0.5;">Daniel Fonyo</p>
   <span class="slide-num">1</span>
 </div>
@@ -498,7 +498,7 @@
 <div class="slide slide--content" id="s2">
   <div class="subtitle-red">The Question</div>
   <h2>What is a high quality PR?</h2>
-  <p style="margin-top: 16px; font-size: 1.2rem;">It's not one thing. It's <strong>10+ dimensions</strong> checked simultaneously.</p>
+  <p style="margin-top: 16px; font-size: 1.2rem;">It's not one thing. It's like 10 different things you'd need to check on every PR.</p>
   <div class="dim-grid" style="margin-top: 28px;">
     <div style="background: rgba(255,48,8,0.06); border-radius: 8px; padding: 14px 10px; text-align: center; border: 1px solid rgba(255,48,8,0.15);"><div style="font-size:1.4rem;">🐛</div><div style="font-size:0.8rem; font-weight:600; margin-top:4px;">Correctness</div></div>
     <div style="background: rgba(255,48,8,0.06); border-radius: 8px; padding: 14px 10px; text-align: center; border: 1px solid rgba(255,48,8,0.15);"><div style="font-size:1.4rem;">🏗</div><div style="font-size:0.8rem; font-weight:600; margin-top:4px;">Design</div></div>
@@ -511,7 +511,7 @@
     <div style="background: rgba(255,48,8,0.06); border-radius: 8px; padding: 14px 10px; text-align: center; border: 1px solid rgba(255,48,8,0.15);"><div style="font-size:1.4rem;">🏷</div><div style="font-size:0.8rem; font-weight:600; margin-top:4px;">Hygiene</div></div>
     <div style="background: rgba(255,48,8,0.06); border-radius: 8px; padding: 14px 10px; text-align: center; border: 1px solid rgba(255,48,8,0.15);"><div style="font-size:1.4rem;">🏢</div><div style="font-size:0.8rem; font-weight:600; margin-top:4px;">Best Practices</div></div>
   </div>
-  <p style="margin-top: 24px; opacity: 0.6;">No human reviewer consistently checks all of them on every PR.</p>
+  <p style="margin-top: 24px; opacity: 0.6;">Nobody checks all of these every time. We check what we know, skip what we don't.</p>
   <span class="slide-num">2</span>
 </div>
 
@@ -534,8 +534,8 @@
 
 <!-- ==================== SLIDE 4: THESIS ==================== -->
 <div class="slide slide--divider" id="s4">
-  <h1 style="max-width: 800px;">Encode your team's standards into skills that run every time.</h1>
-  <p class="subtitle" style="max-width: 600px; margin-top: 20px;">They miss nothing. They get smarter with use. They're working today.</p>
+  <h1 style="max-width: 800px;">What if your best practices docs could run themselves?</h1>
+  <p class="subtitle" style="max-width: 600px; margin-top: 20px;">I built two tools that do this. They're working on real PRs today.</p>
   <span class="slide-num">4</span>
 </div>
 
@@ -590,12 +590,12 @@
     </div>
     <div>
       <div class="card--dark" style="margin-bottom: 16px;">
-        <h3 style="color: var(--hero-red);">Key differentiator</h3>
-        <p>Doesn't just flag and post. Reads the actual source code to verify. Writes a unit test to prove the bug. If the test passes, the finding is dropped.</p>
+        <h3 style="color: var(--hero-red);">The part I'm most proud of</h3>
+        <p>It doesn't just flag things. It reads the source code to check if it's right. Then it writes a unit test to prove the bug exists. If the test passes, it drops the finding.</p>
       </div>
       <div class="card--dark">
-        <h3 style="color: var(--hero-red);">Glean integration</h3>
-        <p>Searches your Confluence before reviewing. Found "events >1MB silently dropped" and "Double.NaN caused a SEV-0" from docs reviewers never check.</p>
+        <h3 style="color: var(--hero-red);">Reads our Confluence</h3>
+        <p>Before reviewing, it searches Glean for relevant internal docs. It found "events >1MB silently dropped" and "Double.NaN caused a SEV-0" from pages I didn't even know existed.</p>
       </div>
     </div>
   </div>
@@ -606,7 +606,7 @@
 <div class="slide slide--content" id="s7">
   <div class="subtitle-red">Parallel, Not Serial</div>
   <h2>10 focused agents run simultaneously</h2>
-  <p style="margin-top: 8px; opacity: 0.6;">A human is one person checking sequentially. This is 10 specialists at once.</p>
+  <p style="margin-top: 8px; opacity: 0.6;">You're one person. You check what you know. These run all at once.</p>
   <div class="dim-grid" style="margin-top: 24px;">
     <div class="dim-card" style="background:rgba(255,48,8,0.04); border-color: rgba(255,48,8,0.2);"><div class="dim-icon">🐛</div><div class="dim-name">Correctness</div><div style="font-size:0.7rem; opacity:0.5; margin-top:4px;">Bugs, null safety, races</div></div>
     <div class="dim-card" style="background:rgba(255,48,8,0.04); border-color: rgba(255,48,8,0.2);"><div class="dim-icon">🏗</div><div class="dim-name">Design</div><div style="font-size:0.7rem; opacity:0.5; margin-top:4px;">Coupling, scope creep</div></div>
@@ -631,11 +631,11 @@
     <div>
       <div class="card--dark" style="margin-bottom: 16px;">
         <h3 style="color: var(--hero-red);">What happened</h3>
-        <p>The skill flagged a correctness issue that the author and other human reviewers missed. Verified by reading the actual source code.</p>
+        <p>The skill caught a correctness issue. The author missed it. The human reviewers who approved it missed it. The skill read the source code and confirmed it.</p>
       </div>
       <div class="card--dark">
         <h3 style="color: var(--hero-red);">What would have happened</h3>
-        <p>Without the skill, this would have shipped to production.</p>
+        <p>This PR had human approvals. It would have merged.</p>
       </div>
     </div>
     <div>
@@ -674,7 +674,7 @@
 <!-- ==================== SLIDE 10: SANDBOX DIVIDER ==================== -->
 <div class="slide slide--divider" id="s10">
   <h1>Autonomous<br>Sandbox Testing</h1>
-  <p class="subtitle" style="max-width: 600px; margin-top: 16px;">The engineer describes what to test.<br>The agent handles how.</p>
+  <p class="subtitle" style="max-width: 600px; margin-top: 16px;">You describe what to test in plain words.<br>It figures out the rest.</p>
   <span class="slide-num">10</span>
 </div>
 
@@ -713,7 +713,7 @@
     <div class="card--dim"><h3>Debug Injection</h3><p>Remote debugging via logs</p></div>
   </div>
   <div class="highlight-box" style="margin-top: 24px;">
-    <strong>Not a test runner. A testing agent.</strong> It reasons about what it sees. If scores look wrong, it re-checks. If a carousel is missing, it investigates why.
+    <strong>This isn't a script.</strong> If scores look wrong, it re-checks. If a carousel is missing, it investigates why. It does what I'd do, just without me sitting there.
   </div>
   <span class="slide-num">12</span>
 </div>
@@ -773,15 +773,15 @@
 
 <!-- ==================== SLIDE 15: META-POINT ==================== -->
 <div class="slide slide--content" id="s15">
-  <div class="subtitle-red">The Meta-Point</div>
-  <h2>Skills = Encoded Standards</h2>
+  <div class="subtitle-red">So What</div>
+  <h2>Why this actually works</h2>
   <div style="margin-top: 20px;">
     <ul style="font-size: 1.1rem;">
-      <li><strong>Tribal knowledge becomes executable.</strong> 15+ Confluence docs nobody reads mid-review. Now they're checklists that run automatically.</li>
-      <li><strong>Consistency without fatigue.</strong> Friday at 5pm gets the same quality as Monday at 10am.</li>
-      <li><strong>Compound learning.</strong> Each correction persists. Each Glean discovery is saved. The skill never makes the same mistake twice.</li>
-      <li><strong>Fine-grained control.</strong> Each dimension is a markdown file. Add a check = edit one file. No deployment.</li>
-      <li><strong>Human judgment where it matters.</strong> Agent does the exhaustive scan. You make the call.</li>
+      <li><strong>Those Confluence docs nobody reads?</strong> They're checklists now. 15+ internal docs, checked on every PR automatically.</li>
+      <li><strong>Friday 5pm = Monday 10am.</strong> The skill doesn't get tired or rush. Same rigor every time.</li>
+      <li><strong>Corrections stick.</strong> I fix something once, it's fixed forever. The skill doesn't forget.</li>
+      <li><strong>It's just markdown files.</strong> Want a new check? Edit one file. No deploy, no CI, no ticket.</li>
+      <li><strong>I still make the call.</strong> The agent does the tedious scanning. I decide what's worth blocking on.</li>
     </ul>
   </div>
   <span class="slide-num">15</span>
@@ -789,8 +789,8 @@
 
 <!-- ==================== SLIDE 16: COMPOUND ==================== -->
 <div class="slide slide--divider" id="s16">
-  <h1 style="max-width: 700px; font-size: 2.4rem;">Each review makes the skill smarter. Each correction persists. In 6 months, it has absorbed every best practice from your entire team.</h1>
-  <p class="subtitle" style="margin-top: 20px;">That's not possible with human reviewers.</p>
+  <h1 style="max-width: 700px; font-size: 2.4rem;">I've been correcting it for a few weeks. It already knows more feed-service best practices than I do.</h1>
+  <p class="subtitle" style="margin-top: 20px;">Imagine what it knows after 6 months of the whole team using it.</p>
   <span class="slide-num">16</span>
 </div>
 
@@ -807,32 +807,18 @@
   <h2>Three things to remember</h2>
   <div style="margin-top: 32px;">
     <div class="highlight-box" style="margin-bottom: 16px;">
-      <strong style="color: var(--hero-red);">1.</strong> The blocker isn't lazy engineers. It's that thoroughness doesn't scale with human bandwidth.
+      <strong style="color: var(--hero-red);">1.</strong> We're not bad at reviews. We just can't be thorough on every PR when there are 10 things to check and 20 PRs in the queue.
     </div>
     <div class="highlight-box" style="margin-bottom: 16px;">
-      <strong style="color: var(--hero-red);">2.</strong> The fix isn't better process docs. It's executable skills that encode the process and run it automatically.
+      <strong style="color: var(--hero-red);">2.</strong> Writing another best practices doc won't fix this. Making the doc run itself will.
     </div>
     <div class="highlight-box">
-      <strong style="color: var(--hero-red);">3.</strong> This skill found a real bug that would have shipped to production. That's not a demo. That's value.
+      <strong style="color: var(--hero-red);">3.</strong> This already found a real bug that would have shipped. On a PR that had human approvals.
     </div>
   </div>
   <span class="slide-num">18</span>
 </div>
 
-<!-- ==================== SLIDE 19: Q&A ==================== -->
-<div class="slide slide--title" id="s19">
-  <h1>Q&A</h1>
-  <div style="margin-top: 32px; text-align: left; max-width: 600px;">
-    <p style="font-size: 1rem; opacity: 0.6; margin-bottom: 8px;">Discussion starters:</p>
-    <ul style="font-size: 1rem; opacity: 0.8;">
-      <li>What review checks does your team always miss?</li>
-      <li>What tribal knowledge lives in Confluence that nobody reads?</li>
-      <li>How long does sandbox testing take for your changes?</li>
-      <li>What dimension would you add for your repo?</li>
-    </ul>
-  </div>
-  <span class="slide-num">19</span>
-</div>
 
 </div><!-- /deck -->
 
