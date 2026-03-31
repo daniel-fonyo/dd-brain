@@ -18,7 +18,7 @@ No human reviewer consistently checks all of them on every PR.
 
 | Blocker | What happens |
 |---------|-------------|
-| **Reviewer bandwidth** | Senior engineers are bottlenecks. Reviews sit for days. |
+| **Reviewer bandwidth** | Engineers are bottlenecks for each other. Reviews sit for days. |
 | **Inconsistency** | Different reviewers catch different things. Friday afternoon PRs get rubber-stamped. |
 | **Knowledge fragmentation** | Best practices live in Confluence docs nobody reads. Kotlin style guide, unit testing efficiency, DV gating rules, Iguazu logging patterns, Double.NaN SEV-0 history... it's scattered across 15+ docs. |
 | **Testing theater** | "Tested on sandbox" = loaded the page once, screenshot. No structured evidence, no cross-load comparison, no latency measurement, no log analysis. |

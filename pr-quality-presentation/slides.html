@@ -486,19 +486,25 @@
 <div class="deck">
 
 <!-- ==================== SLIDE 1: TITLE ==================== -->
-<div class="slide slide--title active" id="s1">
+<div class="slide slide--title active">
   <div class="subtitle-red" style="color: var(--yolk);">Discovery Platform</div>
-  <h1>Agentic Workflows<br>for PR Quality</h1>
-  <p class="subtitle">What if your team's review standards ran automatically<br>on every PR, and got better each time you corrected them?</p>
-  <p style="margin-top: 40px; font-size: 1rem; opacity: 0.5;">Daniel Fonyo</p>
+  <h1>How to Create<br>1 Highlight PR<br>per Project</h1>
+  <p class="subtitle">What is a high quality PR? What blocks us? How do we fix it?</p>
+  <p style="margin-top: 40px; font-size: 1rem; opacity: 0.5;">Aruj Padbidri &amp; Daniel Fonyo</p>
   <span class="slide-num">1</span>
 </div>
 
-<!-- ==================== SLIDE 2: THE QUESTION ==================== -->
-<div class="slide slide--content" id="s1">
-  <div class="subtitle-red">The Question</div>
-  <h2>What is a high quality PR?</h2>
-  <p style="margin-top: 16px; font-size: 1.2rem;">It's not one thing. It's like 10 different things you'd need to check on every PR.</p>
+<!-- ==================== PART 1: WHAT IS A HIGH QUALITY PR ==================== -->
+<div class="slide slide--divider">
+  <div class="subtitle-red" style="color: rgba(255,255,255,0.5);">Part 1</div>
+  <h1>What is a<br>high quality PR?</h1>
+  <span class="slide-num">2</span>
+</div>
+
+<!-- ==================== SLIDE 3: 10 DIMENSIONS ==================== -->
+<div class="slide slide--content">
+  <div class="subtitle-red">The Answer</div>
+  <h2>It's not one thing. It's 10 things checked on every PR.</h2>
   <div class="dim-grid" style="margin-top: 28px;">
     <div style="background: rgba(255,48,8,0.06); border-radius: 8px; padding: 14px 10px; text-align: center; border: 1px solid rgba(255,48,8,0.15);"><div style="font-size:1.4rem;">🐛</div><div style="font-size:0.8rem; font-weight:600; margin-top:4px;">Correctness</div></div>
     <div style="background: rgba(255,48,8,0.06); border-radius: 8px; padding: 14px 10px; text-align: center; border: 1px solid rgba(255,48,8,0.15);"><div style="font-size:1.4rem;">🏗</div><div style="font-size:0.8rem; font-weight:600; margin-top:4px;">Design</div></div>
@@ -512,41 +518,79 @@
     <div style="background: rgba(255,48,8,0.06); border-radius: 8px; padding: 14px 10px; text-align: center; border: 1px solid rgba(255,48,8,0.15);"><div style="font-size:1.4rem;">🏢</div><div style="font-size:0.8rem; font-weight:600; margin-top:4px;">Best Practices</div></div>
   </div>
   <p style="margin-top: 24px; opacity: 0.6;">Nobody checks all of these every time. We check what we know, skip what we don't.</p>
-  <span class="slide-num">2</span>
-</div>
-
-<!-- ==================== SLIDE 3: BLOCKERS ==================== -->
-<div class="slide slide--dark" id="s2">
-  <div class="subtitle-red" style="color: var(--yolk);">The Blockers</div>
-  <h2>Why high quality PRs are hard</h2>
-  <div style="margin-top: 20px;">
-    <table>
-      <tr><th style="color: var(--hero-red);">Blocker</th><th>What happens</th></tr>
-      <tr><td style="font-weight:600;">Reviewer bandwidth</td><td>Senior engineers are bottlenecks. Reviews sit for days.</td></tr>
-      <tr><td style="font-weight:600;">Inconsistency</td><td>Different reviewers catch different things. Friday PRs get rubber-stamped.</td></tr>
-      <tr><td style="font-weight:600;">Knowledge fragmentation</td><td>Best practices live in 15+ Confluence docs nobody reads mid-review.</td></tr>
-      <tr><td style="font-weight:600;">Testing theater</td><td>"Tested on sandbox" = loaded the page once, screenshot.</td></tr>
-      <tr><td style="font-weight:600;">Manual validation</td><td>30-60 min per homepage change. Biggest drag on velocity.</td></tr>
-    </table>
-  </div>
   <span class="slide-num">3</span>
 </div>
 
-<!-- ==================== SLIDE 4: THESIS ==================== -->
-<div class="slide slide--divider" id="s3">
-  <h1 style="max-width: 800px;">What if your best practices docs could run themselves?</h1>
-  <p class="subtitle" style="max-width: 600px; margin-top: 20px;">I built two tools that do this. They're working on real PRs today.</p>
+<!-- ==================== PART 2: WHAT ARE THE BLOCKERS ==================== -->
+<div class="slide slide--divider">
+  <div class="subtitle-red" style="color: rgba(255,255,255,0.5);">Part 2</div>
+  <h1>What are the blockers?</h1>
   <span class="slide-num">4</span>
 </div>
 
-<!-- ==================== SLIDE 5: TWO SKILLS ==================== -->
-<div class="slide slide--content" id="s4">
+<!-- ==================== SLIDE 5: PR COMPLEXITY BLOCKERS ==================== -->
+<div class="slide slide--dark">
+  <div class="subtitle-red" style="color: var(--yolk);">Blocker 1</div>
+  <h2>PR review complexity</h2>
+  <div style="margin-top: 20px;">
+    <table>
+      <tr><th style="color: var(--hero-red);">Blocker</th><th>What happens</th></tr>
+      <tr><td style="font-weight:600;">Reviewer bandwidth</td><td>Engineers are bottlenecks for each other. Reviews sit for days.</td></tr>
+      <tr><td style="font-weight:600;">Inconsistency</td><td>Different reviewers catch different things. Friday PRs get rubber-stamped.</td></tr>
+      <tr><td style="font-weight:600;">Knowledge fragmentation</td><td>Best practices live in 15+ Confluence docs nobody reads mid-review.</td></tr>
+    </table>
+  </div>
+  <div class="highlight-box" style="margin-top: 24px;">
+    The problem isn't lazy engineers. It's that thoroughness doesn't scale with human bandwidth. There are 10 things to check, 20 PRs in the queue, and one reviewer.
+  </div>
+  <span class="slide-num">5</span>
+</div>
+
+<!-- ==================== SLIDE 6: TESTING COMPLEXITY BLOCKERS ==================== -->
+<div class="slide slide--content">
+  <div class="subtitle-red">Blocker 2</div>
+  <h2>Testing complexity</h2>
+  <div style="margin-top: 20px;">
+    <table>
+      <tr><th style="color: var(--hero-red);">Blocker</th><th>What happens</th></tr>
+      <tr><td style="font-weight:600;">Testing theater</td><td>"Tested on sandbox" = loaded the page once, took a screenshot.</td></tr>
+      <tr><td style="font-weight:600;">Manual validation</td><td>30-60 min per homepage change. Tailing logs, clicking carousels, running queries.</td></tr>
+      <tr><td style="font-weight:600;">No structured evidence</td><td>No cross-load comparison. No latency data. No way to detect non-determinism.</td></tr>
+    </table>
+  </div>
+  <div class="stat-row" style="justify-content: center; margin-top: 28px;">
+    <div class="stat">
+      <div class="big-number">30-60</div>
+      <div class="big-number-label">minutes per validation</div>
+    </div>
+    <div class="stat">
+      <div class="big-number">1</div>
+      <div class="big-number-label">page load, 1 screenshot</div>
+    </div>
+    <div class="stat">
+      <div class="big-number">0</div>
+      <div class="big-number-label">structured evidence</div>
+    </div>
+  </div>
+  <span class="slide-num">6</span>
+</div>
+
+<!-- ==================== PART 3: HOW TO REMOVE BLOCKERS ==================== -->
+<div class="slide slide--divider">
+  <div class="subtitle-red" style="color: rgba(255,255,255,0.5);">Part 3</div>
+  <h1>How to remove<br>these blockers</h1>
+  <p class="subtitle" style="max-width: 600px; margin-top: 20px;">Encode your team's standards into agentic skills.<br>They run every time, miss nothing, and get smarter with use.</p>
+  <span class="slide-num">7</span>
+</div>
+
+<!-- ==================== SLIDE 8: TWO SKILLS ==================== -->
+<div class="slide slide--content">
   <div class="subtitle-red">The Tools</div>
   <h2>Two agentic skills, built on Claude Code</h2>
   <div class="grid-2" style="margin-top: 32px;">
     <div class="card">
       <h3><code style="color: var(--hero-red);">/review-pr</code></h3>
-      <p style="font-weight: 600; margin-bottom: 8px;">Parallel multi-dimensional code review</p>
+      <p style="font-weight: 600; margin-bottom: 8px;">Removes PR review complexity</p>
       <ul>
         <li>10 dimensions reviewed simultaneously</li>
         <li>Searches Confluence for applicable rules</li>
@@ -556,7 +600,7 @@
     </div>
     <div class="card">
       <h3><code style="color: var(--hero-red);">/sandbox-test</code></h3>
-      <p style="font-weight: 600; margin-bottom: 8px;">Autonomous E2E sandbox testing</p>
+      <p style="font-weight: 600; margin-bottom: 8px;">Removes testing complexity</p>
       <ul>
         <li>Engineer describes what to test, agent handles how</li>
         <li>Drives real browser, captures 5 signal sources</li>
@@ -565,11 +609,11 @@
       </ul>
     </div>
   </div>
-  <span class="slide-num">5</span>
+  <span class="slide-num">8</span>
 </div>
 
-<!-- ==================== SLIDE 6: REVIEW PIPELINE ==================== -->
-<div class="slide slide--dark" id="s5">
+<!-- ==================== SLIDE 9: REVIEW PIPELINE ==================== -->
+<div class="slide slide--dark">
   <div class="subtitle-red" style="color: var(--yolk);">/review-pr</div>
   <h2>The pipeline</h2>
   <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 20px;">
@@ -590,7 +634,7 @@
     </div>
     <div>
       <div class="card--dark" style="margin-bottom: 16px;">
-        <h3 style="color: var(--hero-red);">The part I'm most proud of</h3>
+        <h3 style="color: var(--hero-red);">Self-verification</h3>
         <p>It doesn't just flag things. It reads the source code to check if it's right. Then it writes a unit test to prove the bug exists. If the test passes, it drops the finding.</p>
       </div>
       <div class="card--dark">
@@ -599,11 +643,11 @@
       </div>
     </div>
   </div>
-  <span class="slide-num">6</span>
+  <span class="slide-num">9</span>
 </div>
 
-<!-- ==================== SLIDE 7: 10 DIMENSIONS ==================== -->
-<div class="slide slide--content" id="s6">
+<!-- ==================== SLIDE 10: 10 DIMENSIONS DETAIL ==================== -->
+<div class="slide slide--content">
   <div class="subtitle-red">Parallel, Not Serial</div>
   <h2>10 focused agents run simultaneously</h2>
   <p style="margin-top: 8px; opacity: 0.6;">You're one person. You check what you know. These run all at once.</p>
@@ -620,11 +664,11 @@
     <div class="dim-card" style="background:rgba(255,48,8,0.04); border-color: rgba(255,48,8,0.2);"><div class="dim-icon">🏷</div><div class="dim-name">PR Hygiene</div><div style="font-size:0.7rem; opacity:0.5; margin-top:4px;">Labels, testing evidence</div></div>
   </div>
   <p style="margin-top: 20px; font-size: 0.95rem;">Each dimension is a separate markdown file. Add a check = edit one file. No deployment.</p>
-  <span class="slide-num">7</span>
+  <span class="slide-num">10</span>
 </div>
 
-<!-- ==================== SLIDE 8: REAL BUG ==================== -->
-<div class="slide slide--dark" id="s7">
+<!-- ==================== SLIDE 11: REAL BUG ==================== -->
+<div class="slide slide--dark">
   <div class="subtitle-red" style="color: var(--yolk);">Real Impact</div>
   <h2>Found a real bug in PR #62639</h2>
   <div class="grid-2" style="margin-top: 24px;">
@@ -649,51 +693,21 @@
       </div>
     </div>
   </div>
-  <span class="slide-num">8</span>
-</div>
-
-<!-- ==================== SLIDE 8: SANDBOX DIVIDER ==================== -->
-<div class="slide slide--divider" id="s8">
-  <h1>Autonomous<br>Sandbox Testing</h1>
-  <p class="subtitle" style="max-width: 600px; margin-top: 16px;">You describe what to test in plain words.<br>It figures out the rest.</p>
-  <span class="slide-num">9</span>
-</div>
-
-<!-- ==================== SLIDE 8: SANDBOX PROBLEM ==================== -->
-<div class="slide slide--content" id="s9">
-  <div class="subtitle-red">The Problem</div>
-  <div class="quote" style="border-left-color: var(--hero-red);">
-    "The homepage is a black box. Ranking inputs go in, a feed comes out, and verifying that the feed is correct requires correlating signals across multiple systems. A single change can take 30-60 minutes of manual validation."
-  </div>
-  <div class="stat-row" style="justify-content: center;">
-    <div class="stat">
-      <div class="big-number">30-60</div>
-      <div class="big-number-label">minutes per validation</div>
-    </div>
-    <div class="stat">
-      <div class="big-number">1</div>
-      <div class="big-number-label">page load, 1 screenshot</div>
-    </div>
-    <div class="stat">
-      <div class="big-number">0</div>
-      <div class="big-number-label">structured evidence</div>
-    </div>
-  </div>
-  <span class="slide-num">10</span>
-</div>
-
-<!-- ==================== SLIDE 8: AUTONOMOUS LOOP ==================== -->
-<div class="slide slide--dark" id="s10" style="padding: 40px 60px;">
-  <div class="subtitle-red" style="color: var(--yolk);">The Autonomous Loop</div>
-  <h2 style="margin-bottom: 16px;">How the testing agent works</h2>
-  <div style="display: flex; justify-content: center; align-items: center; flex: 1;">
-    <img src="e2e-testing-diagram.png" alt="E2E Testing Agent Architecture" style="max-width: 90%; max-height: 70vh; object-fit: contain; border-radius: 8px;">
-  </div>
   <span class="slide-num">11</span>
 </div>
 
-<!-- ==================== SLIDE 8: BEFORE/AFTER ==================== -->
-<div class="slide slide--content" id="s11">
+<!-- ==================== SLIDE 12: AUTONOMOUS LOOP ==================== -->
+<div class="slide slide--dark" style="padding: 40px 60px;">
+  <div class="subtitle-red" style="color: var(--yolk);">/sandbox-test</div>
+  <h2 style="margin-bottom: 16px;">The autonomous testing loop</h2>
+  <div style="display: flex; justify-content: center; align-items: center; flex: 1;">
+    <img src="e2e-testing-diagram.png" alt="E2E Testing Agent Architecture" style="max-width: 90%; max-height: 70vh; object-fit: contain; border-radius: 8px;">
+  </div>
+  <span class="slide-num">12</span>
+</div>
+
+<!-- ==================== SLIDE 13: BEFORE/AFTER ==================== -->
+<div class="slide slide--content">
   <div class="subtitle-red">Before / After</div>
   <h2>Testing evidence quality</h2>
   <div class="compare" style="margin-top: 20px;">
@@ -713,11 +727,11 @@
       <p style="font-size: 0.8rem; margin-top: 8px; opacity: 0.7;">11/12 stable. Pod errors: 0. Video + full report attached.</p>
     </div>
   </div>
-  <span class="slide-num">12</span>
+  <span class="slide-num">13</span>
 </div>
 
-<!-- ==================== SLIDE 8: NUMBERS ==================== -->
-<div class="slide slide--dark" id="s12">
+<!-- ==================== SLIDE 14: NUMBERS ==================== -->
+<div class="slide slide--dark">
   <div class="subtitle-red" style="color: var(--yolk);">Real Numbers</div>
   <h2>Impact so far</h2>
   <div class="grid-2" style="margin-top: 24px;">
@@ -742,27 +756,27 @@
       </table>
     </div>
   </div>
-  <span class="slide-num">13</span>
+  <span class="slide-num">14</span>
 </div>
 
-<!-- ==================== SLIDE 8: META-POINT ==================== -->
-<div class="slide slide--content" id="s13">
-  <div class="subtitle-red">So What</div>
-  <h2>Why this actually works</h2>
+<!-- ==================== SLIDE 15: WHY IT WORKS ==================== -->
+<div class="slide slide--content">
+  <div class="subtitle-red">Why This Works</div>
+  <h2>Skills as encoded standards</h2>
   <div style="margin-top: 20px;">
     <ul style="font-size: 1.1rem;">
       <li><strong>Those Confluence docs nobody reads?</strong> They're checklists now. 15+ internal docs, checked on every PR automatically.</li>
       <li><strong>Friday 5pm = Monday 10am.</strong> The skill doesn't get tired or rush. Same rigor every time.</li>
-      <li><strong>Corrections stick.</strong> I fix something once, it's fixed forever. The skill doesn't forget.</li>
+      <li><strong>Corrections stick.</strong> Fix something once, it's fixed forever. The skill doesn't forget.</li>
       <li><strong>It's just markdown files.</strong> Want a new check? Edit one file. No deploy, no CI, no ticket.</li>
-      <li><strong>I still make the call.</strong> The agent does the tedious scanning. I decide what's worth blocking on.</li>
+      <li><strong>Human still makes the call.</strong> The agent does the tedious scanning. You decide what's worth blocking on.</li>
     </ul>
   </div>
-  <span class="slide-num">14</span>
+  <span class="slide-num">15</span>
 </div>
 
-<!-- ==================== SLIDE 8: RUN ON YOUR OWN CODE ==================== -->
-<div class="slide slide--dark" id="s14">
+<!-- ==================== SLIDE 16: FULL LOOP ==================== -->
+<div class="slide slide--dark">
   <div class="subtitle-red" style="color: var(--yolk);">The Full Loop</div>
   <h2>Run it on your own code before opening the PR</h2>
   <div class="grid-2" style="margin-top: 24px;">
@@ -783,36 +797,29 @@
       <p style="margin-top: 20px; font-size: 0.95rem; opacity: 0.7;">The skills work the same whether you're the author or the reviewer. Same rigor, same evidence, same 10 dimensions.</p>
     </div>
   </div>
-  <span class="slide-num">15</span>
-</div>
-
-<!-- ==================== SLIDE 8: COMPOUND ==================== -->
-<div class="slide slide--divider" id="s15">
-  <h1 style="max-width: 700px; font-size: 2.4rem;">I've been correcting it for a few weeks. It already knows more feed-service best practices than I do.</h1>
-  <p class="subtitle" style="margin-top: 20px;">Imagine what it knows after 6 months of the whole team using it.</p>
   <span class="slide-num">16</span>
 </div>
 
-<!-- ==================== SLIDE 8: DEMO ==================== -->
-<div class="slide slide--title" id="s16">
-  <div class="subtitle-red" style="color: var(--yolk);">Live</div>
-  <h1>Demo</h1>
+<!-- ==================== SLIDE 17: COMPOUND ==================== -->
+<div class="slide slide--divider">
+  <h1 style="max-width: 700px; font-size: 2.4rem;">I've been correcting it for a few weeks. It already knows more feed-service best practices than I do.</h1>
+  <p class="subtitle" style="margin-top: 20px;">Imagine what it knows after 6 months of the whole team using it.</p>
   <span class="slide-num">17</span>
 </div>
 
-<!-- ==================== SLIDE 8: TAKEAWAYS ==================== -->
-<div class="slide slide--content" id="s17">
+<!-- ==================== SLIDE 18: TAKEAWAYS ==================== -->
+<div class="slide slide--content">
   <div class="subtitle-red">Takeaways</div>
-  <h2>Three things to remember</h2>
+  <h2>Answering the three questions</h2>
   <div style="margin-top: 32px;">
     <div class="highlight-box" style="margin-bottom: 16px;">
-      <strong style="color: var(--hero-red);">1.</strong> We're not bad at reviews. We just can't be thorough on every PR when there are 10 things to check and 20 PRs in the queue.
+      <strong style="color: var(--hero-red);">What is a high quality PR?</strong> One that's been checked across 10 dimensions, not just the 2-3 the reviewer happened to think about. With structured testing evidence, not a screenshot.
     </div>
     <div class="highlight-box" style="margin-bottom: 16px;">
-      <strong style="color: var(--hero-red);">2.</strong> Writing another best practices doc won't fix this. Making the doc run itself will.
+      <strong style="color: var(--hero-red);">What are the blockers?</strong> PR review complexity (bandwidth, inconsistency, tribal knowledge) and testing complexity (30-60 min manual validation, no structured evidence).
     </div>
     <div class="highlight-box">
-      <strong style="color: var(--hero-red);">3.</strong> This already found a real bug that would have shipped. On a PR that had human approvals.
+      <strong style="color: var(--hero-red);">How to remove them?</strong> Encode your standards into agentic skills. They run every time, miss nothing, and each correction makes the next run better. This already found a real bug that would have shipped.
     </div>
   </div>
   <span class="slide-num">18</span>
