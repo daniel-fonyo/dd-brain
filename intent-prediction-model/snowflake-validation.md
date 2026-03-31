@@ -19,13 +19,13 @@ Without the bypass, sandbox Iguazu gating blocks all events from reaching Snowfl
 
 The E2E test (02:47-02:49 UTC on 2026-03-31) confirmed zero homepage gRPC requests reached the sandbox pod during the browser session. Root cause: `devbox run web-group1-remote` synced from the main checkout (on `master`), not the worktree containing the feature branch code. The pod was running `master` code, not `feat/intent-prediction-score-logging`.
 
-### Reason 3: No Snowflake tooling in this environment
+### Reason 3 (resolved): Snowflake MCP now available
 
-No Snowflake CLI (`snowsql`, `snow`), Python connector, or MCP tool is available in the current environment. Even if events had landed, querying would require manual execution outside this agent.
+Snowflake access is configured via the `snowflake` MCP server in `~/.claude/mcp.json` (uses `snowflake-labs-mcp` via `uvx`). Queries can be run directly from Claude Code — no Python connector or CLI needed.
 
-## Queries to Run Manually
+## Validation Queries
 
-When Snowflake access is available (e.g., via Snowsight UI or a configured CLI), run these queries after a successful sandbox test:
+Run these queries via the Snowflake MCP server after a successful sandbox test:
 
 ### Query 1: Check if any events exist for our consumer
 ```sql
@@ -94,7 +94,7 @@ All of the following must be true before re-attempting Snowflake validation:
 5. **Hardcode consumer ID** -- `return 757606047L` in `HomepageRequestToContext.kt`
 6. **Browse homepage** -- visit `https://www.doordashtest.com/` with test credentials
 7. **Wait 3-5 minutes** -- events need propagation time to land in Snowflake
-8. **Have Snowflake access** -- either configure `snowsql`/`snow` CLI, the Python connector, or use the Snowsight web UI
+8. **Have Snowflake access** -- use the `snowflake` MCP server (configured in `~/.claude/mcp.json`)
 
 ## Expected Outcome When Working
 

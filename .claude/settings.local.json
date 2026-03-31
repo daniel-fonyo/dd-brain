@@ -31,7 +31,8 @@
       "mcp__snowflake__run_snowflake_query",
       "mcp__snowflake__describe_object",
       "WebFetch(domain:buildkite.com)",
-      "WebFetch(domain:doordash.atlassian.net)"
+      "WebFetch(domain:doordash.atlassian.net)",
+      "mcp__glean__search"
     ]
   },
   "sandbox": {
