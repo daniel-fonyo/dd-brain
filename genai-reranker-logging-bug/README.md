@@ -1,8 +1,8 @@
 # GenAI Reranker Score Logging Bug
 
-**Status**: Root cause identified, fix needed
+**Status**: Root cause narrowed to map loss in pipeline, fix + debug logging deployed
 **Date**: 2026-04-01
-**feed-service branch**: master (latest)
+**feed-service branch**: `fix/genai-reranker-score-logging` (worktree at `.claude/worktrees/fix-genai-reranker-score-logging`)
 
 ## Problem
 
@@ -10,9 +10,15 @@ CxGen (genai) carousels on the homepage have missing `genai_embedding_similarity
 
 ## Root Cause
 
-`generatedRecommendationStoreInfoMap` on `LiteStoreCollection` is set during `buildCollection()` but gets lost somewhere in the SDK ranking pipeline (between preRank and the carousel generation service). The ranking pipeline preserves the map via `copy()` calls, but the map lookup at `updateStoreEntity()` fails for stores whose IDs are not in the specific carousel's map.
+`generatedRecommendationStoreInfoMap` on `LiteStoreCollection` is set during `buildCollection()` but is empty by the time `updateStoreEntity()` runs in `HomepageProgrammaticCarouselGenerationService`. All `copy()` calls in the ranking pipeline were verified to preserve the field — the exact drop point hasn't been identified via static analysis alone. Debug logging has been added to trace it dynamically.
 
-**Proof from Snowflake**: Store 395288 has genai score in `cxgen:2` and `cxgen:4` but NOT in `cxgen:0` — same request, same store, different carousels. This confirms the issue is per-carousel-per-store, not a global code path issue. The store's embedding info exists in some carousels' `storeInfoMap` but not others.
+**Confirmed**: The map is EMPTY, not populated with null scores. Snowflake shows perfect correlation between `item_id` presence and `genai_embedding_similarity_score` presence:
+- 10-mod stores: `item_id` = populated (e.g. `6289471350`), genai score = present
+- 6-mod stores: `item_id` = `""` (empty), genai score = absent
+
+Both `item_id` and `genai_embedding_similarity_score` are read from `generatedRecommendationStoreInfoMap[storeId]` in `updateStoreEntity()`. The fact that BOTH are absent together proves the map lookup returns null (store not in map), not that individual fields are null.
+
+**Per-carousel**: Store 395288 has genai score in `cxgen:2` and `cxgen:4` but NOT in `cxgen:0` — same request, same store, different carousels.
 
 ## Snowflake Evidence
 
