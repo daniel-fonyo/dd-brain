@@ -1,6 +1,6 @@
 # GenAI Reranker Score Logging Bug
 
-**Status**: Investigation in progress
+**Status**: Root cause identified, fix needed
 **Date**: 2026-04-01
 **feed-service branch**: master (latest)
 
@@ -8,111 +8,71 @@
 
 CxGen (genai) carousels on the homepage have missing `genai_embedding_similarity_score` in Iguazu `score_modifiers`. The `carousel_details` metadata (alpha, beta, k) IS present, proving reranking happened, but per-store embedding scores are null.
 
+## Root Cause
+
+`generatedRecommendationStoreInfoMap` on `LiteStoreCollection` is set during `buildCollection()` but gets lost somewhere in the SDK ranking pipeline (between preRank and the carousel generation service). The ranking pipeline preserves the map via `copy()` calls, but the map lookup at `updateStoreEntity()` fails for stores whose IDs are not in the specific carousel's map.
+
+**Proof from Snowflake**: Store 395288 has genai score in `cxgen:2` and `cxgen:4` but NOT in `cxgen:0` — same request, same store, different carousels. This confirms the issue is per-carousel-per-store, not a global code path issue. The store's embedding info exists in some carousels' `storeInfoMap` but not others.
+
 ## Snowflake Evidence
 
 Table: `IGUAZU.SERVER_EVENTS_PRODUCTION.CX_CROSS_VERTICAL_HOME_PAGE_FEED_ICE`
 
-**Score modifier counts for cxgen events** (2026-03-29, hour 16):
+**Score modifier distribution for cxgen events** (2026-03-29, hour 16):
 | num_score_modifiers | event_count | interpretation |
 |---|---|---|
-| 0 | 403K | No scoring at all |
 | 6 | 35.9M | Standard set minus sr_multiplier, no genai |
 | 7 | 40.6M | Standard 7 modifiers, no genai |
 | 9 | 41.4M | Standard + expected_commission + expected_dasher_cost, **NO genai** |
 | 10 | 5M | Standard + expected_commission + expected_dasher_cost + **genai_embedding_similarity_score** |
 
-Key finding: ~41M events (9 modifiers) have `expected_commission`/`expected_dasher_cost` but **lack** `genai_embedding_similarity_score`. Only ~5M (10 modifiers) have the genai score. This means both scores are set in the SAME `updateStoreEntity()` call, but the genai score map lookup returns null while the prediction score map lookup succeeds.
+**Per-request analysis** (request `afc3ae7d`):
+- Store 395288 in `cxgen:0` → 6 mods (NO genai)
+- Store 395288 in `cxgen:2` → **10 mods** (HAS genai)
+- Store 395288 in `cxgen:4` → **10 mods** (HAS genai)
 
-**All** cxgen `carousel_details` lack `carousel_rank`, `day_part`, `last_update_date` — confirming they go through the content systems fetcher path (EBR Option 2), where `trackingPayload` is not serialized in the proto.
+## Fix Strategy
 
-## Architecture: Two Fetcher Paths
+The safest fix is to set `genaiEmbeddingSimilarityScore` directly on the entity during `getPostFilterResult()` in `HomepageGeneratedRecommendationProduct`, where `data.storeInfoMap` is directly accessible. This avoids relying on `generatedRecommendationStoreInfoMap` surviving through the SDK pipeline.
 
-### Decision point
-`HomepageGeneratedRecommendationProductService.fetch()` (line 48):
-```kotlin
-if (DiscoveryExperimentManager.shouldUseGeneratedRecommendationEBROption2(context.experimentMap)) {
-    contentSystemsFetcher.fetch(context)  // Content systems path
-} else {
-    fetcher.fetch(context)  // Legacy path
-}
-```
+### Files to Change
 
-### Path 1: Legacy (`GeneratedRecommendationFetcher`)
-- Fetches carousels from CRDB via `GeneratedRecommendationWorkflowService`
-- Store list fetched separately via `storeListFetchJob`
-- Embedding scores: **always non-null** (defaults to 0.0 via `?: 0.0`)
-- `trackingPayload` includes `carousel_rank`, `day_part`, `last_update_date`
-- Carousel `storeIdList` filtered against store list entities
+1. **`HomepageGeneratedRecommendationProduct.kt`** — In `getPostFilterResult()`, after filtering/reranking, set `genaiEmbeddingSimilarityScore` on each entity from `data.storeInfoMap`
+2. **`HomepageProgrammaticProductServiceUtil.kt`** — Keep `updateStoreEntity()` as-is (belt + suspenders approach)
 
-### Path 2: Content Systems (`GeneratedRecommendationContentSystemsFetcher`)
-- Calls content systems gRPC → `GeneratedRecommendationCarouselsPipeline` on server side
-- Server creates data via `createGeneratedRecommendationCarousels()` with `RetrievalResult.score: Double` (non-null)
-- Serialized to proto `GeneratedRecommendationStoreInfo.embedding_score` (DoubleValue wrapper)
-- Client deserializes with `hasEmbeddingScore()` check
-- `trackingPayload` NOT in proto → defaults to `emptyMap()` on client
-- **In theory, embedding scores should also be non-null** (server always sets them)
-
-## Score Flow (Per-Store)
-
-```
-buildCollection()
-  → LiteStoreCollection.generatedRecommendationStoreInfoMap = data.storeInfoMap  [Map<Long, GeneratedRecommendationStoreInfo>]
-
-reRankStoresByScoreAndSimilarity()
-  → reads embeddingScore ?? 0.0 for computation
-  → adds genai_reranker_alpha/beta/k to trackingPayload
-  → collection.copy() preserves generatedRecommendationStoreInfoMap
-
-updateStoreEntity(entity, store, collection)
-  → genaiEmbeddingSimilarityScore = collection.generatedRecommendationStoreInfoMap[productStore.id]?.embeddingScore
-  → expectedDasherCost = collection.storePredictionScoresMap[productStore.id]?.expectedDasherCost
-
-StoreCarouselDataAdapter.generateStoreLogging()
-  → store.genaiEmbeddingSimilarityScore?.let { map[GENAI_EMBEDDING_SIMILARITY_SCORE_KEY] = ... }
-
-ContainerEventsGenerator.StoreCarouselGenerator.additionalChildLogging()
-  → LoggedValue.GENAI_EMBEDDING_SIMILARITY_SCORE → adds to score_modifiers
-```
+### Alternative (root cause fix)
+Trace exactly where `generatedRecommendationStoreInfoMap` is lost and fix the pipeline. This is harder and riskier since it's deep in the SDK ranking framework.
 
 ## Key Files
 
 | File | Purpose |
 |---|---|
 | `HomepageGeneratedRecommendationProductService.kt` | Fetcher decision (EBR Option 2 DV) |
-| `GeneratedRecommendationFetcher.kt` | Legacy fetcher (CRDB + store list) |
-| `GeneratedRecommendationContentSystemsFetcher.kt` | Content systems fetcher (gRPC) |
-| `GeneratedRecommendationContentSystemsFetcherUtil.kt` | Proto deserialization → `embeddingScore` nullable |
-| `GeneratedRecommendationCarouselsPipeline.kt` | Server-side content systems pipeline |
-| `GeneratedRecommendationCarouselsSerializer.kt` | Server-side proto serialization |
-| `GeneratedRecommendationCarouselService.kt:117-221` | Reranking (alpha^score * beta^similarity) |
+| `HomepageGeneratedRecommendationProduct.kt:53-134` | `getPostFilterResult()` — reranking + filtering |
 | `HomepageProgrammaticCarouselGenerationService.kt:85-171` | Carousel generation + store decoration |
-| `HomepageProgrammaticProductServiceUtil.kt:204-228` | `updateStoreEntity()` — sets genai score |
+| `HomepageProgrammaticProductServiceUtil.kt:204-228` | `updateStoreEntity()` — sets genai score (FAILS for some stores) |
 | `StoreCarouselDataAdapter.kt:2521` | Logging: reads `store.genaiEmbeddingSimilarityScore` |
-| `ContainerEventsGenerator.kt:456` | Iguazu: `GENAI_EMBEDDING_SIMILARITY_SCORE` in score_modifiers |
+| `GeneratedRecommendationCarouselService.kt:117-221` | Reranking (alpha^score * beta^similarity) |
 
-## Puzzling Finding
+## Architecture: Two Fetcher Paths
 
-The 9-modifier events have `expected_commission`/`expected_dasher_cost` but NOT `genai_embedding_similarity_score`. BOTH are set in the same `updateStoreEntity()` call:
-- `expectedDasherCost = rankInfo?.expectedDasherCost` (from `storePredictionScoresMap`)
-- `genaiEmbeddingSimilarityScore = collection.generatedRecommendationStoreInfoMap[productStore.id]?.embeddingScore`
+### Decision point
+`HomepageGeneratedRecommendationProductService.fetch()` (line 48):
+```kotlin
+if (shouldUseGeneratedRecommendationEBROption2) contentSystemsFetcher else fetcher
+```
 
-This means `storePredictionScoresMap` has the store but `generatedRecommendationStoreInfoMap` does NOT (or has null `embeddingScore`).
+All observed prod events go through the **content systems path** (carousel_details lacks `carousel_rank`, `day_part`).
 
-## Hypotheses to Investigate Next
+## Score Flow
 
-1. **Store ID mismatch**: `productStore.id` type mismatch between `storePredictionScoresMap` (populated during ranking) and `generatedRecommendationStoreInfoMap` (populated during collection building). Both should be `Long` but verify.
-
-2. **Map gets reset during ranking**: The ranking/hydration pipeline might create NEW `LiteStoreCollection` objects that don't carry `generatedRecommendationStoreInfoMap`. Check `BaseDynamicProgrammaticProductService` rank/hydrate steps.
-
-3. **Multiple collection copies**: Between `buildCollection()` and `updateStoreEntity()`, the collection goes through multiple `copy()` calls. While data class `copy()` preserves fields, check if any intermediate step creates a NEW collection from builder (which defaults `generatedRecommendationStoreInfoMap` to `emptyMap()`).
-
-4. **Content systems gRPC proto missing embedding_score for some stores**: The proto field is optional (`google.protobuf.DoubleValue`). If the upstream pipeline (retrieval post-processing) doesn't include scores for some stores, they'd be null on the client.
-
-5. **`storeInfoMapList` vs `storeIdsList` divergence**: The content systems response might have stores in `storeIdsList` that aren't in `storeInfoMapList` (e.g., if the server adds stores during dedup/fallback).
-
-## Next Steps
-
-1. **Add debug logging**: Add temporary logging in `updateStoreEntity()` to log `collection.generatedRecommendationStoreInfoMap.keys` vs `productStore.id` for cxgen carousels
-2. **Check ranking pipeline**: Trace how `LiteStoreCollection` flows through `BaseDynamicProgrammaticProductService.rank()` and `rankList()` — does the collection get rebuilt?
-3. **Query Snowflake**: Compare store IDs that have vs don't have the genai score within the same request_id + carousel to see if there's a pattern
-4. **Check `rankList` / `rankingHydrater`**: These may create new collections that don't carry `generatedRecommendationStoreInfoMap`
+```
+buildCollection() → generatedRecommendationStoreInfoMap = data.storeInfoMap ✓
+  ↓
+SDK ranking pipeline (rank → score → sort → postSort) → map preserved via copy() ✓
+  ↓
+postFilterGeneratedRecommendationCollections → getPostFilterResult → rerank → copy() ✓
+  ↓
+updateStoreEntity(entity, store, collection)
+  → collection.generatedRecommendationStoreInfoMap[productStore.id]?.embeddingScore  ← RETURNS NULL for some stores
+```
