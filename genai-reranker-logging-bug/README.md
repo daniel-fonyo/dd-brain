@@ -1,24 +1,46 @@
 # GenAI Reranker Score Logging Bug
 
-**Status**: Root cause narrowed to map loss in pipeline, fix + debug logging deployed
+**Status**: Debug logging deployed to sandbox, awaiting log analysis to confirm root cause
 **Date**: 2026-04-01
-**feed-service branch**: `fix/genai-reranker-score-logging` (worktree at `.claude/worktrees/fix-genai-reranker-score-logging`)
+**feed-service branch**: `dfonyo/debug-missing-genai-embedding-scores` (main checkout, not a worktree)
+**Sandbox**: Running with committed debug logging + uncommitted test setup (consumer ID hardcode + Iguazu bypass)
+
+## Background
+
+PR [#62113](https://github.com/doordash/feed-service/pull/62113) added `genai_embedding_similarity_score` to Iguazu `score_modifiers` and `reranker_alpha`/`reranker_beta` to `carousel_details`. The score is read from `generatedRecommendationStoreInfoMap[storeId]?.embeddingScore` during `updateStoreEntity()` in `HomepageProgrammaticCarouselGenerationService`. See `brain/genai-reranker-logging/` for original PR context.
 
 ## Problem
 
-CxGen (genai) carousels on the homepage have missing `genai_embedding_similarity_score` in Iguazu `score_modifiers`. The `carousel_details` metadata (alpha, beta, k) IS present, proving reranking happened, but per-store embedding scores are null.
+After PR #62113 merged, production Snowflake data shows `genai_embedding_similarity_score` is present for only ~4% of cxgen store events (5M out of ~123M). The remaining ~96% have the standard score modifiers but no genai score. The `carousel_details` metadata (alpha, beta, k) IS present on all cxgen events, proving reranking happened.
 
-## Root Cause
+## Hypothesis (unconfirmed — needs debug log validation)
 
-`generatedRecommendationStoreInfoMap` on `LiteStoreCollection` is set during `buildCollection()` but is empty by the time `updateStoreEntity()` runs in `HomepageProgrammaticCarouselGenerationService`. All `copy()` calls in the ranking pipeline were verified to preserve the field — the exact drop point hasn't been identified via static analysis alone. Debug logging has been added to trace it dynamically.
+`generatedRecommendationStoreInfoMap` on `LiteStoreCollection` is populated at `buildCollection()` but empty by the time `updateStoreEntity()` runs for some carousels. Evidence from Snowflake:
 
-**Confirmed**: The map is EMPTY, not populated with null scores. Snowflake shows perfect correlation between `item_id` presence and `genai_embedding_similarity_score` presence:
-- 10-mod stores: `item_id` = populated (e.g. `6289471350`), genai score = present
-- 6-mod stores: `item_id` = `""` (empty), genai score = absent
+- **Correlation between `item_id` and genai score**: Both are read from `generatedRecommendationStoreInfoMap[storeId]` in `updateStoreEntity()`. Stores with genai score (10-mod) also have populated `item_id`. Stores without (6-mod) have empty `item_id`. This suggests the entire map lookup returns null, not individual fields.
+- **Per-carousel inconsistency**: Store 395288 has genai score in `cxgen:2` and `cxgen:4` but NOT in `cxgen:0` — same request, same store, different carousels. The map is carousel-specific (lives on `LiteStoreCollection`), so something drops it for certain carousels.
 
-Both `item_id` and `genai_embedding_similarity_score` are read from `generatedRecommendationStoreInfoMap[storeId]` in `updateStoreEntity()`. The fact that BOTH are absent together proves the map lookup returns null (store not in map), not that individual fields are null.
+Static analysis of all `copy()` calls in the pipeline shows `generatedRecommendationStoreInfoMap` is preserved (Kotlin data class copy retains unspecified fields). The exact drop point is unknown.
 
-**Per-carousel**: Store 395288 has genai score in `cxgen:2` and `cxgen:4` but NOT in `cxgen:0` — same request, same store, different carousels.
+## Debug Logging
+
+Commit `a6b42c5213c` adds `[GENAI_DEBUG]` logging at 4 pipeline stages for `cxgen:` carousels:
+
+| Tag | Location | What it logs |
+|---|---|---|
+| `buildCollection` | `HomepageGeneratedRecommendationProduct.kt` | Map size/keys at creation, entity IDs |
+| `getPostFilterResult_input` | `HomepageGeneratedRecommendationProduct.kt` | Map size before filtering/reranking, missing stores |
+| `getPostFilterResult_output` | `HomepageGeneratedRecommendationProduct.kt` | Map size after filtering/reranking, missing stores |
+| `postSorting_input` / `postSorting_output` | `HomepageDiscoveryRanker.kt` | Map before/after SDK ranking pipeline, `mapSameRef` check |
+| `beforeUpdateStoreEntity` | `HomepageProgrammaticCarouselGenerationService.kt` | Final map state before Iguazu logging, stores not in map |
+
+## Next Step: Analyze Debug Logs
+
+1. Sync debug code to sandbox pod via `devbox run web-group1-remote`
+2. Trigger homepage request (browser or curl to sandbox)
+3. Pull pod logs: `kubectl logs <pod> -n feed-service-sandbox | grep GENAI_DEBUG`
+4. Compare map sizes across stages for the same `collectionId` — find where the map goes from populated to empty
+5. Once the drop point is identified: determine root cause and fix
 
 ## Snowflake Evidence
 
@@ -37,48 +59,39 @@ Table: `IGUAZU.SERVER_EVENTS_PRODUCTION.CX_CROSS_VERTICAL_HOME_PAGE_FEED_ICE`
 - Store 395288 in `cxgen:2` → **10 mods** (HAS genai)
 - Store 395288 in `cxgen:4` → **10 mods** (HAS genai)
 
-## Fix Strategy
+## Candidate Fix (pending root cause confirmation)
 
-The safest fix is to set `genaiEmbeddingSimilarityScore` directly on the entity during `getPostFilterResult()` in `HomepageGeneratedRecommendationProduct`, where `data.storeInfoMap` is directly accessible. This avoids relying on `generatedRecommendationStoreInfoMap` surviving through the SDK pipeline.
+If the map is truly lost during pipeline traversal (not a data issue from the upstream content systems fetcher), the safest fix is to set `genaiEmbeddingSimilarityScore` directly on entity objects during `getPostFilterResult()` in `HomepageGeneratedRecommendationProduct`, where `data.storeInfoMap` is directly accessible. This avoids relying on the map surviving through the SDK ranking pipeline.
 
-### Files to Change
-
-1. **`HomepageGeneratedRecommendationProduct.kt`** — In `getPostFilterResult()`, after filtering/reranking, set `genaiEmbeddingSimilarityScore` on each entity from `data.storeInfoMap`
-2. **`HomepageProgrammaticProductServiceUtil.kt`** — Keep `updateStoreEntity()` as-is (belt + suspenders approach)
-
-### Alternative (root cause fix)
-Trace exactly where `generatedRecommendationStoreInfoMap` is lost and fix the pipeline. This is harder and riskier since it's deep in the SDK ranking framework.
+Alternative: find and fix the exact copy/transform that drops the map.
 
 ## Key Files
 
 | File | Purpose |
 |---|---|
-| `HomepageGeneratedRecommendationProductService.kt` | Fetcher decision (EBR Option 2 DV) |
-| `HomepageGeneratedRecommendationProduct.kt:53-134` | `getPostFilterResult()` — reranking + filtering |
-| `HomepageProgrammaticCarouselGenerationService.kt:85-171` | Carousel generation + store decoration |
-| `HomepageProgrammaticProductServiceUtil.kt:204-228` | `updateStoreEntity()` — sets genai score (FAILS for some stores) |
-| `StoreCarouselDataAdapter.kt:2521` | Logging: reads `store.genaiEmbeddingSimilarityScore` |
-| `GeneratedRecommendationCarouselService.kt:117-221` | Reranking (alpha^score * beta^similarity) |
-
-## Architecture: Two Fetcher Paths
-
-### Decision point
-`HomepageGeneratedRecommendationProductService.fetch()` (line 48):
-```kotlin
-if (shouldUseGeneratedRecommendationEBROption2) contentSystemsFetcher else fetcher
-```
-
-All observed prod events go through the **content systems path** (carousel_details lacks `carousel_rank`, `day_part`).
+| `HomepageGeneratedRecommendationProduct.kt` | `buildCollection()` + `getPostFilterResult()` — map creation + reranking |
+| `HomepageDiscoveryRanker.kt` | `postSorting()` — SDK ranking pipeline post-sort hook |
+| `HomepageProgrammaticCarouselGenerationService.kt` | `generate()` → `updateStoreEntity()` loop |
+| `HomepageProgrammaticProductServiceUtil.kt:204-228` | `updateStoreEntity()` — reads map, sets genai fields on StoreEntity |
+| `GeneratedRecommendationCarouselService.kt:117-221` | `reRankStoresByScoreAndSimilarity()` — alpha^score * beta^similarity |
+| `StoreCarouselDataAdapter.kt:2521` | Logging: reads `store.genaiEmbeddingSimilarityScore` for Iguazu |
+| `LiteStoreCollection.kt:94` | `generatedRecommendationStoreInfoMap` field definition |
 
 ## Score Flow
 
 ```
-buildCollection() → generatedRecommendationStoreInfoMap = data.storeInfoMap ✓
+buildCollection() → generatedRecommendationStoreInfoMap = data.storeInfoMap
   ↓
-SDK ranking pipeline (rank → score → sort → postSort) → map preserved via copy() ✓
+SDK ranking pipeline (rank → score → sort → postSorting) → map preserved via copy()?
   ↓
-postFilterGeneratedRecommendationCollections → getPostFilterResult → rerank → copy() ✓
+getPostFilterResult → filter → rerank → deduplicate → copy() preserves map?
   ↓
 updateStoreEntity(entity, store, collection)
-  → collection.generatedRecommendationStoreInfoMap[productStore.id]?.embeddingScore  ← RETURNS NULL for some stores
+  → collection.generatedRecommendationStoreInfoMap[productStore.id]?.embeddingScore
+  → RETURNS NULL for ~96% of cxgen stores (map is empty for those carousels)
 ```
+
+## Related
+
+- `brain/genai-reranker-logging/` — Original PR #62113 context (embedding score + alpha/beta logging)
+- `brain/genai-combined-score-logging/` — RFC for universal ranking signal logging framework (future fix for this class of problems)
